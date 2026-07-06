@@ -14,39 +14,36 @@ it's expensive to retrofit later.
    for a change if you have a real reason. Stop and present this for
    approval before scaffolding the repo.
 
-2. **Multi-tenant data model.** Design and implement: agency, users,
-   clients, platform connections (Meta and/or Google per client), ad
-   accounts, campaigns, ad groups/sets, ads, creatives, insights
-   (time-series). Model campaigns generically enough that reporting code
+2. **Multi-tenant data model, rooted at Organization.** Design and
+   implement: **organization** (the tenant root), organization users
+   (with role: Owner/Admin/Member), clients (belonging to an
+   organization), platform connections (per client), ad accounts,
+   campaigns, ad groups/sets, ads, creatives, insights (time-series).
+   Every table below Organization must carry an `organization_id` and be
+   filtered by it in every query — this is the single most important rule
+   in this phase. Model campaigns generically enough that reporting code
    isn't forked per platform later, even though write-side (create/edit)
    logic will differ between Meta and Google.
 
    Include the core Salescale CRM entities in this same schema now, even
    though the CRM's UI and workflows are built in Phase 6: contacts,
-   companies, deals/pipeline-stage, activity log, tasks. Retrofitting a
-   CRM data model after ad-side tables are already built and in use is
-   more expensive than including it from the start — this is exactly the
-   kind of foundational decision this phase exists to get right.
+   companies, deals/pipeline-stage, activity log, tasks — all scoped by
+   `organization_id` like everything else. Retrofitting a CRM data model,
+   or a tenancy layer, after other tables are already built and in use is
+   far more expensive than including both from the start.
 
-3. **Two-role auth model.** Build both user roles from `CLAUDE.md`'s scope
-   section now, not just an Atlas Reach admin role with client access
-   added later: **Atlas Reach team** (full access) and **Client** (scoped
-   read-only access to their own account only, no ad-account write access,
-   no visibility into other clients or Atlas Reach-internal fields).
-   Enforce this at the data-access layer, not just by hiding UI elements —
-   a client role that merely has hidden buttons but working API access
-   underneath is not actually scoped. This is a single-agency platform
-   (Atlas Reach only), not a resellable multi-agency product — no
-   agency-level self-serve signup or billing is needed.
-
-3. **Attribution/landing-event table.** Alongside the core data model,
-   build a table that captures UTM parameters (`utm_source`, `utm_medium`,
-   `utm_campaign`, `utm_content`, `utm_term`), referrer, and timestamp at
-   the moment a visitor lands on a client's site — this is the same
-   capture point Phase 5 will extend to also grab `fbclid`/`gclid`, so
-   design it once as a single landing-event capture layer rather than two
-   separate mechanisms later. Tie this record to the eventual lead when
-   one is submitted.
+3. **Three-tier auth model.** Build all three access levels from
+   `CLAUDE.md`'s scope section now: **Organization** (the tenant),
+   **Organization team member** (Owner/Admin/Member, scoped to their own
+   Organization only), and **Client** (scoped read-only access to their
+   own account only, no ad-account write access, no visibility into other
+   clients or Organization-internal fields, and no visibility into other
+   Organizations at all). Enforce every level of this at the data-access
+   layer, not just by hiding UI elements — a role that merely has hidden
+   buttons but working API access underneath is not actually scoped.
+   Create Atlas Reach as the first Organization (tenant #1) through this
+   same generic flow — do not special-case its creation or grant it any
+   access other Organizations wouldn't also get.
 
 4. **Attribution/landing-event table.** Alongside the core data model,
    build a table that captures UTM parameters (`utm_source`, `utm_medium`,
@@ -55,7 +52,8 @@ it's expensive to retrofit later.
    capture point Phase 5 will extend to also grab `fbclid`/`gclid`, so
    design it once as a single landing-event capture layer rather than two
    separate mechanisms later. Tie this record to the eventual lead when
-   one is submitted.
+   one is submitted, scoped by `organization_id` via the client it belongs
+   to.
 
 5. **Meta OAuth flow.** Connect a client's ad account with the correct
    scopes (`ads_management`, `ads_read`, `business_management`). Research
@@ -63,11 +61,11 @@ it's expensive to retrofit later.
    flag to the user that App Review, and Business Verification at higher
    volume, run on Meta's timeline and can't be completed on their behalf.
 
-6. **Google Ads connection flow.** Set up (or confirm) Atlas Reach's
-   manager account (MCC), apply for a Google Ads API developer token
-   (note Basic vs. Standard access tiers and their quota differences to
-   the user), then link each client account under the MCC and run OAuth
-   per client.
+6. **Google Ads connection flow.** Set up (or confirm) an MCC for the
+   Organization needing it (Atlas Reach's, first), apply for a Google Ads
+   API developer token (note Basic vs. Standard access tiers and their
+   quota differences to the user), then link each client account under
+   the MCC and run OAuth per client.
 
 7. **Secure token storage** for both platforms: encrypted at rest,
    refresh-token handling, and a defined behavior for what happens when a
@@ -81,18 +79,24 @@ it's expensive to retrofit later.
 ## DEFINITION OF DONE
 
 - A user can log in, connect at least one Meta ad account and one Google
-  Ads account (test/owned accounts), and browse the account → campaign →
-  ad set/group → ad hierarchy for both, live.
+  Ads account (test/owned accounts) under Atlas Reach's Organization, and
+  browse the account → campaign → ad set/group → ad hierarchy for both,
+  live.
 - A test landing-page visit captures UTM parameters into the
   attribution/landing-event table correctly.
-- Tenant isolation is verifiable: confirm in writing (and ideally with a
-  test) that one client's data cannot be reached through another client's
-  session or token.
+- A second test Organization can be created through the same generic
+  flow used for Atlas Reach, with its own client and no visibility into
+  Atlas Reach's data — confirm this with a test, not manual checking.
+  This is the single most important check in this phase.
+- Tenant isolation is verifiable at both levels: confirm (with a test)
+  that one client's data cannot be reached through another client's
+  session or token, and that one Organization's data cannot be reached
+  through another Organization's session, token, or direct API call.
 - The Client role is verifiable as genuinely read-only and genuinely
   scoped: confirm (with a test, not just manual UI checking) that a
   client-role session cannot write to any ad account, cannot query another
-  client's data via a direct API call, and cannot reach Atlas
-  Reach-internal fields.
+  client's data via a direct API call, and cannot reach
+  Organization-internal fields.
 - No secrets committed to source — verify before finishing.
 
 ## BEFORE YOU FINISH

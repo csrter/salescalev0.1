@@ -3,7 +3,10 @@
 Read `CLAUDE.md` first. This phase handles real customer PII (hashed) and
 feeds ad platform optimization directly — get the hashing and
 deduplication exactly right, since silent errors here degrade every
-client's ad performance without an obvious symptom.
+client's ad performance without an obvious symptom. This phase covers Meta
+and Google specifically; Phase 7 extends the same conversion-sending
+pattern to each additional platform adapter, so the interface built here
+should generalize rather than being Meta/Google-specific under the hood.
 
 ## TASKS
 

@@ -16,23 +16,26 @@ model, and wires lead ingestion from the ad platforms into it.
    no manual re-entry, no reconciliation step between ad platform and CRM.
 
 2. **Pipeline / kanban view.** A drag-and-drop pipeline board per client,
-   with stages customizable per client — Atlas Reach's HVAC clients may
+   with stages customizable per client — every Organization's clients may
    run different sales processes, and the pipeline shouldn't force one
    rigid stage set on everyone.
 
-3. **Qualified-lead workflow.** Implement the actual qualified-lead
-   definition and verification process behind the 14-Day Trial Sprint
-   guarantee (pull the current definition from the user if it isn't
-   already documented in this repo — do not assume a generic definition)
-   as a structured status/checklist on the lead record, not a free-text
-   tag. Marking a lead qualified here should be the same event that feeds
-   the lead-quality-adjusted CPL metric (Phase 3) and the guarantee
-   tracker widget (Phase 4) — one status change, multiple places it shows
-   up, not three places to update by hand.
+3. **Configurable qualified-lead workflow.** Build this as an
+   Organization-level setting, not a hardcoded definition: each
+   Organization defines its own qualified-lead criteria (a structured
+   checklist, not free text) and, optionally, performance-guarantee terms
+   it offers its own clients. Atlas Reach's is the 14-Day Trial Sprint —
+   pull that specific definition from the user to configure Atlas Reach's
+   Organization with it, but the underlying feature must work for any
+   Organization's own criteria, including no guarantee at all. Marking a
+   lead qualified should be the same event that feeds the
+   lead-quality-adjusted CPL metric (Phase 3) and the guarantee tracker
+   widget (Phase 4) — one status change, multiple places it shows up, not
+   three places to update by hand.
 
 4. **Activity and task management.** Notes, call logs, and email activity
-   on each contact/lead; task/follow-up reminders assignable to Atlas
-   Reach team members managing that client relationship.
+   on each contact/lead; task/follow-up reminders assignable to
+   Organization team members managing that client relationship.
 
 5. **Optional external CRM sync.** For any client whose nurture automation
    currently lives in an external CRM (e.g., GHL SMS sequences), build an
@@ -44,12 +47,12 @@ model, and wires lead ingestion from the ad platforms into it.
 
 6. **Client-facing pipeline view.** The Client role (built in Phase 1) gets
    a read-only view of their own pipeline in Salescale: their contacts,
-   deal stages, and qualified-lead status. Hide anything Atlas
-   Reach-internal from this view — internal notes, activity-log entries
-   marked internal-only, and any margin/cost data — by field-level
-   filtering on the backend, not just by omitting fields in the client-role
-   frontend. A client should not be able to see internal notes by
-   inspecting API responses even if the UI doesn't render them.
+   deal stages, and qualified-lead status. Hide anything
+   Organization-internal from this view — internal notes, activity-log
+   entries marked internal-only, and any margin/cost data — by
+   field-level filtering on the backend, not just by omitting fields in
+   the client-role frontend. A client should not be able to see internal
+   notes by inspecting API responses even if the UI doesn't render them.
 
 ## DEFINITION OF DONE
 
@@ -60,6 +63,10 @@ model, and wires lead ingestion from the ad platforms into it.
   configurable per client.
 - Marking a lead "qualified" updates the lead-quality-adjusted CPL metric
   and the guarantee tracker without any additional manual update.
+- The qualified-lead criteria and guarantee terms are configured
+  per-Organization, not hardcoded — verify by configuring a second test
+  Organization with different (or no) criteria and confirming Atlas
+  Reach's configuration is unaffected.
 - If external CRM sync was built: a status change in Salescale correctly
   reflects in the external CRM, and vice versa, without creating duplicate
   records on either side.
@@ -69,7 +76,8 @@ model, and wires lead ingestion from the ad platforms into it.
 
 ## BEFORE YOU FINISH
 
-Update `CLAUDE.md`'s Current Status section and commit. This is the last
-phase in the current build plan — treat this as a full-system review
-point: confirm leads flow end-to-end from ad click → landing page →
-Salescale → qualified status → metrics, across both platforms.
+Update `CLAUDE.md`'s Current Status section and commit. Treat this as a
+full-system review point: confirm leads flow end-to-end from ad click →
+landing page → Salescale → qualified status → metrics, across both
+platforms, correctly scoped to Atlas Reach's Organization and not leaking
+into or out of any other Organization.

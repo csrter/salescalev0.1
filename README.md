@@ -1,10 +1,10 @@
 # How to run this build in Claude Code
 
-1. **Create the repo** and drop all of these files (`CLAUDE.md` +
-   `PHASE_1...5`) into the root before starting any session. Claude Code
-   auto-loads `CLAUDE.md` at the start of every session in this directory,
-   so the architecture and guardrails are always in context without you
-   re-pasting them.
+1. **Create the repo** and drop all of these files (`CLAUDE.md`,
+   `PLATFORMS.md`, and `PHASE_1...8`) into the root before starting any
+   session. Claude Code auto-loads `CLAUDE.md` at the start of every
+   session in this directory, so the architecture and guardrails are
+   always in context without you re-pasting them.
 
 2. **Set your model to Fable 5** in Claude Code's model picker for these
    sessions — this project is exactly the long-horizon, multi-step,
@@ -35,9 +35,17 @@
 ## Order
 
 `CLAUDE.md` (context, always loaded) →
+`PLATFORMS.md` (reference, consulted in Phases 1, 2, 3, 5, 7) →
 `PHASE_1_FOUNDATION.md` →
 `PHASE_2_CORE_MANAGEMENT.md` →
 `PHASE_3_ADVANCED_METRICS.md` →
 `PHASE_4_CUSTOMIZABLE_UI.md` →
 `PHASE_5_CONVERSION_TRACKING.md` →
-`PHASE_6_SALESCALE_CRM.md`
+`PHASE_6_SALESCALE_CRM.md` →
+`PHASE_7_ADDITIONAL_PLATFORMS.md` →
+`PHASE_8_BILLING_ONBOARDING.md`
+
+Note: Phase 1 now includes the Organization tenancy model that Phase 8's
+billing/signup flow depends on — Phase 8 is sequenced last to match the
+existing numbering, but it's really "the layer that makes the Phase 1
+tenancy model self-service," not a late add-on.
