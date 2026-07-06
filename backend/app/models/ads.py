@@ -127,6 +127,43 @@ class Creative(Base):
     created_at: Mapped[dt.datetime] = created_at_column()
 
 
+class QualitySnapshot(Base):
+    """Daily snapshot of a platform quality signal that the platforms only
+    show as a point-in-time value — Google keyword Quality Score, Google
+    ad-strength (RSA/PMax). Captured on every insights sync so Phase 3 can
+    compute *trends* and flag drops instead of someone eyeballing a chart.
+    One row per entity per metric per day."""
+
+    __tablename__ = "quality_snapshots"
+    __table_args__ = (
+        UniqueConstraint(
+            "platform", "entity_type", "entity_external_id", "metric", "date",
+            name="uq_quality_snapshot",
+        ),
+    )
+
+    id: Mapped[str] = id_column()
+    organization_id: Mapped[str] = mapped_column(
+        ForeignKey("organizations.id"), nullable=False, index=True
+    )
+    client_id: Mapped[str] = mapped_column(
+        ForeignKey("clients.id"), nullable=False, index=True
+    )
+    platform: Mapped[str] = mapped_column(String(20), nullable=False)
+    entity_type: Mapped[str] = mapped_column(
+        String(30), nullable=False
+    )  # keyword | ad | asset_group
+    entity_external_id: Mapped[str] = mapped_column(String(150), nullable=False)
+    entity_name: Mapped[Optional[str]] = mapped_column(String(400))
+    metric: Mapped[str] = mapped_column(
+        String(30), nullable=False
+    )  # quality_score (1-10) | ad_strength (ordinal, see metrics.AD_STRENGTH_SCALE)
+    value: Mapped[Optional[int]] = mapped_column(Integer)
+    value_label: Mapped[Optional[str]] = mapped_column(String(50))  # e.g. "GOOD"
+    date: Mapped[dt.date] = mapped_column(Date, nullable=False)
+    created_at: Mapped[dt.datetime] = created_at_column()
+
+
 class InsightDaily(Base):
     """One row per entity per day — the time-series layer Phase 3's blended
     metrics are computed from."""

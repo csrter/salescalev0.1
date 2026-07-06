@@ -65,4 +65,8 @@ def test_client_own_campaigns_readable(api, client_a_headers, seeded):
         headers=client_a_headers,
     )
     assert resp.status_code == 200
-    assert [c["name"] for c in resp.json()] == ["Alpha Campaign"]
+    names = [c["name"] for c in resp.json()]
+    # Own campaigns visible (other fixtures may add more to this account),
+    # the other tenant's campaign never.
+    assert "Alpha Campaign" in names
+    assert "Bravo Campaign" not in names

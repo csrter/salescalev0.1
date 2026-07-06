@@ -614,3 +614,135 @@ def update_asset_group_status(
         svc.mutate_asset_groups(customer_id=customer_id, operations=[op])
 
     return _run(refresh_token, fn)
+
+
+# --- insights + quality signals (Phase 3) ---
+
+
+def fetch_insights(
+    refresh_token: str, customer_id: str, since: str, until: str
+) -> List[Dict[str, Any]]:
+    """Ad-group-level daily insights, normalized to InsightDaily's shape.
+
+    Google's `metrics.conversions` is a float (fractional credit under
+    data-driven attribution); we round half-up per day. `cost_micros` is
+    already micros. since/until are YYYY-MM-DD (inclusive). Campaign id
+    rides along in raw for upward aggregation.
+    """
+    rows = _search(
+        refresh_token,
+        customer_id,
+        "SELECT segments.date, ad_group.id, ad_group.name, campaign.id, "
+        "metrics.impressions, metrics.clicks, metrics.cost_micros, "
+        "metrics.conversions FROM ad_group "
+        f"WHERE segments.date BETWEEN '{since}' AND '{until}'",
+    )
+    out = []
+    for r in rows:
+        out.append(
+            {
+                "entity_type": "ad_group",
+                "entity_external_id": str(r.ad_group.id),
+                "date": r.segments.date,
+                "impressions": r.metrics.impressions,
+                "clicks": r.metrics.clicks,
+                "spend_micros": r.metrics.cost_micros,
+                "conversions": int(r.metrics.conversions + 0.5),
+                "raw": {
+                    "campaign_id": str(r.campaign.id),
+                    "ad_group_name": r.ad_group.name,
+                },
+            }
+        )
+    return out
+
+
+def fetch_keyword_quality_scores(
+    refresh_token: str, customer_id: str
+) -> List[Dict[str, Any]]:
+    """Current Quality Score (1–10) per enabled keyword. Google only exposes
+    the point-in-time value — the caller snapshots it daily so trends can be
+    computed (quality_snapshots table)."""
+    rows = _search(
+        refresh_token,
+        customer_id,
+        "SELECT ad_group_criterion.criterion_id, ad_group_criterion.keyword.text, "
+        "ad_group_criterion.quality_info.quality_score, ad_group.id "
+        "FROM keyword_view WHERE ad_group_criterion.status = 'ENABLED'",
+    )
+    out = []
+    for r in rows:
+        score = r.ad_group_criterion.quality_info.quality_score
+        if not score:
+            continue  # not enough traffic for Google to score it
+        out.append(
+            {
+                "entity_type": "keyword",
+                "entity_external_id": (
+                    f"{r.ad_group.id}~{r.ad_group_criterion.criterion_id}"
+                ),
+                "entity_name": r.ad_group_criterion.keyword.text,
+                "value": int(score),
+            }
+        )
+    return out
+
+
+# Ordinal scale shared with metrics.py so ad-strength trends are comparable.
+AD_STRENGTH_ORDINAL = {
+    "PENDING": None,
+    "NO_ADS": None,
+    "POOR": 1,
+    "AVERAGE": 2,
+    "GOOD": 3,
+    "EXCELLENT": 4,
+}
+
+
+def fetch_ad_strength(
+    refresh_token: str, customer_id: str
+) -> List[Dict[str, Any]]:
+    """Current ad strength for responsive search ads and PMax asset groups,
+    mapped onto AD_STRENGTH_ORDINAL for trend math."""
+    out = []
+    rsa_rows = _search(
+        refresh_token,
+        customer_id,
+        "SELECT ad_group_ad.ad.id, ad_group_ad.ad.name, "
+        "ad_group_ad.ad_strength, ad_group.id FROM ad_group_ad "
+        "WHERE ad_group_ad.ad.type = 'RESPONSIVE_SEARCH_AD' "
+        "AND ad_group_ad.status != 'REMOVED'",
+    )
+    for r in rsa_rows:
+        label = r.ad_group_ad.ad_strength.name
+        if AD_STRENGTH_ORDINAL.get(label) is None:
+            continue
+        out.append(
+            {
+                "entity_type": "ad",
+                "entity_external_id": str(r.ad_group_ad.ad.id),
+                "entity_name": r.ad_group_ad.ad.name or str(r.ad_group_ad.ad.id),
+                "value": AD_STRENGTH_ORDINAL[label],
+                "value_label": label,
+            }
+        )
+    pmax_rows = _search(
+        refresh_token,
+        customer_id,
+        "SELECT asset_group.id, asset_group.name, asset_group.ad_strength "
+        "FROM asset_group WHERE asset_group.status != 'REMOVED'",
+    )
+    for r in pmax_rows:
+        label = r.asset_group.ad_strength.name
+        if AD_STRENGTH_ORDINAL.get(label) is None:
+            continue
+        out.append(
+            {
+                "entity_type": "asset_group",
+                "entity_external_id": str(r.asset_group.id),
+                "entity_name": r.asset_group.name,
+                "value": AD_STRENGTH_ORDINAL[label],
+                "value_label": label,
+            }
+        )
+    return out

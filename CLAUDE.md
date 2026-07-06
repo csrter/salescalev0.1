@@ -221,7 +221,27 @@ actually built vs. what's still planned.)_
       groups). Caveat: end-to-end against *live* ad accounts still needs
       real platform credentials (.env) — flow verified with mocked
       platform calls in tests and a live-failure path in dev.
-- [ ] Phase 3 — Advanced metrics layer
+- [x] Phase 3 — Advanced metrics layer (2026-07-06). Insights ingestion
+      (Meta ad-level daily, Google ad-group-level daily + keyword Quality
+      Score and ad-strength snapshots) with per-platform isolation — one
+      platform failing never blocks the other; on-demand via
+      POST /api/insights/sync (recurring background polling still TODO,
+      the sync function is the unit a scheduler will call). Metrics with
+      formulas documented at the computation site
+      (backend/app/services/metrics.py): blended CAC/ROAS (Salescale
+      won-deal revenue, not platform claims), channel mix with tracked-vs-
+      platform CPL side by side, funnel tiers via configurable campaign-
+      name patterns, creative fatigue (recent CTR vs own baseline, ≥30%
+      drop flagged), QS/ad-strength trend flags, lead-quality-adjusted CPL
+      behind a pluggable LeadQualityProvider (Salescale-native default +
+      external-CRM registry for transition clients), vertical benchmarking
+      (organization-scoped only — Client.vertical), attribution
+      reconciliation (platform claims vs UTM/click-id trail, flags
+      over-credit and no-UTM leads), and a UTM builder + convention-
+      violation checker. 12 new tests incl. the DoD deliberate-discrepancy
+      flag; per-client metrics panel in the UI. Note: dev DB schema
+      changed (clients gained vertical/lead_quality_source/metric_settings;
+      new quality_snapshots table) — recreate local dev DBs.
 - [ ] Phase 4 — Customizable UI
 - [ ] Phase 5 — Server-side conversion tracking (CAPI + Google)
 - [ ] Phase 6 — Salescale CRM

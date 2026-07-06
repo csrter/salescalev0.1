@@ -9,6 +9,7 @@ from .api import (
     connect_google,
     connect_meta,
     manage,
+    metrics,
     orgs,
 )
 from .config import get_settings
@@ -32,6 +33,7 @@ app.include_router(connect_google.router)
 app.include_router(browser.router)
 app.include_router(manage.router)
 app.include_router(attribution.router)
+app.include_router(metrics.router)
 
 
 @app.get("/api/health")

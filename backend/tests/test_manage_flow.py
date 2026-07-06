@@ -200,6 +200,7 @@ def test_no_unstaged_write_route_exists():
         "/api/connect/",             # OAuth
         "/api/track/landing",        # attribution capture (inserts only)
         "/api/ad-accounts",          # creatives/images live here — no spend
+        "/api/insights/sync",        # writes local time-series tables only
     )
     mutating = []
     for route in app.routes:

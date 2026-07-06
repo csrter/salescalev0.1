@@ -23,6 +23,7 @@ import {
   PendingChangesPanel,
   useManage,
 } from "./manage";
+import { MetricsPanel } from "./metrics";
 import "./App.css";
 
 type Tab = "clients" | "changes" | "audit";
@@ -242,6 +243,7 @@ function ClientDetail({
           );
         })}
       </section>
+      <MetricsPanel clientId={client.id} session={session} />
       <section>
         <h3>Accounts &amp; campaigns</h3>
         <div className="toggle">

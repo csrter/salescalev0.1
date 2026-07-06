@@ -266,3 +266,71 @@ def fetch_pages(token: str) -> List[Dict[str, Any]]:
         f"{_base()}/me/accounts",
         {"access_token": token, "fields": "id,name", "limit": 100},
     )
+
+
+# --- insights (Phase 3) ---
+
+# Which Meta `actions` entries count as a lead. Meta reports every action
+# type it tracks; for lead-gen reporting we count native lead forms and
+# pixel lead events. Purchase value (for ROAS) is read from action_values.
+META_LEAD_ACTION_TYPES = {
+    "lead",
+    "leadgen_grouped",
+    "offsite_conversion.fb_pixel_lead",
+    "onsite_conversion.lead_grouped",
+}
+
+
+def _sum_lead_actions(actions: Optional[List[Dict[str, Any]]]) -> int:
+    if not actions:
+        return 0
+    return sum(
+        int(float(a.get("value", 0)))
+        for a in actions
+        if a.get("action_type") in META_LEAD_ACTION_TYPES
+    )
+
+
+def fetch_insights(
+    token: str, account_external_id: str, since: str, until: str
+) -> List[Dict[str, Any]]:
+    """Ad-level daily insights, normalized to InsightDaily's shape.
+
+    - level=ad + time_increment=1 → one row per ad per day (campaign and
+      ad-set ids ride along so callers can aggregate upward without extra
+      requests).
+    - `spend` arrives as a currency string in account currency ("12.34") →
+      micros. `conversions` = lead actions per META_LEAD_ACTION_TYPES.
+    - since/until are YYYY-MM-DD (inclusive).
+    """
+    rows = _paginate(
+        f"{_base()}/{account_external_id}/insights",
+        {
+            "access_token": token,
+            "level": "ad",
+            "time_increment": 1,
+            "time_range": json.dumps({"since": since, "until": until}),
+            "fields": "ad_id,ad_name,adset_id,campaign_id,impressions,clicks,"
+            "spend,actions",
+            "limit": 500,
+        },
+    )
+    out = []
+    for r in rows:
+        out.append(
+            {
+                "entity_type": "ad",
+                "entity_external_id": r["ad_id"],
+                "date": r["date_start"],
+                "impressions": int(r.get("impressions") or 0),
+                "clicks": int(r.get("clicks") or 0),
+                "spend_micros": int(float(r.get("spend") or 0) * 1_000_000),
+                "conversions": _sum_lead_actions(r.get("actions")),
+                "raw": {
+                    "campaign_id": r.get("campaign_id"),
+                    "adset_id": r.get("adset_id"),
+                    "ad_name": r.get("ad_name"),
+                },
+            }
+        )
+    return out

@@ -1,5 +1,5 @@
 from .core import Organization, User, Client, PlatformConnection, AdAccount
-from .ads import Campaign, AdGroup, Ad, Creative, InsightDaily
+from .ads import Campaign, AdGroup, Ad, Creative, InsightDaily, QualitySnapshot
 from .crm import (
     Company,
     Contact,
@@ -25,6 +25,7 @@ __all__ = [
     "Ad",
     "Creative",
     "InsightDaily",
+    "QualitySnapshot",
     "Company",
     "Contact",
     "Pipeline",

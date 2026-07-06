@@ -1,7 +1,15 @@
 import datetime as dt
 from typing import Optional
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, String, Text, UniqueConstraint
+from sqlalchemy import (
+    JSON,
+    Boolean,
+    DateTime,
+    ForeignKey,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from ..db import Base
@@ -49,6 +57,21 @@ class Client(Base):
     )
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     status: Mapped[str] = mapped_column(String(20), default="active", nullable=False)
+    # Free-form vertical label (e.g. "hvac", "dental") — the grouping key for
+    # cross-client benchmarking within the same Organization (Phase 3). Set by
+    # the Organization; never compared across Organizations.
+    vertical: Mapped[Optional[str]] = mapped_column(String(100), index=True)
+    # Where lead-quality truth lives during a transition: "salescale" (native,
+    # default) or "external" (client's nurture automation still runs in an
+    # external CRM — see services/lead_quality.py for the provider interface).
+    lead_quality_source: Mapped[str] = mapped_column(
+        String(20), default="salescale", nullable=False
+    )
+    # Per-client metric configuration (JSON): funnel-tier name patterns, UTM
+    # convention overrides, external-CRM provider settings. Everything in it
+    # has a documented code default — the column exists so per-client
+    # variation is data, not code.
+    metric_settings: Mapped[Optional[dict]] = mapped_column(JSON)
     # Organization-internal — must never be serialized to client-role users.
     internal_notes: Mapped[Optional[str]] = mapped_column(Text)
     created_at: Mapped[dt.datetime] = created_at_column()
