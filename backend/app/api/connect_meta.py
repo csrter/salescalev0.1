@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 
 from ..config import get_settings
 from ..db import get_db
-from ..deps import require_team
+from ..deps import require_admin
 from ..models.core import AdAccount, Client, PLATFORM_META, User
 from ..security import create_state_token, decode_state_token
 from ..services import connections, meta_api
@@ -17,15 +17,16 @@ router = APIRouter(prefix="/api/connect/meta", tags=["connect"])
 @router.get("/start")
 def start_meta_oauth(
     client_id: str,
-    user: User = Depends(require_team),
+    user: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
-    """Team-only: begin OAuth for one client. The signed state token binds
-    the eventual callback to this client so tokens can't land on the wrong
-    tenant."""
-    if db.get(Client, client_id) is None:
+    """Admin-only: begin OAuth for one client in the caller's Organization.
+    The signed state token binds the eventual callback to this organization
+    AND client so tokens can't land on the wrong tenant at either level."""
+    client = db.get(Client, client_id)
+    if client is None or client.organization_id != user.organization_id:
         raise HTTPException(404, "Unknown client")
-    state = create_state_token("meta_oauth", client_id)
+    state = create_state_token("meta_oauth", user.organization_id, client_id)
     return {"url": meta_api.build_oauth_url(state)}
 
 
@@ -36,9 +37,12 @@ def meta_oauth_callback(
     # Unauthenticated by necessity (browser redirect from Meta); the signed
     # state token is the integrity check.
     try:
-        client_id = decode_state_token(state, "meta_oauth")
+        organization_id, client_id = decode_state_token(state, "meta_oauth")
     except pyjwt.PyJWTError:
         raise HTTPException(400, "Invalid or expired OAuth state")
+    client = db.get(Client, client_id)
+    if client is None or client.organization_id != organization_id:
+        raise HTTPException(400, "OAuth state does not match a known tenant")
 
     token_data = meta_api.exchange_code_for_token(code)
     long_lived = meta_api.exchange_for_long_lived_token(token_data["access_token"])
@@ -48,6 +52,7 @@ def meta_oauth_callback(
     me = meta_api.fetch_me(access_token)
     conn = connections.upsert_connection(
         db,
+        organization_id=organization_id,
         client_id=client_id,
         platform=PLATFORM_META,
         access_token=access_token,
@@ -67,6 +72,7 @@ def meta_oauth_callback(
         if existing is None:
             db.add(
                 AdAccount(
+                    organization_id=organization_id,
                     client_id=client_id,
                     connection_id=conn.id,
                     platform=PLATFORM_META,
@@ -77,13 +83,17 @@ def meta_oauth_callback(
                     status=str(acct.get("account_status")),
                 )
             )
-        elif existing.client_id != client_id:
-            # Same ad account surfacing under a second client is a tenant
-            # mixup — refuse rather than silently reassign.
+        elif (
+            existing.client_id != client_id
+            or existing.organization_id != organization_id
+        ):
+            # Same ad account surfacing under a second client (or a second
+            # Organization) is a tenant mixup — refuse rather than silently
+            # reassign. The message names only the account the caller just
+            # authorized, never the other tenant.
             raise HTTPException(
                 409,
-                f"Meta ad account {acct['id']} is already connected to a "
-                "different client",
+                f"Meta ad account {acct['id']} is already connected elsewhere",
             )
     db.commit()
 

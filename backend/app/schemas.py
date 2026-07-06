@@ -13,8 +13,47 @@ class TokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
     role: str
+    organization_id: str
+    organization_name: str
     client_id: Optional[str] = None
     full_name: str
+
+
+class OrgSignupRequest(BaseModel):
+    """Self-serve Organization signup — the same generic flow every tenant
+    (including Atlas Reach) is created through."""
+
+    organization_name: str = Field(min_length=1, max_length=200)
+    email: EmailStr
+    password: str = Field(min_length=8)
+    full_name: str = Field(min_length=1, max_length=200)
+
+
+class OrganizationOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    name: str
+    created_at: dt.datetime
+
+
+class TeamMemberCreate(BaseModel):
+    email: EmailStr
+    password: str = Field(min_length=8)
+    full_name: str = Field(min_length=1, max_length=200)
+    role: str  # admin | member (owner is only created via signup)
+
+
+class UserOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    email: str
+    full_name: str
+    role: str
+    client_id: Optional[str] = None
+    is_active: bool
+    created_at: dt.datetime
 
 
 class ClientCreate(BaseModel):

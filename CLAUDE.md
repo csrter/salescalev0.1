@@ -196,7 +196,15 @@ a hardcoded assumption.
 _(Update after each phase — this section is the source of truth for what's
 actually built vs. what's still planned.)_
 
-- [ ] Phase 1 — Foundation (now includes Organization tenancy)
+- [x] Phase 1 — Foundation (now includes Organization tenancy). Built
+      originally as single-agency, then retrofitted (2026-07-06) for the
+      multi-tenant SaaS replan: Organization root entity, self-serve
+      signup (`POST /api/orgs/signup` — Atlas Reach is created through
+      this same generic flow), Owner/Admin/Member/Client roles
+      (owner: everything incl. team; admin: clients/connections/team
+      members; member: campaign work only), `organization_id` on every
+      tenant table, two-level TenantScope enforced in the data-access
+      layer, and org-to-org isolation tests (`test_org_isolation.py`).
 - [ ] Phase 2 — Core management features
 - [ ] Phase 3 — Advanced metrics layer
 - [ ] Phase 4 — Customizable UI

@@ -19,11 +19,14 @@ def verify_password(password: str, hashed: str) -> bool:
         return False
 
 
-def create_access_token(user_id: str, role: str, client_id: Optional[str]) -> str:
+def create_access_token(
+    user_id: str, role: str, organization_id: str, client_id: Optional[str]
+) -> str:
     settings = get_settings()
     payload = {
         "sub": user_id,
         "role": role,
+        "organization_id": organization_id,
         "client_id": client_id,
         "exp": dt.datetime.now(dt.timezone.utc)
         + dt.timedelta(minutes=settings.jwt_expire_minutes),
@@ -36,24 +39,26 @@ def decode_access_token(token: str) -> Dict[str, Any]:
     return jwt.decode(token, settings.jwt_secret, algorithms=["HS256"])
 
 
-def create_state_token(purpose: str, client_id: str) -> str:
+def create_state_token(purpose: str, organization_id: str, client_id: str) -> str:
     """Short-lived signed state for OAuth flows — binds the callback to the
-    client the flow was started for, so a callback can't attach tokens to a
-    different tenant."""
+    organization AND client the flow was started for, so a callback can't
+    attach tokens to a different tenant at either level."""
     settings = get_settings()
     payload = {
         "purpose": purpose,
+        "organization_id": organization_id,
         "client_id": client_id,
         "exp": dt.datetime.now(dt.timezone.utc) + dt.timedelta(minutes=15),
     }
     return jwt.encode(payload, settings.jwt_secret, algorithm="HS256")
 
 
-def decode_state_token(token: str, purpose: str) -> str:
+def decode_state_token(token: str, purpose: str) -> tuple[str, str]:
+    """Returns (organization_id, client_id) from a valid state token."""
     payload = jwt.decode(token, get_settings().jwt_secret, algorithms=["HS256"])
     if payload.get("purpose") != purpose:
         raise jwt.InvalidTokenError("state purpose mismatch")
-    return payload["client_id"]
+    return payload["organization_id"], payload["client_id"]
 
 
 def _fernet() -> Fernet:

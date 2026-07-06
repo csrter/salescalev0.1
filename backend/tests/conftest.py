@@ -20,10 +20,11 @@ from app.models.attribution import LandingEvent
 from app.models.base import utcnow
 from app.models.core import (
     ROLE_CLIENT,
-    ROLE_TEAM,
+    ROLE_MEMBER,
+    ROLE_OWNER,
     AdAccount,
-    Agency,
     Client,
+    Organization,
     PlatformConnection,
     User,
 )
@@ -32,49 +33,66 @@ from app.security import hash_password
 
 @pytest.fixture(scope="session")
 def seeded():
-    """Two clients with their own users, accounts, campaigns, and landing
-    events — the fixture every isolation test runs against."""
+    """Organization #1 (Atlas Reach) with two clients, their own users,
+    accounts, campaigns, and landing events — the fixture every isolation
+    test runs against. Organization #2 is created separately, through the
+    public signup API (see org2_headers), per the Phase 1 definition of done.
+    """
     Base.metadata.drop_all(engine)
     Base.metadata.create_all(engine)
     db = SessionLocal()
-    agency = Agency(name="Atlas Reach")
-    db.add(agency)
+    org = Organization(name="Atlas Reach")
+    db.add(org)
     db.flush()
 
     client_a = Client(
-        agency_id=agency.id,
+        organization_id=org.id,
         name="Alpha HVAC",
         internal_notes="INTERNAL: margin notes for Alpha",
     )
     client_b = Client(
-        agency_id=agency.id,
+        organization_id=org.id,
         name="Bravo Heating",
         internal_notes="INTERNAL: margin notes for Bravo",
     )
     db.add_all([client_a, client_b])
     db.flush()
 
-    team_user = User(
-        email="team@atlasreach.com",
-        hashed_password=hash_password("team-pass"),
-        full_name="Team Member",
-        role=ROLE_TEAM,
+    owner_user = User(
+        organization_id=org.id,
+        email="owner@atlasreach.com",
+        hashed_password=hash_password("owner-pass"),
+        full_name="Org Owner",
+        role=ROLE_OWNER,
+    )
+    member_user = User(
+        organization_id=org.id,
+        email="member@atlasreach.com",
+        hashed_password=hash_password("member-pass"),
+        full_name="Org Member",
+        role=ROLE_MEMBER,
     )
     client_a_user = User(
+        organization_id=org.id,
         email="owner@alphahvac.com",
         hashed_password=hash_password("client-pass"),
         full_name="Alpha Owner",
         role=ROLE_CLIENT,
         client_id=client_a.id,
     )
-    db.add_all([team_user, client_a_user])
+    db.add_all([owner_user, member_user, client_a_user])
 
-    conn_a = PlatformConnection(client_id=client_a.id, platform="meta")
-    conn_b = PlatformConnection(client_id=client_b.id, platform="meta")
+    conn_a = PlatformConnection(
+        organization_id=org.id, client_id=client_a.id, platform="meta"
+    )
+    conn_b = PlatformConnection(
+        organization_id=org.id, client_id=client_b.id, platform="meta"
+    )
     db.add_all([conn_a, conn_b])
     db.flush()
 
     acct_a = AdAccount(
+        organization_id=org.id,
         client_id=client_a.id,
         connection_id=conn_a.id,
         platform="meta",
@@ -82,6 +100,7 @@ def seeded():
         name="Alpha Meta Account",
     )
     acct_b = AdAccount(
+        organization_id=org.id,
         client_id=client_b.id,
         connection_id=conn_b.id,
         platform="meta",
@@ -92,6 +111,7 @@ def seeded():
     db.flush()
 
     camp_a = Campaign(
+        organization_id=org.id,
         client_id=client_a.id,
         ad_account_id=acct_a.id,
         platform="meta",
@@ -99,6 +119,7 @@ def seeded():
         name="Alpha Campaign",
     )
     camp_b = Campaign(
+        organization_id=org.id,
         client_id=client_b.id,
         ad_account_id=acct_b.id,
         platform="meta",
@@ -110,12 +131,14 @@ def seeded():
     db.add_all(
         [
             LandingEvent(
+                organization_id=org.id,
                 client_id=client_a.id,
                 session_key="sess-a",
                 utm_source="facebook",
                 occurred_at=utcnow(),
             ),
             LandingEvent(
+                organization_id=org.id,
                 client_id=client_b.id,
                 session_key="sess-b",
                 utm_source="google",
@@ -126,6 +149,7 @@ def seeded():
     db.commit()
 
     ids = {
+        "org": org.id,
         "client_a": client_a.id,
         "client_b": client_b.id,
         "acct_a": acct_a.id,
@@ -151,9 +175,49 @@ def _login(api, email, password):
 
 @pytest.fixture(scope="session")
 def team_headers(api):
-    return _login(api, "team@atlasreach.com", "team-pass")
+    """Org #1 Owner — full team access within Atlas Reach."""
+    return _login(api, "owner@atlasreach.com", "owner-pass")
+
+
+@pytest.fixture(scope="session")
+def member_headers(api):
+    """Org #1 Member — campaign work only, no client/team management."""
+    return _login(api, "member@atlasreach.com", "member-pass")
 
 
 @pytest.fixture(scope="session")
 def client_a_headers(api):
     return _login(api, "owner@alphahvac.com", "client-pass")
+
+
+@pytest.fixture(scope="session")
+def org2(api):
+    """A second Organization created through the public self-serve signup
+    flow — the exact same path any agency uses, no special-casing."""
+    resp = api.post(
+        "/api/orgs/signup",
+        json={
+            "organization_name": "Rival Agency",
+            "email": "owner@rivalagency.com",
+            "password": "rival-pass-123",
+            "full_name": "Rival Owner",
+        },
+    )
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+    headers = {"Authorization": f"Bearer {body['access_token']}"}
+    # Give org #2 a client of its own so scoped-list tests have data.
+    client_resp = api.post(
+        "/api/clients", json={"name": "Rival Client Co"}, headers=headers
+    )
+    assert client_resp.status_code == 201, client_resp.text
+    return {
+        "organization_id": body["organization_id"],
+        "headers": headers,
+        "client_id": client_resp.json()["id"],
+    }
+
+
+@pytest.fixture(scope="session")
+def org2_headers(org2):
+    return org2["headers"]

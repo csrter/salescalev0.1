@@ -18,13 +18,17 @@ from .base import created_at_column, id_column
 
 # Salescale CRM entities. The UI/workflows arrive in Phase 6, but the schema
 # ships now so ad-side tables (landing_events, insights) can reference leads
-# from day one. Every table carries client_id for tenant scoping.
+# from day one. Every table carries organization_id (and client_id where the
+# entity belongs to one client) for two-level tenant scoping.
 
 
 class Company(Base):
     __tablename__ = "companies"
 
     id: Mapped[str] = id_column()
+    organization_id: Mapped[str] = mapped_column(
+        ForeignKey("organizations.id"), nullable=False, index=True
+    )
     client_id: Mapped[str] = mapped_column(
         ForeignKey("clients.id"), nullable=False, index=True
     )
@@ -39,6 +43,9 @@ class Contact(Base):
     __tablename__ = "contacts"
 
     id: Mapped[str] = id_column()
+    organization_id: Mapped[str] = mapped_column(
+        ForeignKey("organizations.id"), nullable=False, index=True
+    )
     client_id: Mapped[str] = mapped_column(
         ForeignKey("clients.id"), nullable=False, index=True
     )
@@ -57,6 +64,9 @@ class Pipeline(Base):
     __tablename__ = "pipelines"
 
     id: Mapped[str] = id_column()
+    organization_id: Mapped[str] = mapped_column(
+        ForeignKey("organizations.id"), nullable=False, index=True
+    )
     client_id: Mapped[str] = mapped_column(
         ForeignKey("clients.id"), nullable=False, index=True
     )
@@ -72,6 +82,9 @@ class PipelineStage(Base):
     )
 
     id: Mapped[str] = id_column()
+    organization_id: Mapped[str] = mapped_column(
+        ForeignKey("organizations.id"), nullable=False, index=True
+    )
     pipeline_id: Mapped[str] = mapped_column(ForeignKey("pipelines.id"), nullable=False)
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     position: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -86,6 +99,9 @@ class Deal(Base):
     __tablename__ = "deals"
 
     id: Mapped[str] = id_column()
+    organization_id: Mapped[str] = mapped_column(
+        ForeignKey("organizations.id"), nullable=False, index=True
+    )
     client_id: Mapped[str] = mapped_column(
         ForeignKey("clients.id"), nullable=False, index=True
     )
@@ -108,6 +124,9 @@ class Activity(Base):
     __tablename__ = "activities"
 
     id: Mapped[str] = id_column()
+    organization_id: Mapped[str] = mapped_column(
+        ForeignKey("organizations.id"), nullable=False, index=True
+    )
     client_id: Mapped[str] = mapped_column(
         ForeignKey("clients.id"), nullable=False, index=True
     )
@@ -128,6 +147,9 @@ class CrmTask(Base):
     __tablename__ = "crm_tasks"
 
     id: Mapped[str] = id_column()
+    organization_id: Mapped[str] = mapped_column(
+        ForeignKey("organizations.id"), nullable=False, index=True
+    )
     client_id: Mapped[str] = mapped_column(
         ForeignKey("clients.id"), nullable=False, index=True
     )
@@ -145,6 +167,9 @@ class Tag(Base):
     __table_args__ = (UniqueConstraint("client_id", "name", name="uq_tag_client_name"),)
 
     id: Mapped[str] = id_column()
+    organization_id: Mapped[str] = mapped_column(
+        ForeignKey("organizations.id"), nullable=False, index=True
+    )
     client_id: Mapped[str] = mapped_column(
         ForeignKey("clients.id"), nullable=False, index=True
     )
@@ -158,5 +183,8 @@ class ContactTag(Base):
     )
 
     id: Mapped[str] = id_column()
+    organization_id: Mapped[str] = mapped_column(
+        ForeignKey("organizations.id"), nullable=False, index=True
+    )
     contact_id: Mapped[str] = mapped_column(ForeignKey("contacts.id"), nullable=False)
     tag_id: Mapped[str] = mapped_column(ForeignKey("tags.id"), nullable=False)

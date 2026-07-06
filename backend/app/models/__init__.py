@@ -1,4 +1,4 @@
-from .core import Agency, User, Client, PlatformConnection, AdAccount
+from .core import Organization, User, Client, PlatformConnection, AdAccount
 from .ads import Campaign, AdGroup, Ad, Creative, InsightDaily
 from .crm import (
     Company,
@@ -15,7 +15,7 @@ from .attribution import LandingEvent
 from .audit import AuditLogEntry, PendingChange
 
 __all__ = [
-    "Agency",
+    "Organization",
     "User",
     "Client",
     "PlatformConnection",

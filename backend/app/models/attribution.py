@@ -21,6 +21,11 @@ class LandingEvent(Base):
     __tablename__ = "landing_events"
 
     id: Mapped[str] = id_column()
+    # Derived from the client at capture time — the public endpoint never
+    # trusts a caller-supplied organization_id.
+    organization_id: Mapped[str] = mapped_column(
+        ForeignKey("organizations.id"), nullable=False, index=True
+    )
     client_id: Mapped[str] = mapped_column(
         ForeignKey("clients.id"), nullable=False, index=True
     )

@@ -3,11 +3,10 @@ from typing import Optional
 import jwt as pyjwt
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .db import get_db
-from .models.core import ROLE_CLIENT, ROLE_TEAM, User
+from .models.core import ADMIN_ROLES, ROLE_CLIENT, ROLE_OWNER, TEAM_ROLES, User
 from .security import decode_access_token
 
 _bearer = HTTPBearer(auto_error=False)
@@ -30,25 +29,45 @@ def get_current_user(
 
 
 def require_team(user: User = Depends(get_current_user)) -> User:
-    """Gate for every write endpoint and Atlas Reach-internal data. The
-    Client role is visibility-only; it never passes this gate."""
-    if user.role != ROLE_TEAM:
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "Atlas Reach team role required")
+    """Gate for write endpoints and Organization-internal data. The Client
+    role is visibility-only; it never passes this gate."""
+    if user.role not in TEAM_ROLES:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Team role required")
+    return user
+
+
+def require_admin(user: User = Depends(get_current_user)) -> User:
+    """Owner/Admin gate: managing clients, platform connections, and team
+    members. Members do day-to-day campaign work but not this."""
+    if user.role not in ADMIN_ROLES:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Admin or Owner role required")
+    return user
+
+
+def require_owner(user: User = Depends(get_current_user)) -> User:
+    """Owner-only gate: team role changes (and billing, from Phase 8)."""
+    if user.role != ROLE_OWNER:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Owner role required")
     return user
 
 
 class TenantScope:
-    """Data-access-layer tenant filter.
+    """Data-access-layer tenant filter, enforced at both levels.
 
-    Every tenant-owned query goes through `filter()` (or `check_client_id()`
-    for single-object access). Team users see everything; client users are
-    pinned to their own client_id. A client user without a client_id is a
+    Every user is pinned to exactly one organization_id — there is no role
+    that sees across Organizations. Team roles see everything inside their
+    Organization; client users are additionally pinned to their client_id.
+    Every tenant-owned query goes through `filter()` (or `get_or_404()` for
+    single-object access). A client user without a client_id is a
     misconfiguration and gets no access rather than all access.
     """
 
     def __init__(self, user: User):
         self.user = user
-        self.is_team = user.role == ROLE_TEAM
+        self.is_team = user.role in TEAM_ROLES
+        self.organization_id: str = user.organization_id
+        if not self.organization_id:
+            raise HTTPException(status.HTTP_403_FORBIDDEN, "No tenant scope")
         if self.is_team:
             self.client_id: Optional[str] = None
         else:
@@ -57,13 +76,19 @@ class TenantScope:
             self.client_id = user.client_id
 
     def filter(self, stmt, model):
-        if self.is_team:
-            return stmt
-        return stmt.where(model.client_id == self.client_id)
+        stmt = stmt.where(model.organization_id == self.organization_id)
+        if not self.is_team:
+            stmt = stmt.where(model.client_id == self.client_id)
+        return stmt
+
+    def check_organization_id(self, organization_id: str) -> None:
+        """404 (not 403) on cross-organization access so existence of other
+        tenants' objects is not leaked."""
+        if organization_id != self.organization_id:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Not found")
 
     def check_client_id(self, client_id: str) -> None:
-        """404 (not 403) on cross-tenant access so existence of other
-        tenants' objects is not leaked."""
+        """Client-level pin, same 404-not-403 principle."""
         if not self.is_team and client_id != self.client_id:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "Not found")
 
@@ -71,6 +96,7 @@ class TenantScope:
         obj = db.get(model, object_id)
         if obj is None:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "Not found")
+        self.check_organization_id(obj.organization_id)
         self.check_client_id(obj.client_id)
         return obj
 

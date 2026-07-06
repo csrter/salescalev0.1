@@ -192,6 +192,7 @@ def stage_change(
     _validate_payload_refs(db, scope, body, account)
 
     change = PendingChange(
+        organization_id=account.organization_id,
         client_id=account.client_id,
         created_by_user_id=user.id,
         platform=account.platform,
@@ -251,6 +252,7 @@ def _write_audit(
 ) -> None:
     db.add(
         AuditLogEntry(
+            organization_id=change.organization_id,
             client_id=change.client_id,
             pending_change_id=change.id,
             user_id=user.id,
@@ -450,6 +452,7 @@ def create_creative(
         conn_svc.mark_disconnected(db, conn, str(e))
         raise HTTPException(502, "Meta rejected the stored credentials")
     creative = Creative(
+        organization_id=account.organization_id,
         client_id=account.client_id,
         platform=PLATFORM_META,
         external_id=resp["id"],

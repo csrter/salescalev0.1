@@ -3,7 +3,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..db import get_db
-from ..models.core import User
+from ..models.core import Organization, User
 from ..schemas import LoginRequest, TokenResponse
 from ..security import create_access_token, verify_password
 
@@ -19,10 +19,13 @@ def login(body: LoginRequest, db: Session = Depends(get_db)):
         body.password, user.hashed_password
     ):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid credentials")
-    token = create_access_token(user.id, user.role, user.client_id)
+    org = db.get(Organization, user.organization_id)
+    token = create_access_token(user.id, user.role, user.organization_id, user.client_id)
     return TokenResponse(
         access_token=token,
         role=user.role,
+        organization_id=user.organization_id,
+        organization_name=org.name,
         client_id=user.client_id,
         full_name=user.full_name,
     )

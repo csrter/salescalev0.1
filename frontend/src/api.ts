@@ -1,8 +1,14 @@
 const BASE = import.meta.env.VITE_API_URL ?? "http://localhost:8000";
 
+export type Role = "owner" | "admin" | "member" | "client";
+export const TEAM_ROLES: Role[] = ["owner", "admin", "member"];
+export const ADMIN_ROLES: Role[] = ["owner", "admin"];
+
 export interface Session {
   access_token: string;
-  role: "team" | "client";
+  role: Role;
+  organization_id: string;
+  organization_name: string;
   client_id: string | null;
   full_name: string;
 }
@@ -43,6 +49,25 @@ export async function login(email: string, password: string): Promise<Session> {
   const s = await api<Session>("/api/auth/login", {
     method: "POST",
     body: JSON.stringify({ email, password }),
+  });
+  setSession(s);
+  return s;
+}
+
+export async function signup(
+  organizationName: string,
+  email: string,
+  password: string,
+  fullName: string
+): Promise<Session> {
+  const s = await api<Session>("/api/orgs/signup", {
+    method: "POST",
+    body: JSON.stringify({
+      organization_name: organizationName,
+      email,
+      password,
+      full_name: fullName,
+    }),
   });
   setSession(s);
   return s;

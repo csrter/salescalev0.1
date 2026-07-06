@@ -354,6 +354,7 @@ def _cache_create(
     extra: Dict[str, Any],
 ) -> Dict[str, Any]:
     row = model(
+        organization_id=account.organization_id,
         client_id=account.client_id,
         platform=account.platform,
         external_id=external_id,

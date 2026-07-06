@@ -149,6 +149,7 @@ def _refresh_campaigns(db: Session, account: AdAccount) -> None:
     conn = _connection_for(db, account)
     base = {
         "platform": account.platform,
+        "organization_id": account.organization_id,
         "client_id": account.client_id,
         "ad_account_id": account.id,
     }
@@ -193,6 +194,7 @@ def _refresh_ad_groups(db: Session, campaign: Campaign) -> None:
     conn = _connection_for(db, account)
     base = {
         "platform": campaign.platform,
+        "organization_id": campaign.organization_id,
         "client_id": campaign.client_id,
         "campaign_id": campaign.id,
     }
@@ -229,6 +231,7 @@ def _refresh_ads(db: Session, ad_group: AdGroup) -> None:
     conn = _connection_for(db, account)
     base = {
         "platform": ad_group.platform,
+        "organization_id": ad_group.organization_id,
         "client_id": ad_group.client_id,
         "ad_group_id": ad_group.id,
     }

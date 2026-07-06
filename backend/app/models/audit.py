@@ -27,6 +27,9 @@ class PendingChange(Base):
     __tablename__ = "pending_changes"
 
     id: Mapped[str] = id_column()
+    organization_id: Mapped[str] = mapped_column(
+        ForeignKey("organizations.id"), nullable=False, index=True
+    )
     client_id: Mapped[str] = mapped_column(
         ForeignKey("clients.id"), nullable=False, index=True
     )
@@ -73,6 +76,9 @@ class AuditLogEntry(Base):
     __tablename__ = "audit_log"
 
     id: Mapped[str] = id_column()
+    organization_id: Mapped[str] = mapped_column(
+        ForeignKey("organizations.id"), nullable=False, index=True
+    )
     client_id: Mapped[str] = mapped_column(
         ForeignKey("clients.id"), nullable=False, index=True
     )

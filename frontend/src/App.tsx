@@ -1,9 +1,11 @@
 import { useEffect, useState } from "react";
 import {
+  ADMIN_ROLES,
   api,
   getSession,
   login,
   setSession,
+  signup,
   type AdAccount,
   type AdGroup,
   type AdRow,
@@ -20,7 +22,7 @@ export default function App() {
   return (
     <div className="shell">
       <header>
-        <h1>Atlas Reach</h1>
+        <h1>{session.organization_name}</h1>
         <span>
           {session.full_name} ({session.role})
         </span>
@@ -39,6 +41,9 @@ export default function App() {
 }
 
 function Login({ onLogin }: { onLogin: (s: Session) => void }) {
+  const [mode, setMode] = useState<"login" | "signup">("login");
+  const [orgName, setOrgName] = useState("");
+  const [fullName, setFullName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -48,13 +53,31 @@ function Login({ onLogin }: { onLogin: (s: Session) => void }) {
       onSubmit={async (e) => {
         e.preventDefault();
         try {
-          onLogin(await login(email, password));
+          onLogin(
+            mode === "login"
+              ? await login(email, password)
+              : await signup(orgName, email, password, fullName)
+          );
         } catch (err) {
           setError((err as Error).message);
         }
       }}
     >
-      <h1>Atlas Reach</h1>
+      <h1>Salescale</h1>
+      {mode === "signup" && (
+        <>
+          <input
+            placeholder="Agency / organization name"
+            value={orgName}
+            onChange={(e) => setOrgName(e.target.value)}
+          />
+          <input
+            placeholder="Your name"
+            value={fullName}
+            onChange={(e) => setFullName(e.target.value)}
+          />
+        </>
+      )}
       <input
         placeholder="Email"
         value={email}
@@ -66,7 +89,21 @@ function Login({ onLogin }: { onLogin: (s: Session) => void }) {
         value={password}
         onChange={(e) => setPassword(e.target.value)}
       />
-      <button type="submit">Log in</button>
+      <button type="submit">
+        {mode === "login" ? "Log in" : "Create organization"}
+      </button>
+      <button
+        type="button"
+        className="link"
+        onClick={() => {
+          setError(null);
+          setMode(mode === "login" ? "signup" : "login");
+        }}
+      >
+        {mode === "login"
+          ? "New agency? Sign up"
+          : "Already have an account? Log in"}
+      </button>
       {error && <p className="error">{error}</p>}
     </form>
   );
@@ -120,7 +157,8 @@ function ClientDetail({
     "all"
   );
   const [error, setError] = useState<string | null>(null);
-  const isTeam = session.role === "team";
+  // Connecting platforms is Admin/Owner surface — mirrors the API gate.
+  const isAdmin = ADMIN_ROLES.includes(session.role);
 
   useEffect(() => {
     api<Connection[]>(`/api/clients/${client.id}/connections`)
@@ -155,7 +193,7 @@ function ClientDetail({
               ) : (
                 <span className="badge none">not connected</span>
               )}
-              {isTeam && (
+              {isAdmin && (
                 <button onClick={() => connect(platform)}>
                   {conn ? "Reconnect" : "Connect"}
                 </button>

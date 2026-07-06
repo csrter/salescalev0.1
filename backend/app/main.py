@@ -9,11 +9,12 @@ from .api import (
     connect_google,
     connect_meta,
     manage,
+    orgs,
 )
 from .config import get_settings
 from .db import Base, engine
 
-app = FastAPI(title="Atlas Reach Ads Platform + Salescale")
+app = FastAPI(title="Salescale")
 
 app.add_middleware(
     CORSMiddleware,
@@ -24,6 +25,7 @@ app.add_middleware(
 )
 
 app.include_router(auth.router)
+app.include_router(orgs.router)
 app.include_router(clients.router)
 app.include_router(connect_meta.router)
 app.include_router(connect_google.router)

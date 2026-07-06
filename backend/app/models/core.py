@@ -7,10 +7,18 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from ..db import Base
 from .base import created_at_column, id_column
 
-# Roles: the platform is single-agency (Atlas Reach), so role is a simple
-# enum on the user rather than a membership table.
-ROLE_TEAM = "team"
+# Roles. Owner/Admin/Member are Organization team roles; Client is the
+# read-only portal role for an Organization's client contacts.
+#   owner  — everything, including team membership (and billing, Phase 8)
+#   admin  — manage clients, platform connections, and team members
+#   member — day-to-day campaign work; no client or team management
+#   client — read-only visibility into their own client account
+ROLE_OWNER = "owner"
+ROLE_ADMIN = "admin"
+ROLE_MEMBER = "member"
 ROLE_CLIENT = "client"
+TEAM_ROLES = {ROLE_OWNER, ROLE_ADMIN, ROLE_MEMBER}
+ADMIN_ROLES = {ROLE_OWNER, ROLE_ADMIN}
 
 PLATFORM_META = "meta"
 PLATFORM_GOOGLE = "google"
@@ -20,8 +28,12 @@ CONN_DISCONNECTED = "disconnected"  # client revoked or token invalid
 CONN_ERROR = "error"
 
 
-class Agency(Base):
-    __tablename__ = "agencies"
+class Organization(Base):
+    """The root tenant entity. Every other tenant-owned table carries an
+    organization_id and must be filtered by it in every query — an unscoped
+    query is a cross-tenant data leak, not a style issue."""
+
+    __tablename__ = "organizations"
 
     id: Mapped[str] = id_column()
     name: Mapped[str] = mapped_column(String(200), nullable=False)
@@ -32,10 +44,12 @@ class Client(Base):
     __tablename__ = "clients"
 
     id: Mapped[str] = id_column()
-    agency_id: Mapped[str] = mapped_column(ForeignKey("agencies.id"), nullable=False)
+    organization_id: Mapped[str] = mapped_column(
+        ForeignKey("organizations.id"), nullable=False, index=True
+    )
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     status: Mapped[str] = mapped_column(String(20), default="active", nullable=False)
-    # Atlas Reach-internal — must never be serialized to client-role users.
+    # Organization-internal — must never be serialized to client-role users.
     internal_notes: Mapped[Optional[str]] = mapped_column(Text)
     created_at: Mapped[dt.datetime] = created_at_column()
 
@@ -48,11 +62,16 @@ class User(Base):
     __tablename__ = "users"
 
     id: Mapped[str] = id_column()
+    organization_id: Mapped[str] = mapped_column(
+        ForeignKey("organizations.id"), nullable=False, index=True
+    )
     email: Mapped[str] = mapped_column(String(320), unique=True, nullable=False)
     hashed_password: Mapped[str] = mapped_column(String(200), nullable=False)
     full_name: Mapped[str] = mapped_column(String(200), nullable=False)
-    role: Mapped[str] = mapped_column(String(20), nullable=False)  # team | client
-    # Required when role == client; identifies the one tenant they can see.
+    role: Mapped[str] = mapped_column(
+        String(20), nullable=False
+    )  # owner | admin | member | client
+    # Required when role == client; identifies the one client they can see.
     client_id: Mapped[Optional[str]] = mapped_column(ForeignKey("clients.id"))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     created_at: Mapped[dt.datetime] = created_at_column()
@@ -65,6 +84,9 @@ class PlatformConnection(Base):
     )
 
     id: Mapped[str] = id_column()
+    organization_id: Mapped[str] = mapped_column(
+        ForeignKey("organizations.id"), nullable=False, index=True
+    )
     client_id: Mapped[str] = mapped_column(ForeignKey("clients.id"), nullable=False)
     platform: Mapped[str] = mapped_column(String(20), nullable=False)  # meta | google
     status: Mapped[str] = mapped_column(String(20), default=CONN_ACTIVE, nullable=False)
@@ -92,6 +114,9 @@ class AdAccount(Base):
     )
 
     id: Mapped[str] = id_column()
+    organization_id: Mapped[str] = mapped_column(
+        ForeignKey("organizations.id"), nullable=False, index=True
+    )
     client_id: Mapped[str] = mapped_column(ForeignKey("clients.id"), nullable=False)
     connection_id: Mapped[str] = mapped_column(
         ForeignKey("platform_connections.id"), nullable=False

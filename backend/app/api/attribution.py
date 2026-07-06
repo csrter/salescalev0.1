@@ -25,6 +25,8 @@ def capture_landing_event(body: LandingEventIn, db: Session = Depends(get_db)):
     if client is None:
         raise HTTPException(404, "Unknown client")
     event = LandingEvent(
+        # organization_id comes from the client row, never from the caller.
+        organization_id=client.organization_id,
         client_id=body.client_id,
         session_key=body.session_key,
         landing_url=body.landing_url,

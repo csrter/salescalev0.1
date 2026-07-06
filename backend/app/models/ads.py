@@ -19,8 +19,8 @@ from .base import created_at_column, id_column
 # The ads hierarchy is modeled generically so reporting never forks per
 # platform: Meta campaign/ad set/ad and Google campaign/ad group/ad both map
 # onto campaigns/ad_groups/ads. Platform-specific payloads live in `raw`.
-# client_id is denormalized onto every row so tenant scoping is a single
-# indexed filter, not a join chain.
+# organization_id and client_id are denormalized onto every row so tenant
+# scoping (both levels) is a single indexed filter, not a join chain.
 
 
 class Campaign(Base):
@@ -30,6 +30,9 @@ class Campaign(Base):
     )
 
     id: Mapped[str] = id_column()
+    organization_id: Mapped[str] = mapped_column(
+        ForeignKey("organizations.id"), nullable=False, index=True
+    )
     client_id: Mapped[str] = mapped_column(
         ForeignKey("clients.id"), nullable=False, index=True
     )
@@ -60,6 +63,9 @@ class AdGroup(Base):
     )
 
     id: Mapped[str] = id_column()
+    organization_id: Mapped[str] = mapped_column(
+        ForeignKey("organizations.id"), nullable=False, index=True
+    )
     client_id: Mapped[str] = mapped_column(
         ForeignKey("clients.id"), nullable=False, index=True
     )
@@ -80,6 +86,9 @@ class Ad(Base):
     )
 
     id: Mapped[str] = id_column()
+    organization_id: Mapped[str] = mapped_column(
+        ForeignKey("organizations.id"), nullable=False, index=True
+    )
     client_id: Mapped[str] = mapped_column(
         ForeignKey("clients.id"), nullable=False, index=True
     )
@@ -101,6 +110,9 @@ class Creative(Base):
     )
 
     id: Mapped[str] = id_column()
+    organization_id: Mapped[str] = mapped_column(
+        ForeignKey("organizations.id"), nullable=False, index=True
+    )
     client_id: Mapped[str] = mapped_column(
         ForeignKey("clients.id"), nullable=False, index=True
     )
@@ -128,6 +140,9 @@ class InsightDaily(Base):
     )
 
     id: Mapped[str] = id_column()
+    organization_id: Mapped[str] = mapped_column(
+        ForeignKey("organizations.id"), nullable=False, index=True
+    )
     client_id: Mapped[str] = mapped_column(
         ForeignKey("clients.id"), nullable=False, index=True
     )

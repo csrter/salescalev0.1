@@ -1,5 +1,5 @@
 """Definition-of-Done: the Client role is genuinely read-only and cannot see
-Atlas Reach-internal fields — enforced by the API, not hidden UI."""
+Organization-internal fields — enforced by the API, not hidden UI."""
 
 
 def test_client_cannot_create_clients(api, client_a_headers):

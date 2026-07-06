@@ -22,6 +22,7 @@ from ..security import decrypt_secret, encrypt_secret
 
 def upsert_connection(
     db: Session,
+    organization_id: str,
     client_id: str,
     platform: str,
     access_token: Optional[str] = None,
@@ -32,12 +33,15 @@ def upsert_connection(
 ) -> PlatformConnection:
     conn = db.execute(
         select(PlatformConnection).where(
+            PlatformConnection.organization_id == organization_id,
             PlatformConnection.client_id == client_id,
             PlatformConnection.platform == platform,
         )
     ).scalar_one_or_none()
     if conn is None:
-        conn = PlatformConnection(client_id=client_id, platform=platform)
+        conn = PlatformConnection(
+            organization_id=organization_id, client_id=client_id, platform=platform
+        )
         db.add(conn)
     if access_token is not None:
         conn.access_token_encrypted = encrypt_secret(access_token)
