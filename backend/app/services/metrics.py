@@ -74,15 +74,23 @@ def _insight_rows(
 
 
 def _platform_totals(
-    db: Session, client: Client, since: dt.date, until: dt.date
+    db: Session,
+    client: Client,
+    since: dt.date,
+    until: dt.date,
+    platforms: Optional[Set[str]] = None,
 ) -> Dict[str, Dict[str, int]]:
     """Spend / platform-reported conversions / clicks / impressions per
-    platform, summed at that platform's canonical insight level."""
+    platform, summed at that platform's canonical insight level. `platforms`
+    (None = all) is the Phase 4 dashboard filter — restricting here keeps
+    every downstream blended total consistent with the visible channels."""
     totals: Dict[str, Dict[str, int]] = defaultdict(
         lambda: {"spend_micros": 0, "conversions": 0, "clicks": 0, "impressions": 0}
     )
     for row in _insight_rows(db, client, since, until):
         if row.entity_type != _INSIGHT_LEVELS.get(row.platform):
+            continue
+        if platforms is not None and row.platform not in platforms:
             continue
         t = totals[row.platform]
         t["spend_micros"] += row.spend_micros
@@ -168,7 +176,11 @@ def _cpl(spend_micros: int, leads: int) -> Optional[float]:
 
 
 def blended_and_mix(
-    db: Session, client: Client, since: dt.date, until: dt.date
+    db: Session,
+    client: Client,
+    since: dt.date,
+    until: dt.date,
+    platform_filter: Optional[Set[str]] = None,
 ) -> Dict[str, Any]:
     """Definitions:
     - Tracked CPL (per platform) = platform spend / tracked leads attributed
@@ -182,17 +194,27 @@ def blended_and_mix(
     - Blended ROAS = sum of those won deals' value_cents / total spend.
       Revenue source is Salescale won-deal value — not platform-reported
       conversion values.
+
+    With a platform_filter (Phase 4 dashboard toggle), every total narrows
+    to the selected platforms: spend, tracked leads (unattributed leads drop
+    out — they can't be assigned to a channel), won deals, and revenue.
     """
-    totals = _platform_totals(db, client, since, until)
+    totals = _platform_totals(db, client, since, until, platform_filter)
     contacts = _contacts_in_range(db, client, since, until)
     platforms = contact_platforms(db, client, contacts)
+    if platform_filter is not None:
+        platforms = {
+            cid: p for cid, p in platforms.items() if p in platform_filter
+        }
 
     leads_by_platform: Dict[str, int] = defaultdict(int)
     for _cid, platform in platforms.items():
         leads_by_platform[platform or "unattributed"] += 1
 
     total_spend = sum(t["spend_micros"] for t in totals.values())
-    total_leads = len(contacts)
+    total_leads = (
+        len(contacts) if platform_filter is None else len(platforms)
+    )
 
     # Won-deal revenue for CAC/ROAS: deals closed in range, contact from paid.
     start, end = _day_bounds(since, until)
@@ -231,6 +253,7 @@ def blended_and_mix(
     return {
         "since": since.isoformat(),
         "until": until.isoformat(),
+        "platforms": sorted(platform_filter) if platform_filter else None,
         "per_platform": per_platform,
         "unattributed_leads": leads_by_platform.get("unattributed", 0),
         "total_spend_micros": total_spend,
@@ -448,7 +471,11 @@ def quality_trends(db: Session, client: Client, until: dt.date) -> Dict[str, Any
 
 
 def lead_quality_adjusted_cpl(
-    db: Session, client: Client, since: dt.date, until: dt.date
+    db: Session,
+    client: Client,
+    since: dt.date,
+    until: dt.date,
+    platform_filter: Optional[Set[str]] = None,
 ) -> Dict[str, Any]:
     """LQA-CPL = platform spend / qualified leads attributed to the platform.
 
@@ -458,9 +485,13 @@ def lead_quality_adjusted_cpl(
     platform so quality is comparable channel-to-channel — a cheap CPL with
     a bad qualified-rate is the exact pattern this metric exists to expose.
     """
-    totals = _platform_totals(db, client, since, until)
+    totals = _platform_totals(db, client, since, until, platform_filter)
     contacts = _contacts_in_range(db, client, since, until)
     platforms = contact_platforms(db, client, contacts)
+    if platform_filter is not None:
+        platforms = {
+            cid: p for cid, p in platforms.items() if p in platform_filter
+        }
     qualified = lead_quality.qualified_contact_ids(db, client)
 
     by_platform: Dict[str, Dict[str, int]] = defaultdict(
@@ -495,6 +526,160 @@ def lead_quality_adjusted_cpl(
         "per_platform": per_platform,
         "blended_lead_quality_adjusted_cpl": _cpl(total_spend, total_qualified),
         "total_qualified_leads": total_qualified,
+    }
+
+
+# --- Phase 4: daily spend/pacing series ---
+
+
+def spend_daily(
+    db: Session,
+    client: Client,
+    since: dt.date,
+    until: dt.date,
+    platform_filter: Optional[Set[str]] = None,
+) -> Dict[str, Any]:
+    """Per-platform daily spend + platform-reported conversions, zero-filled
+    for every day in [since, until] so pacing charts don't interpolate over
+    missing days. Sums at each platform's canonical insight level (same rule
+    as _platform_totals, so a day's total here always matches the blended
+    view's total for that day)."""
+    days = [
+        since + dt.timedelta(days=i) for i in range((until - since).days + 1)
+    ]
+    index = {d: i for i, d in enumerate(days)}
+    series: Dict[str, Dict[str, list]] = {}
+    for row in _insight_rows(db, client, since, until):
+        if row.entity_type != _INSIGHT_LEVELS.get(row.platform):
+            continue
+        if platform_filter is not None and row.platform not in platform_filter:
+            continue
+        s = series.setdefault(
+            row.platform,
+            {
+                "daily_spend_micros": [0] * len(days),
+                "daily_conversions": [0] * len(days),
+            },
+        )
+        i = index[row.date]
+        s["daily_spend_micros"][i] += row.spend_micros
+        s["daily_conversions"][i] += row.conversions
+    for s in series.values():
+        s["total_spend_micros"] = sum(s["daily_spend_micros"])
+    return {
+        "since": since.isoformat(),
+        "until": until.isoformat(),
+        "days": [d.isoformat() for d in days],
+        "per_platform": dict(sorted(series.items())),
+    }
+
+
+# --- Phase 4: guarantee / goal tracker ---
+
+# What a guarantee can count. The terms themselves (name, target, window)
+# are Organization-configured data on the client (metric_settings
+# ["guarantee"]) — nothing here assumes any one agency's guarantee exists
+# or what it promises.
+GUARANTEE_METRICS = {"tracked_leads", "qualified_leads", "won_deals"}
+
+
+def guarantee_progress(
+    db: Session,
+    client: Client,
+    today: dt.date,
+    platform_filter: Optional[Set[str]] = None,
+) -> Dict[str, Any]:
+    """Progress against the client's configured performance guarantee.
+
+    Config shape (client.metric_settings["guarantee"]):
+        {"name": str, "metric": one of GUARANTEE_METRICS, "target": int > 0,
+         "window_days": int > 0, "start_date": ISO date (optional)}
+    Window = [start_date, start_date + window_days) when start_date is set,
+    otherwise the rolling window_days ending today.
+
+    Progress counts the metric per contributing platform and sums across
+    them — the guarantee is a promise about outcomes, not about which
+    channel delivers them. Unattributed leads count toward the total when
+    no platform filter is active (they're real leads); under a filter only
+    the selected platforms' contributions count.
+    """
+    config = (client.metric_settings or {}).get("guarantee")
+    if not config:
+        return {"configured": False}
+    metric = config.get("metric", "qualified_leads")
+    target = int(config.get("target", 0))
+    window_days = int(config.get("window_days", 30))
+    if metric not in GUARANTEE_METRICS or target <= 0 or window_days <= 0:
+        return {"configured": False, "error": "invalid guarantee config"}
+
+    if config.get("start_date"):
+        start = dt.date.fromisoformat(config["start_date"])
+        end = start + dt.timedelta(days=window_days - 1)
+    else:
+        end = today
+        start = end - dt.timedelta(days=window_days - 1)
+
+    contacts = _contacts_in_range(db, client, start, end)
+    platforms = contact_platforms(db, client, contacts)
+
+    if metric == "won_deals":
+        # A won deal contributes to the platform its contact came from.
+        s, e = _day_bounds(start, end)
+        deals = (
+            db.execute(
+                select(Deal).where(
+                    Deal.organization_id == client.organization_id,
+                    Deal.client_id == client.id,
+                    Deal.status == "won",
+                    Deal.closed_at >= s,
+                    Deal.closed_at < e,
+                )
+            )
+            .scalars()
+            .all()
+        )
+        counted = [platforms.get(d.contact_id) for d in deals]
+    elif metric == "qualified_leads":
+        qualified = lead_quality.qualified_contact_ids(db, client)
+        counted = [p for cid, p in platforms.items() if cid in qualified]
+    else:  # tracked_leads
+        counted = list(platforms.values())
+
+    per_platform: Dict[str, int] = defaultdict(int)
+    for p in counted:
+        per_platform[p or "unattributed"] += 1
+    if platform_filter is not None:
+        # Restrict the breakdown too, so the widget never shows a channel
+        # the filter excludes contributing to a filtered progress number.
+        per_platform = defaultdict(
+            int, {p: n for p, n in per_platform.items() if p in platform_filter}
+        )
+    progress = sum(per_platform.values())
+
+    days_total = window_days
+    days_elapsed = min(max((today - start).days + 1, 0), days_total)
+    # On pace = at or above the straight-line share of the target for the
+    # elapsed portion of the window.
+    expected_by_now = round(target * days_elapsed / days_total, 1)
+    return {
+        "configured": True,
+        "name": config.get("name") or "Performance guarantee",
+        "metric": metric,
+        "target": target,
+        "window": {
+            "start": start.isoformat(),
+            "end": end.isoformat(),
+            "days_total": days_total,
+            "days_elapsed": days_elapsed,
+            "days_remaining": max(days_total - days_elapsed, 0),
+        },
+        "platforms": sorted(platform_filter) if platform_filter else None,
+        "per_platform": dict(sorted(per_platform.items())),
+        "progress": progress,
+        "pct_of_target": round(progress / target, 3),
+        "expected_by_now": expected_by_now,
+        "on_pace": progress >= expected_by_now,
+        "met": progress >= target,
     }
 
 

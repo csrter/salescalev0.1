@@ -145,6 +145,41 @@ class AdOut(BaseModel):
     synced_at: Optional[dt.datetime] = None
 
 
+# --- Phase 4: dashboard layouts + guarantee config ---
+
+
+class DashboardWidgetIn(BaseModel):
+    """One widget slot. The frontend registry owns what each type renders;
+    the backend only bounds the geometry so a corrupt layout can't be saved."""
+
+    type: str = Field(min_length=1, max_length=50)
+    w: int = Field(ge=1, le=12)
+    h: int = Field(ge=1, le=6)
+
+
+class DashboardLayoutIn(BaseModel):
+    widgets: List[DashboardWidgetIn] = Field(max_length=30)
+
+    def model_post_init(self, __context: Any) -> None:
+        seen = set()
+        for w in self.widgets:
+            if w.type in seen:
+                raise ValueError(f"duplicate widget type {w.type!r}")
+            seen.add(w.type)
+
+
+class GuaranteeConfigIn(BaseModel):
+    """Organization-configured guarantee terms for one client. Whether a
+    guarantee exists at all, and what it promises, is tenant data — see
+    services/metrics.py:GUARANTEE_METRICS for what can be counted."""
+
+    name: str = Field(min_length=1, max_length=200)
+    metric: str  # tracked_leads | qualified_leads | won_deals
+    target: int = Field(gt=0)
+    window_days: int = Field(gt=0, le=366)
+    start_date: Optional[dt.date] = None
+
+
 class LandingEventIn(BaseModel):
     client_id: str
     session_key: str

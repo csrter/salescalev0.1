@@ -242,7 +242,36 @@ actually built vs. what's still planned.)_
       flag; per-client metrics panel in the UI. Note: dev DB schema
       changed (clients gained vertical/lead_quality_source/metric_settings;
       new quality_snapshots table) — recreate local dev DBs.
-- [ ] Phase 4 — Customizable UI
+- [x] Phase 4 — Customizable UI (2026-07-06). Real widget dashboard
+      (frontend/src/dashboard.tsx + widgets.tsx, hand-rolled — no grid
+      library): add/remove via registry menu, drag-header to rearrange,
+      corner-handle resize on a 12-col grid, layout persisted per user per
+      client view (dashboard_layouts table, GET/PUT /api/dashboard/layout;
+      no row = role default). Widgets: blended overview, channel mix,
+      spend/pacing SVG chart (new /api/metrics/spend-daily, zero-filled
+      daily series), funnel tiers, creative-fatigue + QS alerts,
+      attribution-discrepancy view, raw campaign table (new flat
+      GET /api/campaigns reading the local cache, staged pause/resume from
+      the row), vertical benchmark + UTM builder (team-only), and a
+      guarantee tracker: terms are per-client Organization data
+      (metric_settings["guarantee"]; PUT/DELETE /api/clients/{id}/guarantee,
+      admin-gated; metric ∈ tracked_leads|qualified_leads|won_deals) with
+      progress summed across whichever platforms contribute. One platform
+      toggle (Blended/Meta/Google, no reload) governs every widget:
+      blended/LQA/guarantee/spend-daily accept ?platforms= server-side
+      (spend, tracked leads, and won-deal revenue all narrow consistently;
+      unattributed leads drop out under a filter), per-platform tables
+      filter client-side, and single-platform widgets say so when the
+      filter hides them. Navy/cobalt fintech restyle across every screen
+      (App.css token set — login, header, modals, Phase 2 panels, and the
+      client-role view; metrics.tsx's Phase 3 reference panel is retired,
+      its displays now live as widgets). 11 new tests
+      (test_dashboard_ui.py) incl. layout tenant isolation at both levels;
+      verified in-browser incl. drag/resize/reload persistence and the
+      client-role view. Note: /api/dashboard/ was added to
+      test_manage_flow's mutating-route allowlist (UI-pref writes, no
+      spend); .claude/launch.json gained backend-alt/frontend-alt configs
+      (ports 8010/5183) for previewing when 8000/5173 are busy.
 - [ ] Phase 5 — Server-side conversion tracking (CAPI + Google)
 - [ ] Phase 6 — Salescale CRM
 - [ ] Phase 7 — Additional platform adapters (Snapchat, Reddit, LinkedIn,

@@ -8,6 +8,7 @@ from .api import (
     clients,
     connect_google,
     connect_meta,
+    dashboard,
     manage,
     metrics,
     orgs,
@@ -34,6 +35,7 @@ app.include_router(browser.router)
 app.include_router(manage.router)
 app.include_router(attribution.router)
 app.include_router(metrics.router)
+app.include_router(dashboard.router)
 
 
 @app.get("/api/health")

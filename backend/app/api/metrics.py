@@ -43,6 +43,18 @@ def _range(
     return since, until
 
 
+def _platform_set(platforms: Optional[str]) -> Optional[set[str]]:
+    """Parse the Phase 4 dashboard filter (?platforms=meta,google).
+    None / empty / "all" means no filter."""
+    if not platforms or platforms == "all":
+        return None
+    parsed = {p.strip().lower() for p in platforms.split(",") if p.strip()}
+    unknown = parsed - {"meta", "google"}
+    if unknown:
+        raise HTTPException(400, f"Unknown platform(s): {', '.join(sorted(unknown))}")
+    return parsed or None
+
+
 @router.post("/insights/sync")
 def sync_insights(
     client_id: str,
@@ -63,12 +75,42 @@ def blended(
     client_id: str,
     since: Optional[dt.date] = None,
     until: Optional[dt.date] = None,
+    platforms: Optional[str] = None,
     scope: TenantScope = Depends(get_scope),
     db: Session = Depends(get_db),
 ):
     client = _client_for(db, scope, client_id)
     s, u = _range(since, until)
-    return metrics.blended_and_mix(db, client, s, u)
+    return metrics.blended_and_mix(db, client, s, u, _platform_set(platforms))
+
+
+@router.get("/metrics/spend-daily")
+def spend_daily(
+    client_id: str,
+    since: Optional[dt.date] = None,
+    until: Optional[dt.date] = None,
+    platforms: Optional[str] = None,
+    scope: TenantScope = Depends(get_scope),
+    db: Session = Depends(get_db),
+):
+    client = _client_for(db, scope, client_id)
+    s, u = _range(since, until)
+    return metrics.spend_daily(db, client, s, u, _platform_set(platforms))
+
+
+@router.get("/metrics/guarantee")
+def guarantee(
+    client_id: str,
+    platforms: Optional[str] = None,
+    scope: TenantScope = Depends(get_scope),
+    db: Session = Depends(get_db),
+):
+    """Progress against the client's Organization-configured performance
+    guarantee. Client-role visible — it's their own goal being tracked."""
+    client = _client_for(db, scope, client_id)
+    return metrics.guarantee_progress(
+        db, client, dt.date.today(), _platform_set(platforms)
+    )
 
 
 @router.get("/metrics/funnel-tiers")
@@ -111,12 +153,15 @@ def lead_quality_adjusted_cpl(
     client_id: str,
     since: Optional[dt.date] = None,
     until: Optional[dt.date] = None,
+    platforms: Optional[str] = None,
     scope: TenantScope = Depends(get_scope),
     db: Session = Depends(get_db),
 ):
     client = _client_for(db, scope, client_id)
     s, u = _range(since, until)
-    return metrics.lead_quality_adjusted_cpl(db, client, s, u)
+    return metrics.lead_quality_adjusted_cpl(
+        db, client, s, u, _platform_set(platforms)
+    )
 
 
 @router.get("/metrics/benchmark")

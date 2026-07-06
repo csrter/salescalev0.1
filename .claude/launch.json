@@ -12,6 +12,24 @@
       "runtimeExecutable": "npm",
       "runtimeArgs": ["run", "dev", "--prefix", "frontend"],
       "port": 5173
+    },
+    {
+      "name": "backend-alt",
+      "runtimeExecutable": "sh",
+      "runtimeArgs": [
+        "-c",
+        "FRONTEND_ORIGIN=http://localhost:5183 exec backend/.venv/bin/uvicorn app.main:app --port 8010 --app-dir backend"
+      ],
+      "port": 8010
+    },
+    {
+      "name": "frontend-alt",
+      "runtimeExecutable": "sh",
+      "runtimeArgs": [
+        "-c",
+        "VITE_API_URL=http://localhost:8010 exec npm run dev --prefix frontend -- --port 5183 --strictPort"
+      ],
+      "port": 5183
     }
   ]
 }

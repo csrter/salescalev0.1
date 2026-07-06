@@ -59,6 +59,24 @@ def list_ad_accounts(
     return db.execute(stmt).scalars().all()
 
 
+@router.get("/campaigns", response_model=List[CampaignOut])
+def list_client_campaigns(
+    client_id: str,
+    scope: TenantScope = Depends(get_scope),
+    db: Session = Depends(get_db),
+):
+    """Flat cached campaign list across all of a client's accounts — the
+    Phase 4 raw-table widget. Reads the local cache only (no live pull);
+    the per-account tree remains the live-refresh path."""
+    scope.check_client_id(client_id)
+    stmt = (
+        select(Campaign)
+        .where(Campaign.client_id == client_id)
+        .order_by(Campaign.platform, Campaign.name)
+    )
+    return db.execute(scope.filter(stmt, Campaign)).scalars().all()
+
+
 @router.get("/ad-accounts/{account_id}/campaigns", response_model=List[CampaignOut])
 def list_campaigns(
     account_id: str,

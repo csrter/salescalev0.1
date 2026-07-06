@@ -7,7 +7,14 @@ from sqlalchemy.orm import Session
 from ..db import get_db
 from ..deps import TenantScope, get_scope, require_admin
 from ..models.core import Client, PlatformConnection, User
-from ..schemas import ClientCreate, ClientOutPublic, ClientOutTeam, ConnectionOut
+from ..schemas import (
+    ClientCreate,
+    ClientOutPublic,
+    ClientOutTeam,
+    ConnectionOut,
+    GuaranteeConfigIn,
+)
+from ..services.metrics import GUARANTEE_METRICS
 
 router = APIRouter(prefix="/api/clients", tags=["clients"])
 
@@ -65,6 +72,61 @@ def create_client(
     db.add(client)
     db.commit()
     return ClientOutTeam.model_validate(client)
+
+
+# Guarantee terms are client management (Organization-configured tenant
+# data), not day-to-day campaign work — hence admin, not member.
+@router.put("/{client_id}/guarantee")
+def set_guarantee(
+    client_id: str,
+    body: GuaranteeConfigIn,
+    user: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    client = db.get(Client, client_id)
+    if client is None or client.organization_id != user.organization_id:
+        raise HTTPException(404, "Not found")
+    if body.metric not in GUARANTEE_METRICS:
+        raise HTTPException(
+            400, f"metric must be one of {', '.join(sorted(GUARANTEE_METRICS))}"
+        )
+    config = body.model_dump()
+    if config["start_date"] is not None:
+        config["start_date"] = config["start_date"].isoformat()
+    # Reassign (not mutate) so SQLAlchemy sees the JSON column change.
+    client.metric_settings = {
+        **(client.metric_settings or {}),
+        "guarantee": config,
+    }
+    db.commit()
+    return {"guarantee": config}
+
+
+@router.delete("/{client_id}/guarantee", status_code=204)
+def clear_guarantee(
+    client_id: str,
+    user: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    client = db.get(Client, client_id)
+    if client is None or client.organization_id != user.organization_id:
+        raise HTTPException(404, "Not found")
+    settings = dict(client.metric_settings or {})
+    settings.pop("guarantee", None)
+    client.metric_settings = settings
+    db.commit()
+
+
+@router.get("/{client_id}/guarantee")
+def get_guarantee(
+    client_id: str,
+    scope: TenantScope = Depends(get_scope),
+    db: Session = Depends(get_db),
+):
+    """The configured terms (not progress — that's /api/metrics/guarantee).
+    Client-role readable: a client can see the guarantee they were sold."""
+    client = _get_client_or_404(db, scope, client_id)
+    return {"guarantee": (client.metric_settings or {}).get("guarantee")}
 
 
 @router.get("/{client_id}/connections", response_model=List[ConnectionOut])

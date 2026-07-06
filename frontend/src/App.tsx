@@ -23,7 +23,7 @@ import {
   PendingChangesPanel,
   useManage,
 } from "./manage";
-import { MetricsPanel } from "./metrics";
+import { Dashboard } from "./dashboard";
 import "./App.css";
 
 type Tab = "clients" | "changes" | "audit";
@@ -216,9 +216,31 @@ function ClientDetail({
 
   return (
     <div>
-      <button onClick={onBack}>← All clients</button>
-      <h2>{client.name}</h2>
+      <div className="client-head">
+        <button className="link" onClick={onBack}>
+          ← All clients
+        </button>
+        <h2>{client.name}</h2>
+        {/* One filter governs every widget and the account tree below —
+            no reload, no separate views. */}
+        <nav className="toggle platform-toggle">
+          {(["all", "meta", "google"] as const).map((p) => (
+            <button
+              key={p}
+              className={platformFilter === p ? "active" : ""}
+              onClick={() => setPlatformFilter(p)}
+            >
+              {p === "all" ? "Blended" : p === "meta" ? "Meta only" : "Google only"}
+            </button>
+          ))}
+        </nav>
+      </div>
       {error && <p className="error">{error}</p>}
+      <Dashboard
+        clientId={client.id}
+        session={session}
+        platforms={platformFilter}
+      />
       <section>
         <h3>Platform connections</h3>
         {(["meta", "google"] as const).map((platform) => {
@@ -243,20 +265,8 @@ function ClientDetail({
           );
         })}
       </section>
-      <MetricsPanel clientId={client.id} session={session} />
       <section>
         <h3>Accounts &amp; campaigns</h3>
-        <div className="toggle">
-          {(["all", "meta", "google"] as const).map((p) => (
-            <button
-              key={p}
-              className={platformFilter === p ? "active" : ""}
-              onClick={() => setPlatformFilter(p)}
-            >
-              {p === "all" ? "All platforms" : p === "meta" ? "Meta" : "Google"}
-            </button>
-          ))}
-        </div>
         <AccountTree
           clientId={client.id}
           platformFilter={platformFilter}

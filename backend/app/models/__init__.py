@@ -13,6 +13,7 @@ from .crm import (
 )
 from .attribution import LandingEvent
 from .audit import AuditLogEntry, PendingChange
+from .dashboard import DashboardLayout
 
 __all__ = [
     "Organization",
@@ -38,4 +39,5 @@ __all__ = [
     "LandingEvent",
     "PendingChange",
     "AuditLogEntry",
+    "DashboardLayout",
 ]
