@@ -272,7 +272,41 @@ actually built vs. what's still planned.)_
       test_manage_flow's mutating-route allowlist (UI-pref writes, no
       spend); .claude/launch.json gained backend-alt/frontend-alt configs
       (ports 8010/5183) for previewing when 8000/5173 are busy.
-- [ ] Phase 5 — Server-side conversion tracking (CAPI + Google)
+- [x] Phase 5 — Server-side conversion tracking (2026-07-06). Specs
+      verified against live docs before implementing (per-platform hashing
+      differs and is documented at the source: backend/app/services/pii.py —
+      Meta wants bare-digit phones and keeps gmail dots; Google wants E.164
+      and strips gmail dots/plus-suffixes; both SHA-256 hex; fbc/fbp/IP/UA
+      never hashed). Architecture: ConversionEvent (platform-agnostic, one
+      per lead, event_id = the browser pixel's eventID for Meta's 48h
+      (event_name, event_id) dedup) → conversion_dispatch.py SENDERS
+      registry (the Phase 7 adapter seam — per-platform isolation, one
+      ConversionDispatch log row per attempt recording match KEYS, never
+      values) → meta_capi.py (POST /{dataset_id}/events, test_event_code
+      only on explicit test sends) and google_conversions.py
+      (ConversionUploadService ClickConversion: gclid + hashed
+      user_identifiers/FIRST_PARTY, consent, partial_failure,
+      order_id=event_id for Google-side dedup; readiness check for
+      accepted_customer_data_terms + enhanced_conversions_for_leads_enabled
+      and an UPLOAD_CLICKS action lister for the config UI). Lead capture:
+      public POST /api/track/lead joins the visitor's landing_events row
+      (UTMs + fbclid/fbp/gclid on one record; landing_events gained fbp;
+      fbc derived as fb.1.{landing_ms}.{fbclid}), creates the Contact,
+      backfills click IDs the landing ping missed, and fans out sends.
+      Per-client destinations in conversion_configs (meta dataset_id /
+      google customer+action, admin-gated PUT
+      /api/clients/{id}/conversion-configs/{platform}). UI: team-only
+      "Conversion tracking (server-side)" widget — live EMQ per event (GET
+      /dataset_quality), dispatch log, inline admin config + test-send.
+      13 new tests (test_conversions.py): hash vectors vs independently
+      computed SHA-256, dedup key pass-through, click-ID ride-through,
+      failure isolation, org/role gates. Caveats: platform calls mocked in
+      tests — the DoD's in-platform dedup/EMQ verification (Events Manager
+      Test Events, Google diagnostics) still needs real credentials, via
+      the widget's test-send; recurring background sending not needed (send
+      happens at lead time); dev DBs need recreating again (new fbp column
+      + 3 conversion tables); launch.json gained backend-alt2/frontend-alt2
+      (ports 8020/5193, isolated dev-alt2.db).
 - [ ] Phase 6 — Salescale CRM
 - [ ] Phase 7 — Additional platform adapters (Snapchat, Reddit, LinkedIn,
       Microsoft Advertising, Nextdoor)

@@ -564,6 +564,16 @@ tr.negative td {
   margin: 0.3rem 0 0;
 }
 
+/* --- Phase 5: conversion tracking health widget --- */
+
+.emq-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.6rem;
+}
+
 /* --- Phase 4: dashboard & widget grid --- */
 
 .dashboard {

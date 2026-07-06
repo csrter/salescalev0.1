@@ -30,6 +30,24 @@
         "VITE_API_URL=http://localhost:8010 exec npm run dev --prefix frontend -- --port 5183 --strictPort"
       ],
       "port": 5183
+    },
+    {
+      "name": "backend-alt2",
+      "runtimeExecutable": "sh",
+      "runtimeArgs": [
+        "-c",
+        "DATABASE_URL=sqlite:///./dev-alt2.db FRONTEND_ORIGIN=http://localhost:5193 exec backend/.venv/bin/uvicorn app.main:app --port 8020 --app-dir backend"
+      ],
+      "port": 8020
+    },
+    {
+      "name": "frontend-alt2",
+      "runtimeExecutable": "sh",
+      "runtimeArgs": [
+        "-c",
+        "VITE_API_URL=http://localhost:8020 exec npm run dev --prefix frontend -- --port 5193 --strictPort"
+      ],
+      "port": 5193
     }
   ]
 }

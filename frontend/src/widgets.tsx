@@ -862,3 +862,315 @@ export function UtmBuilderWidget({ clientId }: WidgetProps) {
     </div>
   );
 }
+
+// --- Phase 5: server-side conversion tracking health (team-only) ---
+// Event Match Quality per event for the client's Meta dataset, plus the
+// dispatch log for every server-side send. Admins configure each platform's
+// destination (Meta dataset / Google conversion action) inline.
+
+export function ConversionHealthWidget({
+  clientId,
+  session,
+  platforms,
+  refresh,
+}: WidgetProps) {
+  const [bump, setBump] = useState(0);
+  const isAdmin = ADMIN_ROLES.includes(session.role);
+  const [configuring, setConfiguring] = useState(false);
+  const configs = useWidgetData<any[]>(
+    `/api/clients/${clientId}/conversion-configs`,
+    [clientId, refresh, bump]
+  );
+  const log = useWidgetData<any[]>(
+    `/api/conversions/log?client_id=${clientId}&limit=20`,
+    [clientId, refresh, bump]
+  );
+  const metaConfigured = (configs.data ?? []).some(
+    (c) => c.platform === "meta" && c.enabled
+  );
+  const emq = useWidgetData<any>(
+    metaConfigured && keepPlatform(platforms, "meta")
+      ? `/api/conversions/emq?client_id=${clientId}`
+      : null,
+    [clientId, metaConfigured, platforms, refresh, bump]
+  );
+  const logRows = (log.data ?? []).filter((e) =>
+    keepPlatform(platforms, e.dispatch.platform)
+  );
+
+  return (
+    <WidgetBody error={configs.error} loading={configs.loading} empty={null}>
+      {configs.data && configs.data.length === 0 && !configuring && (
+        <p className="muted">
+          Server-side conversion tracking isn’t set up for this client.
+          {isAdmin && (
+            <>
+              {" "}
+              <button className="link" onClick={() => setConfiguring(true)}>
+                Configure
+              </button>
+            </>
+          )}
+        </p>
+      )}
+      {configs.data && configs.data.length > 0 && (
+        <>
+          {metaConfigured && keepPlatform(platforms, "meta") && (
+            <div className="emq-row">
+              <span className="metric-label">Meta Event Match Quality</span>
+              {emq.loading && <span className="muted"> loading…</span>}
+              {emq.error && (
+                <span className="warning"> unavailable: {emq.error}</span>
+              )}
+              {emq.data &&
+                (emq.data.events.length === 0 ? (
+                  <span className="muted"> no scored events yet</span>
+                ) : (
+                  emq.data.events.map((e: any) => (
+                    <span
+                      key={e.event_name}
+                      className={`badge ${
+                        e.composite_score == null
+                          ? ""
+                          : e.composite_score >= 6
+                            ? "ok"
+                            : "warn"
+                      }`}
+                      title={(e.match_keys ?? [])
+                        .map(
+                          (k: any) => `${k.identifier}: ${k.coverage_pct}%`
+                        )
+                        .join(" · ")}
+                    >
+                      {e.event_name}: {e.composite_score ?? "—"}/10
+                    </span>
+                  ))
+                ))}
+            </div>
+          )}
+          <table className="compact">
+            <thead>
+              <tr>
+                <th>When</th>
+                <th>Event</th>
+                <th>Platform</th>
+                <th>Status</th>
+                <th>Matched on</th>
+              </tr>
+            </thead>
+            <tbody>
+              {logRows.map((e: any) => (
+                <tr
+                  key={e.dispatch.id}
+                  className={e.dispatch.status === "failed" ? "negative" : ""}
+                >
+                  <td className="muted">
+                    {new Date(e.dispatch.attempted_at).toLocaleString()}
+                  </td>
+                  <td>
+                    {e.event_name}
+                    {e.dispatch.is_test ? " (test)" : ""}
+                  </td>
+                  <td>
+                    <span className={`platform ${e.dispatch.platform}`}>
+                      {e.dispatch.platform}
+                    </span>
+                  </td>
+                  <td>
+                    <span
+                      className={`badge ${
+                        e.dispatch.status === "sent"
+                          ? "ok"
+                          : e.dispatch.status === "failed"
+                            ? "warn"
+                            : ""
+                      }`}
+                      title={e.dispatch.detail ?? ""}
+                    >
+                      {e.dispatch.status}
+                    </span>
+                  </td>
+                  <td className="muted">
+                    {(e.dispatch.match_keys ?? []).join(", ") || "—"}
+                  </td>
+                </tr>
+              ))}
+              {logRows.length === 0 && (
+                <tr>
+                  <td colSpan={5} className="muted">
+                    No server-side sends yet.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+          {isAdmin && !configuring && (
+            <p className="muted footnote">
+              <button className="link" onClick={() => setConfiguring(true)}>
+                Tracking settings
+              </button>
+            </p>
+          )}
+        </>
+      )}
+      {configuring && isAdmin && (
+        <ConversionConfigForm
+          clientId={clientId}
+          configs={configs.data ?? []}
+          onDone={() => {
+            setConfiguring(false);
+            setBump((b) => b + 1);
+          }}
+        />
+      )}
+    </WidgetBody>
+  );
+}
+
+function ConversionConfigForm({
+  clientId,
+  configs,
+  onDone,
+}: {
+  clientId: string;
+  configs: any[];
+  onDone: () => void;
+}) {
+  const meta = configs.find((c) => c.platform === "meta");
+  const google = configs.find((c) => c.platform === "google");
+  const [datasetId, setDatasetId] = useState(meta?.settings?.dataset_id ?? "");
+  const [testCode, setTestCode] = useState(
+    meta?.settings?.test_event_code ?? ""
+  );
+  const [customerId, setCustomerId] = useState(
+    google?.settings?.customer_id ?? ""
+  );
+  const [actionId, setActionId] = useState(
+    google?.settings?.conversion_action_id ?? ""
+  );
+  const [status, setStatus] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const save = async () => {
+    setError(null);
+    try {
+      if (datasetId) {
+        await api(`/api/clients/${clientId}/conversion-configs/meta`, {
+          method: "PUT",
+          body: JSON.stringify({
+            enabled: true,
+            settings: {
+              dataset_id: datasetId,
+              ...(testCode ? { test_event_code: testCode } : {}),
+              event_name: "Lead",
+            },
+          }),
+        });
+      }
+      if (customerId && actionId) {
+        await api(`/api/clients/${clientId}/conversion-configs/google`, {
+          method: "PUT",
+          body: JSON.stringify({
+            enabled: true,
+            settings: {
+              customer_id: customerId,
+              conversion_action_id: actionId,
+              ad_user_data_consent: "GRANTED",
+            },
+          }),
+        });
+      }
+      onDone();
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  };
+
+  const testSend = async (platform: string) => {
+    setStatus(`sending ${platform} test…`);
+    try {
+      const resp = await api<any>(`/api/conversions/test-send`, {
+        method: "POST",
+        body: JSON.stringify({
+          client_id: clientId,
+          platform,
+          email: "test@example.com",
+          first_name: "Test",
+        }),
+      });
+      const r = resp.results[0];
+      setStatus(
+        r
+          ? `${platform}: ${r.status}${r.detail ? ` — ${r.detail}` : ""}` +
+              (platform === "meta" && r.status === "sent"
+                ? " (check Events Manager → Test Events)"
+                : "")
+          : `${platform}: no result`
+      );
+    } catch (e) {
+      setStatus((e as Error).message);
+    }
+  };
+
+  return (
+    <div className="inline-form column">
+      <span className="muted">
+        Per-client destinations — each client sends to its own Meta dataset
+        and Google conversion action.
+      </span>
+      <div className="inline-form">
+        <input
+          placeholder="Meta dataset / pixel ID"
+          value={datasetId}
+          onChange={(e) => setDatasetId(e.target.value)}
+        />
+        <input
+          placeholder="Test event code (Events Manager)"
+          value={testCode}
+          onChange={(e) => setTestCode(e.target.value)}
+        />
+        {meta && (
+          <button
+            className="link"
+            disabled={!testCode}
+            title={
+              testCode
+                ? "Send a test event, visible in Meta's Test Events tool"
+                : "Set a test event code first"
+            }
+            onClick={() => testSend("meta")}
+          >
+            Send Meta test
+          </button>
+        )}
+      </div>
+      <div className="inline-form">
+        <input
+          placeholder="Google Ads customer ID"
+          value={customerId}
+          onChange={(e) => setCustomerId(e.target.value)}
+        />
+        <input
+          placeholder="Conversion action ID (type UPLOAD_CLICKS)"
+          value={actionId}
+          onChange={(e) => setActionId(e.target.value)}
+        />
+        {google && (
+          <button className="link" onClick={() => testSend("google")}>
+            Send Google test
+          </button>
+        )}
+      </div>
+      <div className="inline-form">
+        <button disabled={!datasetId && !(customerId && actionId)} onClick={save}>
+          Save tracking settings
+        </button>
+        <button className="link" onClick={onDone}>
+          Close
+        </button>
+      </div>
+      {status && <p className="muted">{status}</p>}
+      {error && <p className="error">{error}</p>}
+    </div>
+  );
+}

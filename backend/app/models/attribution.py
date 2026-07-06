@@ -42,6 +42,10 @@ class LandingEvent(Base):
     # Click IDs captured at the same point (Phase 5 consumes these for CAPI /
     # Enhanced Conversions).
     fbclid: Mapped[Optional[str]] = mapped_column(String(500))
+    # Meta browser-id cookie (_fbp), captured alongside fbclid — CAPI matches
+    # meaningfully better with both. Do not confuse with fbc (derived from
+    # fbclid at send time).
+    fbp: Mapped[Optional[str]] = mapped_column(String(500))
     gclid: Mapped[Optional[str]] = mapped_column(String(500))
     user_agent: Mapped[Optional[str]] = mapped_column(String(1000))
     occurred_at: Mapped[dt.datetime] = mapped_column(

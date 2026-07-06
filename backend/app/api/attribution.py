@@ -37,6 +37,7 @@ def capture_landing_event(body: LandingEventIn, db: Session = Depends(get_db)):
         utm_term=body.utm_term,
         referrer=body.referrer,
         fbclid=body.fbclid,
+        fbp=body.fbp,
         gclid=body.gclid,
         user_agent=body.user_agent,
         occurred_at=utcnow(),

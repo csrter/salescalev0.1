@@ -8,7 +8,9 @@ from .api import (
     clients,
     connect_google,
     connect_meta,
+    conversions,
     dashboard,
+    leads,
     manage,
     metrics,
     orgs,
@@ -34,6 +36,8 @@ app.include_router(connect_google.router)
 app.include_router(browser.router)
 app.include_router(manage.router)
 app.include_router(attribution.router)
+app.include_router(leads.router)
+app.include_router(conversions.router)
 app.include_router(metrics.router)
 app.include_router(dashboard.router)
 

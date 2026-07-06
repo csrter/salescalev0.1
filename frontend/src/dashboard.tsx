@@ -17,6 +17,7 @@ import {
   BenchmarkWidget,
   CampaignTableWidget,
   ChannelMixWidget,
+  ConversionHealthWidget,
   FatigueWidget,
   FunnelTiersWidget,
   GuaranteeWidget,
@@ -105,6 +106,13 @@ export const WIDGET_REGISTRY: Record<string, WidgetDef> = {
     minW: 4,
     minH: 1,
   },
+  conversion_health: {
+    title: "Conversion tracking (server-side)",
+    component: ConversionHealthWidget,
+    teamOnly: true,
+    minW: 6,
+    minH: 2,
+  },
   utm_builder: {
     title: "UTM builder",
     component: UtmBuilderWidget,
@@ -124,6 +132,7 @@ const TEAM_DEFAULT: WidgetSlot[] = [
   { type: "quality", w: 6, h: 2 },
   { type: "reconciliation", w: 6, h: 2 },
   { type: "benchmark", w: 6, h: 2 },
+  { type: "conversion_health", w: 12, h: 2 },
   { type: "campaigns", w: 12, h: 2 },
   { type: "utm_builder", w: 12, h: 2 },
 ];

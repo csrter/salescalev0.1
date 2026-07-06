@@ -191,6 +191,7 @@ class LandingEventIn(BaseModel):
     utm_term: Optional[str] = None
     referrer: Optional[str] = None
     fbclid: Optional[str] = None
+    fbp: Optional[str] = None
     gclid: Optional[str] = None
     user_agent: Optional[str] = None
 
@@ -335,6 +336,102 @@ class LandingEventOut(BaseModel):
     utm_term: Optional[str] = None
     referrer: Optional[str] = None
     fbclid: Optional[str] = None
+    fbp: Optional[str] = None
     gclid: Optional[str] = None
     occurred_at: dt.datetime
     contact_id: Optional[str] = None
+
+
+# --- Phase 5: server-side conversion tracking ---
+
+CONVERSION_PLATFORMS = {"meta", "google"}
+CONSENT_STATUSES = {"GRANTED", "DENIED", "UNSPECIFIED"}
+
+
+class ConversionConfigIn(BaseModel):
+    enabled: bool = True
+    # Platform-specific; validated in the route (meta: dataset_id required;
+    # google: customer_id + conversion_action_id required).
+    settings: Dict[str, Any]
+
+
+class ConversionConfigOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    client_id: str
+    platform: str
+    enabled: bool
+    settings: Dict[str, Any]
+
+
+class LeadSubmissionIn(BaseModel):
+    """Public lead-capture payload — the same embed that pings
+    /api/track/landing posts here on form submit. PII fields arrive raw and
+    are hashed per-platform inside the senders; the browser also forwards
+    its _fbc/_fbp cookies and the pixel's eventID so server and browser
+    events deduplicate."""
+
+    client_id: str
+    session_key: str
+    email: Optional[EmailStr] = None
+    phone: Optional[str] = None
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    city: Optional[str] = None
+    state: Optional[str] = None
+    zip: Optional[str] = None
+    country: Optional[str] = None
+    # Dedup key shared with the browser pixel's eventID; generated
+    # server-side when the page doesn't send one.
+    event_id: Optional[str] = None
+    event_name: str = "Lead"
+    event_source_url: Optional[str] = None
+    fbc: Optional[str] = None
+    fbp: Optional[str] = None
+    fbclid: Optional[str] = None
+    gclid: Optional[str] = None
+    utm_source: Optional[str] = None
+    utm_medium: Optional[str] = None
+    utm_campaign: Optional[str] = None
+    utm_content: Optional[str] = None
+    utm_term: Optional[str] = None
+    user_agent: Optional[str] = None
+    value_cents: Optional[int] = None
+    currency: Optional[str] = None
+
+
+class ConversionDispatchOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    conversion_event_id: str
+    platform: str
+    status: str
+    match_keys: Optional[List[str]] = None
+    detail: Optional[str] = None
+    is_test: bool
+    attempted_at: dt.datetime
+
+
+class ConversionLogEntryOut(BaseModel):
+    """Dispatch log joined with its event for the team-facing log view."""
+
+    dispatch: ConversionDispatchOut
+    event_name: str
+    event_id: str
+    contact_id: Optional[str] = None
+    occurred_at: dt.datetime
+
+
+class TestSendIn(BaseModel):
+    client_id: str
+    platform: str
+    email: Optional[EmailStr] = None
+    phone: Optional[str] = None
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    fbc: Optional[str] = None
+    fbp: Optional[str] = None
+    gclid: Optional[str] = None
+    event_name: str = "Lead"

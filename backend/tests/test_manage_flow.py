@@ -199,6 +199,9 @@ def test_no_unstaged_write_route_exists():
         "/api/clients",              # client records, not platform writes
         "/api/connect/",             # OAuth
         "/api/track/landing",        # attribution capture (inserts only)
+        "/api/track/lead",           # lead capture + conversion send — no spend
+        "/api/conversions/",         # conversion test-send/log — measurement,
+                                     # not spend (sends events, never budgets)
         "/api/ad-accounts",          # creatives/images live here — no spend
         "/api/insights/sync",        # writes local time-series tables only
         "/api/dashboard/",           # per-user UI layout prefs — no spend
