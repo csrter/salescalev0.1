@@ -629,3 +629,43 @@ class TestSendIn(BaseModel):
     fbp: Optional[str] = None
     gclid: Optional[str] = None
     event_name: str = "Lead"
+
+
+# --- Phase 9: white-labeling ---
+
+
+class BrandingIn(BaseModel):
+    """Organization branding config. All optional — anything unset falls
+    back to the neutral default (services/branding.py). Color keys are
+    validated against BRAND_COLOR_KEYS in the route."""
+
+    product_name: Optional[str] = Field(default=None, min_length=1, max_length=100)
+    logo_url: Optional[str] = Field(default=None, max_length=2000)
+    favicon_url: Optional[str] = Field(default=None, max_length=2000)
+    colors: Dict[str, str] = Field(default_factory=dict)
+    email_from_name: Optional[str] = Field(default=None, max_length=200)
+    email_from_address: Optional[EmailStr] = None
+    apply_to_team: bool = False
+
+
+class CustomDomainIn(BaseModel):
+    domain: str = Field(min_length=4, max_length=253)
+
+
+# --- Phase 9: AI insights ---
+
+
+class AiExplainIn(BaseModel):
+    client_id: str
+    metric: str  # services/ai_insights.py EXPLAINABLE_METRICS
+    question: Optional[str] = Field(default=None, max_length=1000)
+    since: Optional[dt.date] = None
+    until: Optional[dt.date] = None
+    platforms: Optional[str] = None  # same ?platforms= grammar as /api/metrics
+
+
+class AiSummaryIn(BaseModel):
+    client_id: str
+    since: Optional[dt.date] = None
+    until: Optional[dt.date] = None
+    platforms: Optional[str] = None

@@ -16,6 +16,8 @@ from .attribution import LandingEvent
 from .audit import AuditLogEntry, PendingChange
 from .conversions import ConversionConfig, ConversionDispatch, ConversionEvent
 from .dashboard import DashboardLayout
+from .ai import AiUsage
+from .email import EmailLog
 
 __all__ = [
     "Organization",
@@ -46,4 +48,6 @@ __all__ = [
     "ConversionEvent",
     "ConversionDispatch",
     "DashboardLayout",
+    "AiUsage",
+    "EmailLog",
 ]

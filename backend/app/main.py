@@ -2,8 +2,10 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from .api import (
+    ai,
     attribution,
     auth,
+    branding,
     browser,
     clients,
     connect_google,
@@ -44,6 +46,8 @@ app.include_router(metrics.router)
 app.include_router(dashboard.router)
 app.include_router(crm.router)
 app.include_router(lead_webhooks.router)
+app.include_router(branding.router)
+app.include_router(ai.router)
 
 
 @app.get("/api/health")

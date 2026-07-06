@@ -30,6 +30,24 @@ class Settings(BaseSettings):
 
     frontend_origin: str = "http://localhost:5173"
 
+    # Phase 9 — AI insights (Claude API, server-side only; never expose the
+    # key to the frontend).
+    anthropic_api_key: str = ""
+    ai_model: str = "claude-opus-4-8"
+    # Global default monthly cap on AI queries per Organization until Phase 8
+    # wires real tier limits into services/entitlements.py.
+    ai_monthly_query_limit: int = 200
+
+    # Phase 9 — white-labeling. The neutral sender identity used when an
+    # Organization hasn't configured branded email. SMTP unset = dev mode:
+    # emails are composed and logged (email_log table) but not delivered.
+    email_default_from_name: str = "Salescale"
+    email_default_from_address: str = "no-reply@salescale.app"
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_username: str = ""
+    smtp_password: str = ""
+
 
 @lru_cache
 def get_settings() -> Settings:

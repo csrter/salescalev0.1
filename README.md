@@ -1,7 +1,7 @@
 # How to run this build in Claude Code
 
 1. **Create the repo** and drop all of these files (`CLAUDE.md`,
-   `PLATFORMS.md`, and `PHASE_1...8`) into the root before starting any
+   `PLATFORMS.md`, and `PHASE_1...9`) into the root before starting any
    session. Claude Code auto-loads `CLAUDE.md` at the start of every
    session in this directory, so the architecture and guardrails are
    always in context without you re-pasting them.
@@ -43,9 +43,16 @@
 `PHASE_5_CONVERSION_TRACKING.md` →
 `PHASE_6_SALESCALE_CRM.md` →
 `PHASE_7_ADDITIONAL_PLATFORMS.md` →
-`PHASE_8_BILLING_ONBOARDING.md`
+`PHASE_8_BILLING_ONBOARDING.md` →
+`PHASE_9_WHITELABEL_AI_INSIGHTS.md`
 
 Note: Phase 1 now includes the Organization tenancy model that Phase 8's
 billing/signup flow depends on — Phase 8 is sequenced last to match the
 existing numbering, but it's really "the layer that makes the Phase 1
-tenancy model self-service," not a late add-on.
+tenancy model self-service," not a late add-on. Phase 9 depends on Phase 4
+(dashboard), Phase 3 (metrics), and Phase 6 (CRM) already existing, since
+white-labeling rebrands those surfaces and AI insights are grounded in
+their data — **it does not depend on Phase 7 or Phase 8**, and can be run
+directly after Phase 6 if that's a better order for you. Phase 9 itself
+notes where its tasks would normally tie into Phase 8's tier model and
+gives a lighter-weight version to build instead if Phase 8 isn't done yet.

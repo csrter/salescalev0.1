@@ -51,6 +51,21 @@ class Organization(Base):
     # Atlas Reach's 14-Day Trial Sprint criteria are one Organization's data
     # here, never a product assumption.
     qualified_lead_criteria: Mapped[Optional[list]] = mapped_column(JSON)
+    # Phase 9 white-labeling. `branding` holds the Organization's own look
+    # (see services/branding.py for the shape and defaults) — None means the
+    # neutral Salescale identity. The custom domain is how a client-facing
+    # portal resolves to this tenant: an Organization claims a hostname,
+    # proves control via a DNS TXT record carrying custom_domain_token, and
+    # only a *verified* domain ever resolves to its branding (an unverified
+    # claim must never let one tenant impersonate another's portal).
+    branding: Mapped[Optional[dict]] = mapped_column(JSON)
+    custom_domain: Mapped[Optional[str]] = mapped_column(
+        String(255), unique=True, index=True
+    )
+    custom_domain_token: Mapped[Optional[str]] = mapped_column(String(100))
+    custom_domain_verified_at: Mapped[Optional[dt.datetime]] = mapped_column(
+        DateTime(timezone=True)
+    )
     created_at: Mapped[dt.datetime] = created_at_column()
 
 
