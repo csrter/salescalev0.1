@@ -6,8 +6,8 @@ pydantic[email]>=2.6
 pydantic-settings>=2.2
 PyJWT>=2.8
 bcrypt>=4.1
-# Pinned: newer versions ship no cp39 macOS wheels and require a Rust build
-cryptography==43.0.3
+# <49: cryptography 49+ ships no prebuilt wheels for Intel macs (dev machine)
+cryptography>=42.0,<49
 httpx>=0.27
 google-ads
 psycopg2-binary

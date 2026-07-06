@@ -2,15 +2,25 @@
 
 ## Prerequisites
 
-- Node 18+ (present) and Python 3.9+ (system 3.9.6 works, but see the
-  Python note below).
-- Postgres for production; local dev falls back to SQLite automatically if
-  `DATABASE_URL` is unset. `docker-compose up db` gives you a local
-  Postgres when Docker is available.
+- Node 18+ (present) and Python 3.12 (installed via `uv`; the backend venv
+  at `backend/.venv` already uses it).
+- Postgres 17 runs natively via Postgres.app (`~/Applications/Postgres.app`,
+  data dir `~/Library/Application Support/Postgres/var-17`) with a
+  `salescale`/`salescale` role and database already created — matching the
+  default `DATABASE_URL` in `.env.example`. Start/stop:
 
-> **Python note:** Google's client libraries have declared Python 3.9
-> end-of-life — everything works today, but install Python 3.12+ (e.g. via
-> Homebrew) before Phase 2 to stay on supported versions.
+  ```bash
+  PGBIN=~/Applications/Postgres.app/Contents/Versions/17/bin
+  "$PGBIN/pg_ctl" -D ~/Library/"Application Support"/Postgres/var-17 start   # or stop
+  ```
+
+  Opening Postgres.app once and enabling "Start on login" makes this
+  automatic. `docker-compose up db` remains an alternative when Docker
+  Desktop is running. If `DATABASE_URL` is unset, dev falls back to SQLite.
+
+> **Intel-mac note:** `cryptography` is capped `<49` in requirements.txt —
+> 49+ ships no prebuilt wheels for Intel macs and tries a full Rust/OpenSSL
+> source build.
 
 ## Backend
 
