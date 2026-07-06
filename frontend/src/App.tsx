@@ -1,6 +1,7 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   ADMIN_ROLES,
+  TEAM_ROLES,
   api,
   getSession,
   login,
@@ -14,29 +15,67 @@ import {
   type Connection,
   type Session,
 } from "./api";
+import { CreativesPanel } from "./creatives";
+import { AssetGroupsPanel, KeywordsPanel, SearchTermsPanel } from "./google";
+import {
+  AuditLogView,
+  ManageProvider,
+  PendingChangesPanel,
+  useManage,
+} from "./manage";
 import "./App.css";
+
+type Tab = "clients" | "changes" | "audit";
 
 export default function App() {
   const [session, setSess] = useState<Session | null>(getSession());
+  const [tab, setTab] = useState<Tab>("clients");
   if (!session) return <Login onLogin={setSess} />;
+  const isTeam = TEAM_ROLES.includes(session.role);
   return (
-    <div className="shell">
-      <header>
-        <h1>{session.organization_name}</h1>
-        <span>
-          {session.full_name} ({session.role})
-        </span>
-        <button
-          onClick={() => {
-            setSession(null);
-            setSess(null);
-          }}
-        >
-          Log out
-        </button>
-      </header>
-      <Clients session={session} />
-    </div>
+    <ManageProvider>
+      <div className="shell">
+        <header>
+          <h1>{session.organization_name}</h1>
+          <nav className="toggle">
+            <button
+              className={tab === "clients" ? "active" : ""}
+              onClick={() => setTab("clients")}
+            >
+              Clients
+            </button>
+            {isTeam && (
+              <button
+                className={tab === "changes" ? "active" : ""}
+                onClick={() => setTab("changes")}
+              >
+                Pending changes
+              </button>
+            )}
+            <button
+              className={tab === "audit" ? "active" : ""}
+              onClick={() => setTab("audit")}
+            >
+              Audit log
+            </button>
+          </nav>
+          <span>
+            {session.full_name} ({session.role})
+          </span>
+          <button
+            onClick={() => {
+              setSession(null);
+              setSess(null);
+            }}
+          >
+            Log out
+          </button>
+        </header>
+        {tab === "clients" && <Clients session={session} />}
+        {tab === "changes" && <PendingChangesPanel />}
+        {tab === "audit" && <AuditLogView />}
+      </div>
+    </ManageProvider>
   );
 }
 
@@ -159,6 +198,7 @@ function ClientDetail({
   const [error, setError] = useState<string | null>(null);
   // Connecting platforms is Admin/Owner surface — mirrors the API gate.
   const isAdmin = ADMIN_ROLES.includes(session.role);
+  const isTeam = TEAM_ROLES.includes(session.role);
 
   useEffect(() => {
     api<Connection[]>(`/api/clients/${client.id}/connections`)
@@ -215,7 +255,11 @@ function ClientDetail({
             </button>
           ))}
         </div>
-        <AccountTree clientId={client.id} platformFilter={platformFilter} />
+        <AccountTree
+          clientId={client.id}
+          platformFilter={platformFilter}
+          canManage={isTeam}
+        />
       </section>
     </div>
   );
@@ -224,9 +268,11 @@ function ClientDetail({
 function AccountTree({
   clientId,
   platformFilter,
+  canManage,
 }: {
   clientId: string;
   platformFilter: "all" | "meta" | "google";
+  canManage: boolean;
 }) {
   const [accounts, setAccounts] = useState<AdAccount[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -246,34 +292,160 @@ function AccountTree({
   return (
     <ul className="tree">
       {visible.map((a) => (
-        <AccountNode key={a.id} account={a} />
+        <AccountNode key={a.id} account={a} canManage={canManage} />
       ))}
     </ul>
   );
 }
 
-function useLazyChildren<T>(path: string | null) {
+/**
+ * Children are pulled live from the platform (refresh=true). If the live
+ * pull fails (platform outage, connection error), fall back to the local
+ * cache with a visible warning instead of a blank tree.
+ */
+function useLazyChildren<T>(basePath: string | null) {
   const [items, setItems] = useState<T[] | null>(null);
   const [loading, setLoading] = useState(false);
+  const [warning, setWarning] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  useEffect(() => {
-    if (!path) return;
+
+  const load = useCallback(async () => {
+    if (!basePath) return;
     setLoading(true);
-    api<T[]>(path)
-      .then(setItems)
-      .catch((e) => setError(e.message))
-      .finally(() => setLoading(false));
-  }, [path]);
-  return { items, loading, error };
+    setWarning(null);
+    setError(null);
+    try {
+      setItems(await api<T[]>(`${basePath}?refresh=true`));
+    } catch (liveErr) {
+      try {
+        setItems(await api<T[]>(`${basePath}?refresh=false`));
+        setWarning(
+          `Live refresh failed (${(liveErr as Error).message}) — showing cached data`
+        );
+      } catch (cacheErr) {
+        setError((cacheErr as Error).message);
+      }
+    } finally {
+      setLoading(false);
+    }
+  }, [basePath]);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+  return { items, loading, warning, error, reload: load };
 }
 
 function PlatformBadge({ platform }: { platform: "meta" | "google" }) {
   return <span className={`platform ${platform}`}>{platform}</span>;
 }
 
-function AccountNode({ account }: { account: AdAccount }) {
+function NewCampaignForm({
+  account,
+  onExecuted,
+}: {
+  account: AdAccount;
+  onExecuted: () => void;
+}) {
+  const { stage } = useManage();
+  const [name, setName] = useState("");
+  const [budget, setBudget] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  return (
+    <div className="inline-form">
+      <input
+        placeholder="Campaign name"
+        value={name}
+        onChange={(e) => setName(e.target.value)}
+      />
+      <input
+        placeholder="Daily budget $"
+        type="number"
+        min="1"
+        value={budget}
+        onChange={(e) => setBudget(e.target.value)}
+      />
+      <button
+        disabled={!name || !budget}
+        onClick={() =>
+          stage(
+            {
+              ad_account_id: account.id,
+              entity_type: "campaign",
+              action: "create",
+              entity_name: name,
+              payload: {
+                name,
+                daily_budget_micros: Math.round(Number(budget) * 1_000_000),
+                status: "PAUSED",
+                ...(account.platform === "meta"
+                  ? { objective: "OUTCOME_LEADS" }
+                  : {}),
+              },
+            },
+            onExecuted
+          ).catch((e) => setError((e as Error).message))
+        }
+      >
+        Stage create
+      </button>
+      <span className="muted">created paused; enable it when ready</span>
+      {error && <p className="error">{error}</p>}
+    </div>
+  );
+}
+
+function EditForm({
+  label,
+  initialName,
+  initialBudgetMicros,
+  onStage,
+}: {
+  label: string;
+  initialName: string;
+  initialBudgetMicros?: number | null;
+  onStage: (payload: Record<string, unknown>) => void;
+}) {
+  const [name, setName] = useState(initialName);
+  const [budget, setBudget] = useState(
+    initialBudgetMicros != null ? String(initialBudgetMicros / 1_000_000) : ""
+  );
+  return (
+    <div className="inline-form">
+      <input value={name} onChange={(e) => setName(e.target.value)} />
+      <input
+        placeholder="Daily budget $"
+        type="number"
+        min="1"
+        value={budget}
+        onChange={(e) => setBudget(e.target.value)}
+      />
+      <button
+        onClick={() => {
+          const payload: Record<string, unknown> = {};
+          if (name !== initialName) payload.name = name;
+          if (budget !== "")
+            payload.daily_budget_micros = Math.round(Number(budget) * 1_000_000);
+          onStage(payload);
+        }}
+      >
+        Stage {label}
+      </button>
+    </div>
+  );
+}
+
+function AccountNode({
+  account,
+  canManage,
+}: {
+  account: AdAccount;
+  canManage: boolean;
+}) {
   const [open, setOpen] = useState(false);
-  const { items, loading, error } = useLazyChildren<Campaign>(
+  const [showNew, setShowNew] = useState(false);
+  const [showCreatives, setShowCreatives] = useState(false);
+  const { items, loading, warning, error, reload } = useLazyChildren<Campaign>(
     open ? `/api/ad-accounts/${account.id}/campaigns` : null
   );
   return (
@@ -286,26 +458,87 @@ function AccountNode({ account }: { account: AdAccount }) {
       {open && (
         <ul>
           {loading && <li className="muted">Loading live from API…</li>}
+          {warning && <li className="warning">{warning}</li>}
           {error && <li className="error">{error}</li>}
           {items?.map((c) => (
-            <CampaignNode key={c.id} campaign={c} />
+            <CampaignNode
+              key={c.id}
+              campaign={c}
+              account={account}
+              canManage={canManage}
+              onChanged={reload}
+            />
           ))}
           {items?.length === 0 && <li className="muted">No campaigns</li>}
+          {canManage && (
+            <li className="node-actions">
+              <button className="link" onClick={() => setShowNew(!showNew)}>
+                {showNew ? "Cancel" : "+ New campaign"}
+              </button>
+              {account.platform === "meta" && (
+                <button
+                  className="link"
+                  onClick={() => setShowCreatives(!showCreatives)}
+                >
+                  {showCreatives ? "Hide creatives" : "Creatives"}
+                </button>
+              )}
+              {showNew && (
+                <NewCampaignForm
+                  account={account}
+                  onExecuted={() => {
+                    setShowNew(false);
+                    reload();
+                  }}
+                />
+              )}
+              {showCreatives && <CreativesPanel adAccountId={account.id} />}
+            </li>
+          )}
         </ul>
       )}
     </li>
   );
 }
 
-function CampaignNode({ campaign }: { campaign: Campaign }) {
+function CampaignNode({
+  campaign,
+  account,
+  canManage,
+  onChanged,
+}: {
+  campaign: Campaign;
+  account: AdAccount;
+  canManage: boolean;
+  onChanged: () => void;
+}) {
+  const { stage } = useManage();
   const [open, setOpen] = useState(false);
-  const { items, loading, error } = useLazyChildren<AdGroup>(
+  const [panel, setPanel] = useState<
+    "none" | "edit" | "terms" | "assets"
+  >("none");
+  const { items, loading, warning, error, reload } = useLazyChildren<AdGroup>(
     open ? `/api/campaigns/${campaign.id}/ad-groups` : null
   );
+  const [actionError, setActionError] = useState<string | null>(null);
   const budget =
     campaign.daily_budget_micros != null
       ? `$${(campaign.daily_budget_micros / 1_000_000).toFixed(2)}/day`
       : null;
+  const paused = campaign.status?.toUpperCase() === "PAUSED";
+
+  const stageAction = (action: string, payload: Record<string, unknown> = {}) =>
+    stage(
+      {
+        ad_account_id: account.id,
+        entity_type: "campaign",
+        action,
+        entity_id: campaign.id,
+        payload,
+      },
+      onChanged
+    ).catch((e) => setActionError((e as Error).message));
+
   return (
     <li>
       <div className="node" onClick={() => setOpen(!open)}>
@@ -314,13 +547,70 @@ function CampaignNode({ campaign }: { campaign: Campaign }) {
           {campaign.status}
         </span>
         {budget && <span className="muted">{budget}</span>}
+        {canManage && (
+          <span className="row-actions" onClick={(e) => e.stopPropagation()}>
+            <button
+              className="link"
+              onClick={() => stageAction(paused ? "resume" : "pause")}
+            >
+              {paused ? "Resume" : "Pause"}
+            </button>
+            <button
+              className="link"
+              onClick={() => setPanel(panel === "edit" ? "none" : "edit")}
+            >
+              Edit
+            </button>
+            {account.platform === "google" && (
+              <>
+                <button
+                  className="link"
+                  onClick={() => setPanel(panel === "terms" ? "none" : "terms")}
+                >
+                  Search terms
+                </button>
+                <button
+                  className="link"
+                  onClick={() => setPanel(panel === "assets" ? "none" : "assets")}
+                >
+                  Asset groups
+                </button>
+              </>
+            )}
+          </span>
+        )}
       </div>
+      {actionError && <p className="error">{actionError}</p>}
+      {panel === "edit" && (
+        <EditForm
+          label="update"
+          initialName={campaign.name}
+          initialBudgetMicros={campaign.daily_budget_micros}
+          onStage={(payload) => {
+            setPanel("none");
+            stageAction("update", payload);
+          }}
+        />
+      )}
+      {panel === "terms" && (
+        <SearchTermsPanel campaignId={campaign.id} adAccountId={account.id} />
+      )}
+      {panel === "assets" && (
+        <AssetGroupsPanel campaignId={campaign.id} adAccountId={account.id} />
+      )}
       {open && (
         <ul>
           {loading && <li className="muted">Loading…</li>}
+          {warning && <li className="warning">{warning}</li>}
           {error && <li className="error">{error}</li>}
           {items?.map((g) => (
-            <AdGroupNode key={g.id} adGroup={g} />
+            <AdGroupNode
+              key={g.id}
+              adGroup={g}
+              account={account}
+              canManage={canManage}
+              onChanged={reload}
+            />
           ))}
           {items?.length === 0 && (
             <li className="muted">No ad sets / ad groups</li>
@@ -331,11 +621,37 @@ function CampaignNode({ campaign }: { campaign: Campaign }) {
   );
 }
 
-function AdGroupNode({ adGroup }: { adGroup: AdGroup }) {
+function AdGroupNode({
+  adGroup,
+  account,
+  canManage,
+  onChanged,
+}: {
+  adGroup: AdGroup;
+  account: AdAccount;
+  canManage: boolean;
+  onChanged: () => void;
+}) {
+  const { stage } = useManage();
   const [open, setOpen] = useState(false);
-  const { items, loading, error } = useLazyChildren<AdRow>(
+  const [showKeywords, setShowKeywords] = useState(false);
+  const { items, loading, warning, error, reload } = useLazyChildren<AdRow>(
     open ? `/api/ad-groups/${adGroup.id}/ads` : null
   );
+  const [actionError, setActionError] = useState<string | null>(null);
+  const paused = adGroup.status?.toUpperCase() === "PAUSED";
+
+  const stageAction = (action: string) =>
+    stage(
+      {
+        ad_account_id: account.id,
+        entity_type: "ad_group",
+        action,
+        entity_id: adGroup.id,
+      },
+      onChanged
+    ).catch((e) => setActionError((e as Error).message));
+
   return (
     <li>
       <div className="node" onClick={() => setOpen(!open)}>
@@ -343,22 +659,89 @@ function AdGroupNode({ adGroup }: { adGroup: AdGroup }) {
         <span className={`badge ${adGroup.status?.toLowerCase()}`}>
           {adGroup.status}
         </span>
+        {canManage && (
+          <span className="row-actions" onClick={(e) => e.stopPropagation()}>
+            <button
+              className="link"
+              onClick={() => stageAction(paused ? "resume" : "pause")}
+            >
+              {paused ? "Resume" : "Pause"}
+            </button>
+            {account.platform === "google" && (
+              <button
+                className="link"
+                onClick={() => setShowKeywords(!showKeywords)}
+              >
+                Keywords
+              </button>
+            )}
+          </span>
+        )}
       </div>
+      {actionError && <p className="error">{actionError}</p>}
+      {showKeywords && (
+        <KeywordsPanel adGroupId={adGroup.id} adAccountId={account.id} />
+      )}
       {open && (
         <ul>
           {loading && <li className="muted">Loading…</li>}
+          {warning && <li className="warning">{warning}</li>}
           {error && <li className="error">{error}</li>}
           {items?.map((ad) => (
-            <li key={ad.id}>
-              {ad.name}{" "}
-              <span className={`badge ${ad.status?.toLowerCase()}`}>
-                {ad.status}
-              </span>
-            </li>
+            <AdLeaf
+              key={ad.id}
+              ad={ad}
+              account={account}
+              canManage={canManage}
+              onChanged={reload}
+            />
           ))}
           {items?.length === 0 && <li className="muted">No ads</li>}
         </ul>
       )}
+    </li>
+  );
+}
+
+function AdLeaf({
+  ad,
+  account,
+  canManage,
+  onChanged,
+}: {
+  ad: AdRow;
+  account: AdAccount;
+  canManage: boolean;
+  onChanged: () => void;
+}) {
+  const { stage } = useManage();
+  const [actionError, setActionError] = useState<string | null>(null);
+  const paused = ad.status?.toUpperCase() === "PAUSED";
+  return (
+    <li>
+      {ad.name}{" "}
+      <span className={`badge ${ad.status?.toLowerCase()}`}>{ad.status}</span>
+      {canManage && (
+        <span className="row-actions">
+          <button
+            className="link"
+            onClick={() =>
+              stage(
+                {
+                  ad_account_id: account.id,
+                  entity_type: "ad",
+                  action: paused ? "resume" : "pause",
+                  entity_id: ad.id,
+                },
+                onChanged
+              ).catch((e) => setActionError((e as Error).message))
+            }
+          >
+            {paused ? "Resume" : "Pause"}
+          </button>
+        </span>
+      )}
+      {actionError && <p className="error">{actionError}</p>}
     </li>
   );
 }

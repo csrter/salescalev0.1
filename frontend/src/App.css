@@ -158,3 +158,133 @@ header h1 {
   cursor: pointer;
   font-size: 0.9rem;
 }
+
+/* --- Phase 2: staged changes, audit, panels --- */
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: #0008;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10;
+}
+
+.modal {
+  background: #1c1c1e;
+  border: 1px solid #444;
+  border-radius: 8px;
+  padding: 1.25rem 1.5rem;
+  max-width: 520px;
+  width: 90%;
+}
+
+.modal.wide {
+  max-width: 760px;
+  max-height: 85vh;
+  overflow: auto;
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  margin-top: 1rem;
+}
+
+button.danger {
+  background: #a33;
+  color: #fff;
+}
+
+table.diff,
+table.audit,
+table.compact {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 0.5rem 0;
+  font-size: 0.9rem;
+}
+
+table.diff th,
+table.diff td,
+table.audit th,
+table.audit td,
+table.compact th,
+table.compact td {
+  border-bottom: 1px solid #333;
+  padding: 0.35rem 0.5rem;
+  text-align: left;
+}
+
+table.diff td.before {
+  color: #c88;
+}
+
+table.diff td.after {
+  color: #8c8;
+}
+
+.row-actions {
+  margin-left: auto;
+  display: inline-flex;
+  gap: 0.25rem;
+}
+
+.node-actions {
+  padding: 0.3rem 0;
+}
+
+.inline-form {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  flex-wrap: wrap;
+  padding: 0.4rem 0;
+}
+
+.inline-form.column {
+  flex-direction: column;
+  align-items: stretch;
+  max-width: 420px;
+}
+
+.subpanel {
+  margin: 0.25rem 0 0.75rem 1.5rem;
+  padding: 0.5rem 0.75rem;
+  border-left: 2px solid #333;
+}
+
+.warning {
+  color: #ca3;
+  font-size: 0.85rem;
+}
+
+tr.negative td {
+  color: #c88;
+}
+
+.badge.success {
+  background: #262;
+}
+
+.badge.failed {
+  background: #622;
+}
+
+.preview-frame {
+  background: #fff;
+  border-radius: 6px;
+  padding: 0.5rem;
+  overflow: auto;
+}
+
+button.link {
+  background: none;
+  border: none;
+  color: #57c;
+  cursor: pointer;
+  font-size: 0.9rem;
+  padding: 0 0.25rem;
+}

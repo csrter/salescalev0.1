@@ -28,7 +28,7 @@ from app.models.core import (
     PlatformConnection,
     User,
 )
-from app.security import hash_password
+from app.security import encrypt_secret, hash_password
 
 
 @pytest.fixture(scope="session")
@@ -82,11 +82,19 @@ def seeded():
     )
     db.add_all([owner_user, member_user, client_a_user])
 
+    # Encrypted fake tokens so executor-path tests can run with the platform
+    # API functions monkeypatched (get_access_token requires a stored token).
     conn_a = PlatformConnection(
-        organization_id=org.id, client_id=client_a.id, platform="meta"
+        organization_id=org.id,
+        client_id=client_a.id,
+        platform="meta",
+        access_token_encrypted=encrypt_secret("test-meta-token"),
     )
     conn_b = PlatformConnection(
-        organization_id=org.id, client_id=client_b.id, platform="meta"
+        organization_id=org.id,
+        client_id=client_b.id,
+        platform="meta",
+        access_token_encrypted=encrypt_secret("test-meta-token"),
     )
     db.add_all([conn_a, conn_b])
     db.flush()

@@ -282,7 +282,11 @@ def execute_change(
     change = scope.get_or_404(db, PendingChange, change_id)
     if change.status != CHANGE_PENDING:
         raise HTTPException(409, f"Change is already {change.status}")
-    if change.expires_at < utcnow():
+    # SQLite loses tzinfo on round-trip; treat stored timestamps as UTC.
+    expires_at = change.expires_at
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=dt.timezone.utc)
+    if expires_at < utcnow():
         change.status = CHANGE_CANCELED
         change.error_detail = "Confirmation window expired — stage the change again"
         db.commit()

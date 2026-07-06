@@ -205,7 +205,22 @@ actually built vs. what's still planned.)_
       members; member: campaign work only), `organization_id` on every
       tenant table, two-level TenantScope enforced in the data-access
       layer, and org-to-org isolation tests (`test_org_isolation.py`).
-- [ ] Phase 2 — Core management features
+- [x] Phase 2 — Core management features (2026-07-06). Create/edit/pause/
+      resume for campaigns / ad sets/groups / ads on Meta (Graph API v25.0)
+      and Google (Google Ads API v24 via google-ads 31.1.0), both verified
+      current against live docs. Guardrail architecture: every
+      spend-affecting write is staged as a PendingChange with a before/after
+      diff, executes only via an explicit confirm (`/api/manage/changes/
+      {id}/execute`), expires after 30 min, and writes an immutable audit
+      entry on every attempt — `test_manage_flow.py` proves the flow plus a
+      structural test that no unstaged mutating route exists. UI: staged-
+      diff confirmation modal, pending-changes tab, queryable audit-log
+      tab, Meta creative builder with placement-accurate previews (Meta
+      /previews edge), and a Google-only surface (keywords/match types/
+      negatives, search-terms review with add-as-negative, PMax asset
+      groups). Caveat: end-to-end against *live* ad accounts still needs
+      real platform credentials (.env) — flow verified with mocked
+      platform calls in tests and a live-failure path in dev.
 - [ ] Phase 3 — Advanced metrics layer
 - [ ] Phase 4 — Customizable UI
 - [ ] Phase 5 — Server-side conversion tracking (CAPI + Google)
