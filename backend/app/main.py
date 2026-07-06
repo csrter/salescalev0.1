@@ -1,7 +1,15 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from .api import attribution, auth, browser, clients, connect_google, connect_meta
+from .api import (
+    attribution,
+    auth,
+    browser,
+    clients,
+    connect_google,
+    connect_meta,
+    manage,
+)
 from .config import get_settings
 from .db import Base, engine
 
@@ -20,6 +28,7 @@ app.include_router(clients.router)
 app.include_router(connect_meta.router)
 app.include_router(connect_google.router)
 app.include_router(browser.router)
+app.include_router(manage.router)
 app.include_router(attribution.router)
 
 

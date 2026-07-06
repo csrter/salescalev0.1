@@ -1,7 +1,7 @@
 import datetime as dt
-from typing import Optional
+from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, ConfigDict, EmailStr
+from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
 
 class LoginRequest(BaseModel):
@@ -119,6 +119,133 @@ class LandingEventIn(BaseModel):
     fbclid: Optional[str] = None
     gclid: Optional[str] = None
     user_agent: Optional[str] = None
+
+
+# --- Phase 2: managed writes, audit, creatives, Google surface ---
+
+CHANGE_ENTITY_TYPES = {
+    "campaign",
+    "ad_group",
+    "ad",
+    "keyword",
+    "campaign_negative",
+    "asset_group",
+}
+CHANGE_ACTIONS = {"create", "update", "pause", "resume", "add", "remove"}
+
+
+class ChangeCreateIn(BaseModel):
+    ad_account_id: str
+    entity_type: str
+    action: str
+    # Local row id of the entity being changed; None for creates/adds.
+    entity_id: Optional[str] = None
+    # For asset groups (not cached locally) the external id comes directly.
+    entity_external_id: Optional[str] = None
+    entity_name: Optional[str] = None
+    payload: Dict[str, Any] = Field(default_factory=dict)
+
+
+class DiffRowOut(BaseModel):
+    field: str
+    before: Optional[Any] = None
+    after: Optional[Any] = None
+
+
+class PendingChangeOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    client_id: str
+    platform: str
+    ad_account_id: str
+    entity_type: str
+    entity_id: Optional[str] = None
+    entity_external_id: Optional[str] = None
+    entity_name: Optional[str] = None
+    action: str
+    payload: Dict[str, Any]
+    diff: List[DiffRowOut]
+    status: str
+    error_detail: Optional[str] = None
+    expires_at: dt.datetime
+    executed_at: Optional[dt.datetime] = None
+    created_at: dt.datetime
+
+
+class AuditEntryOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    client_id: str
+    user_email: str
+    user_name: str
+    platform: str
+    ad_account_external_id: Optional[str] = None
+    entity_type: str
+    entity_external_id: Optional[str] = None
+    entity_name: Optional[str] = None
+    action: str
+    diff: List[DiffRowOut]
+    status: str
+    error_detail: Optional[str] = None
+    created_at: dt.datetime
+
+
+class ImageUploadIn(BaseModel):
+    name: str
+    data_b64: str
+
+
+class CreativeCreateIn(BaseModel):
+    name: str
+    page_id: str
+    message: str
+    title: Optional[str] = None
+    description: Optional[str] = None
+    link: str
+    image_hash: Optional[str] = None
+    call_to_action: Optional[str] = None  # e.g. LEARN_MORE, GET_QUOTE
+
+
+class CreativeOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    client_id: str
+    platform: str
+    external_id: str
+    name: Optional[str] = None
+    title: Optional[str] = None
+    body: Optional[str] = None
+    thumbnail_url: Optional[str] = None
+
+
+class KeywordOut(BaseModel):
+    criterion_id: str
+    text: str
+    match_type: str
+    status: Optional[str] = None
+    negative: bool = False
+
+
+class SearchTermOut(BaseModel):
+    search_term: str
+    status: str
+    impressions: int
+    clicks: int
+    cost_micros: int
+    conversions: float
+    ad_group_external_id: str
+    campaign_external_id: str
+
+
+class AssetGroupOut(BaseModel):
+    external_id: str
+    name: str
+    status: str
+    ad_strength: Optional[str] = None
+    final_urls: List[str] = Field(default_factory=list)
 
 
 class LandingEventOut(BaseModel):

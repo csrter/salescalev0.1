@@ -12,6 +12,7 @@ from .crm import (
     ContactTag,
 )
 from .attribution import LandingEvent
+from .audit import AuditLogEntry, PendingChange
 
 __all__ = [
     "Agency",
@@ -34,4 +35,6 @@ __all__ = [
     "Tag",
     "ContactTag",
     "LandingEvent",
+    "PendingChange",
+    "AuditLogEntry",
 ]
