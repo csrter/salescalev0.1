@@ -3,7 +3,13 @@
     "allow": [
       "Bash(git init *)",
       "Bash(git add *)",
-      "Bash(git commit -m 'Initial commit: project brief, phase files, README *)"
+      "Bash(git commit -m 'Initial commit: project brief, phase files, README *)",
+      "WebSearch",
+      "WebFetch(domain:developers.google.com)",
+      "WebFetch(domain:developers.facebook.com)",
+      "Bash(npm --version)",
+      "Bash(docker --version)",
+      "Bash(which -a python3.13 python3.12 python3.11 uv 2>/dev/null; ls /opt/homebrew/bin | grep -E '^python3\\\\.' 2>/dev/null; echo done)"
     ]
   }
 }

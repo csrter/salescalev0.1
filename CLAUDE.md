@@ -119,7 +119,17 @@ Two user roles exist from the start:
 _(Update after each phase — this section is the source of truth for what's
 actually built vs. what's still planned.)_
 
-- [ ] Phase 1 — Foundation
+- [x] Phase 1 — Foundation _(2026-07-06: Python/FastAPI + React/TS + Postgres
+  stack approved and built. Multi-tenant schema incl. Salescale CRM entities
+  and landing_events attribution table; two-role auth enforced at the
+  data-access layer (TenantScope) and verified by 17 passing tests; Meta
+  OAuth (Marketing API v25.0, direct Graph calls) and Google Ads OAuth
+  (API v24, official google-ads lib) with Fernet-encrypted token storage and
+  disconnected-state surfacing; live account→campaign→ad set/group→ad
+  browser API + React UI. Live-account verification against real Meta/Google
+  test accounts still requires user-supplied app credentials — see SETUP.md
+  for the App Review / developer-token steps only the user can do. Dev runs
+  on SQLite (no Docker/Postgres on this machine); deploy targets Postgres.)_
 - [ ] Phase 2 — Core management features
 - [ ] Phase 3 — Advanced metrics layer
 - [ ] Phase 4 — Customizable UI

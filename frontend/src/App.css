@@ -1,0 +1,152 @@
+:root {
+  color-scheme: light dark;
+  font-family: system-ui, -apple-system, sans-serif;
+}
+
+body {
+  margin: 0;
+}
+
+.shell {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 1rem;
+}
+
+header {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  border-bottom: 1px solid #8884;
+  padding-bottom: 0.5rem;
+}
+
+header h1 {
+  margin: 0;
+  flex: 1;
+  font-size: 1.3rem;
+}
+
+.login {
+  max-width: 320px;
+  margin: 15vh auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.login input,
+.login button {
+  padding: 0.6rem;
+  font-size: 1rem;
+}
+
+.cards {
+  list-style: none;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 0.75rem;
+}
+
+.cards li {
+  border: 1px solid #8884;
+  border-radius: 8px;
+  padding: 1rem;
+  cursor: pointer;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.cards li:hover {
+  border-color: #888;
+}
+
+.badge {
+  font-size: 0.75rem;
+  padding: 0.1rem 0.5rem;
+  border-radius: 999px;
+  background: #8883;
+  margin-left: 0.5rem;
+}
+
+.badge.active,
+.badge.enabled {
+  background: #2a5;
+  color: #fff;
+}
+
+.badge.disconnected,
+.badge.error,
+.badge.removed {
+  background: #c33;
+  color: #fff;
+}
+
+.badge.paused,
+.badge.none {
+  background: #a82;
+  color: #fff;
+}
+
+.platform {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  padding: 0.1rem 0.4rem;
+  border-radius: 4px;
+  margin-right: 0.4rem;
+}
+
+.platform.meta {
+  background: #1877f2;
+  color: #fff;
+}
+
+.platform.google {
+  background: #fbbc05;
+  color: #000;
+}
+
+.connection {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.5rem 0;
+}
+
+.toggle button {
+  margin-right: 0.5rem;
+}
+
+.toggle button.active {
+  font-weight: 700;
+  text-decoration: underline;
+}
+
+.tree,
+.tree ul {
+  list-style: none;
+  padding-left: 1.25rem;
+}
+
+.node {
+  cursor: pointer;
+  padding: 0.3rem 0;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.node:hover {
+  background: #8881;
+}
+
+.muted {
+  color: #888;
+  font-size: 0.85rem;
+}
+
+.error {
+  color: #c33;
+}
