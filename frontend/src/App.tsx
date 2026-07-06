@@ -24,6 +24,7 @@ import {
   useManage,
 } from "./manage";
 import { Dashboard } from "./dashboard";
+import { CrmView } from "./crm";
 import "./App.css";
 
 type Tab = "clients" | "changes" | "audit";
@@ -196,6 +197,7 @@ function ClientDetail({
   const [platformFilter, setPlatformFilter] = useState<"all" | "meta" | "google">(
     "all"
   );
+  const [view, setView] = useState<"dashboard" | "crm">("dashboard");
   const [error, setError] = useState<string | null>(null);
   // Connecting platforms is Admin/Owner surface — mirrors the API gate.
   const isAdmin = ADMIN_ROLES.includes(session.role);
@@ -221,26 +223,46 @@ function ClientDetail({
           ← All clients
         </button>
         <h2>{client.name}</h2>
+        <nav className="toggle">
+          <button
+            className={view === "dashboard" ? "active" : ""}
+            onClick={() => setView("dashboard")}
+          >
+            Dashboard
+          </button>
+          <button
+            className={view === "crm" ? "active" : ""}
+            onClick={() => setView("crm")}
+          >
+            CRM
+          </button>
+        </nav>
         {/* One filter governs every widget and the account tree below —
             no reload, no separate views. */}
-        <nav className="toggle platform-toggle">
-          {(["all", "meta", "google"] as const).map((p) => (
-            <button
-              key={p}
-              className={platformFilter === p ? "active" : ""}
-              onClick={() => setPlatformFilter(p)}
-            >
-              {p === "all" ? "Blended" : p === "meta" ? "Meta only" : "Google only"}
-            </button>
-          ))}
-        </nav>
+        {view === "dashboard" && (
+          <nav className="toggle platform-toggle">
+            {(["all", "meta", "google"] as const).map((p) => (
+              <button
+                key={p}
+                className={platformFilter === p ? "active" : ""}
+                onClick={() => setPlatformFilter(p)}
+              >
+                {p === "all" ? "Blended" : p === "meta" ? "Meta only" : "Google only"}
+              </button>
+            ))}
+          </nav>
+        )}
       </div>
       {error && <p className="error">{error}</p>}
-      <Dashboard
-        clientId={client.id}
-        session={session}
-        platforms={platformFilter}
-      />
+      {view === "crm" && <CrmView clientId={client.id} session={session} />}
+      {view === "dashboard" && (
+        <Dashboard
+          clientId={client.id}
+          session={session}
+          platforms={platformFilter}
+        />
+      )}
+      {view === "dashboard" && (
       <section>
         <h3>Platform connections</h3>
         {(["meta", "google"] as const).map((platform) => {
@@ -265,6 +287,8 @@ function ClientDetail({
           );
         })}
       </section>
+      )}
+      {view === "dashboard" && (
       <section>
         <h3>Accounts &amp; campaigns</h3>
         <AccountTree
@@ -273,6 +297,7 @@ function ClientDetail({
           canManage={isTeam}
         />
       </section>
+      )}
     </div>
   );
 }

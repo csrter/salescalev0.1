@@ -7,12 +7,16 @@ from sqlalchemy.orm import Session
 from ..db import get_db
 from ..deps import TenantScope, get_scope, require_admin
 from ..models.core import Client, PlatformConnection, User
+from ..models.crm import LeadFormConfig
 from ..schemas import (
     ClientCreate,
     ClientOutPublic,
     ClientOutTeam,
     ConnectionOut,
+    ExternalSyncConfigIn,
     GuaranteeConfigIn,
+    LeadFormConfigIn,
+    LeadFormConfigOut,
 )
 from ..services.metrics import GUARANTEE_METRICS
 
@@ -127,6 +131,128 @@ def get_guarantee(
     Client-role readable: a client can see the guarantee they were sold."""
     client = _get_client_or_404(db, scope, client_id)
     return {"guarantee": (client.metric_settings or {}).get("guarantee")}
+
+
+# --- Phase 6: native lead-form routing (admin — client setup, like the
+# conversion configs) ---
+
+
+@router.get("/{client_id}/lead-forms", response_model=List[LeadFormConfigOut])
+def list_lead_form_configs(
+    client_id: str,
+    user: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    client = db.get(Client, client_id)
+    if client is None or client.organization_id != user.organization_id:
+        raise HTTPException(404, "Not found")
+    return (
+        db.execute(select(LeadFormConfig).where(LeadFormConfig.client_id == client.id))
+        .scalars()
+        .all()
+    )
+
+
+@router.put("/{client_id}/lead-forms/{platform}", response_model=LeadFormConfigOut)
+def set_lead_form_config(
+    client_id: str,
+    platform: str,
+    body: LeadFormConfigIn,
+    user: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    if platform not in ("meta", "google"):
+        raise HTTPException(400, "platform must be meta or google")
+    client = db.get(Client, client_id)
+    if client is None or client.organization_id != user.organization_id:
+        raise HTTPException(404, "Not found")
+    # The (platform, external_key) pair routes public webhooks, so a key
+    # already claimed by any client (any tenant) can't be claimed again.
+    clash = db.execute(
+        select(LeadFormConfig).where(
+            LeadFormConfig.platform == platform,
+            LeadFormConfig.external_key == body.external_key,
+            LeadFormConfig.client_id != client.id,
+        )
+    ).scalar_one_or_none()
+    if clash is not None:
+        raise HTTPException(409, "This key is already routed to another client")
+    config = db.execute(
+        select(LeadFormConfig).where(
+            LeadFormConfig.client_id == client.id,
+            LeadFormConfig.platform == platform,
+        )
+    ).scalar_one_or_none()
+    if config is None:
+        config = LeadFormConfig(
+            organization_id=client.organization_id,
+            client_id=client.id,
+            platform=platform,
+            external_key=body.external_key,
+            enabled=body.enabled,
+        )
+        db.add(config)
+    else:
+        config.external_key = body.external_key
+        config.enabled = body.enabled
+    db.commit()
+    return config
+
+
+# --- Phase 6: optional external CRM sync (admin, opt-in per client) ---
+
+
+@router.get("/{client_id}/external-sync")
+def get_external_sync(
+    client_id: str,
+    user: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    client = db.get(Client, client_id)
+    if client is None or client.organization_id != user.organization_id:
+        raise HTTPException(404, "Not found")
+    config = (client.metric_settings or {}).get("external_sync")
+    if not config:
+        return {"configured": False}
+    # Never echo the shared secret back out.
+    return {
+        "configured": True,
+        "enabled": bool(config.get("enabled")),
+        "url": config.get("url"),
+    }
+
+
+@router.put("/{client_id}/external-sync")
+def set_external_sync(
+    client_id: str,
+    body: ExternalSyncConfigIn,
+    user: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    client = db.get(Client, client_id)
+    if client is None or client.organization_id != user.organization_id:
+        raise HTTPException(404, "Not found")
+    client.metric_settings = {
+        **(client.metric_settings or {}),
+        "external_sync": body.model_dump(),
+    }
+    db.commit()
+    return {"configured": True, "enabled": body.enabled, "url": body.url}
+
+
+@router.delete("/{client_id}/external-sync", status_code=204)
+def clear_external_sync(
+    client_id: str,
+    user: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    client = db.get(Client, client_id)
+    if client is None or client.organization_id != user.organization_id:
+        raise HTTPException(404, "Not found")
+    settings = dict(client.metric_settings or {})
+    settings.pop("external_sync", None)
+    client.metric_settings = settings
+    db.commit()
 
 
 @router.get("/{client_id}/connections", response_model=List[ConnectionOut])

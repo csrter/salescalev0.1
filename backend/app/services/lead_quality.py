@@ -21,7 +21,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..models.core import Client
-from ..models.crm import Deal, PipelineStage
+from ..models.crm import Contact, Deal, PipelineStage
 
 # provider name -> fn(db, client) -> set of qualified contact ids.
 # External adapters (e.g. a GHL sync in Phase 6+) register here; the name is
@@ -30,7 +30,19 @@ EXTERNAL_PROVIDERS: Dict[str, Callable[[Session, Client], Set[str]]] = {}
 
 
 def salescale_qualified_contact_ids(db: Session, client: Client) -> Set[str]:
-    """Native source: contact ids with a deal in a qualified stage or won."""
+    """Native source: contacts explicitly marked qualified (Phase 6 workflow
+    sets Contact.qualified_at — the single status flag the checklist, the
+    kanban qualified-stage move, and external sync all write), plus contacts
+    with a deal in a qualified stage or won (belt-and-braces: a deal that
+    reached those states is a qualified lead even if nobody touched the
+    checklist)."""
+    marked = db.execute(
+        select(Contact.id).where(
+            Contact.client_id == client.id,
+            Contact.organization_id == client.organization_id,
+            Contact.qualified_at.is_not(None),
+        )
+    ).all()
     rows = db.execute(
         select(Deal.contact_id)
         .join(PipelineStage, Deal.stage_id == PipelineStage.id)
@@ -41,7 +53,7 @@ def salescale_qualified_contact_ids(db: Session, client: Client) -> Set[str]:
             | (Deal.status == "won"),
         )
     ).all()
-    return {r[0] for r in rows}
+    return {r[0] for r in marked} | {r[0] for r in rows}
 
 
 def qualified_contact_ids(db: Session, client: Client) -> Set[str]:

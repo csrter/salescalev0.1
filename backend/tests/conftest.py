@@ -9,6 +9,9 @@ os.environ["JWT_SECRET"] = "test-secret-0123456789abcdef0123456789abcdef"
 os.environ["TOKEN_ENCRYPTION_KEY"] = (
     "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="  # test-only Fernet key
 )
+# Phase 6 lead webhooks: signature/handshake secrets (test-only values).
+os.environ["META_APP_SECRET"] = "test-meta-app-secret"
+os.environ["META_WEBHOOK_VERIFY_TOKEN"] = "test-verify-token"
 
 import pytest
 from fastapi.testclient import TestClient

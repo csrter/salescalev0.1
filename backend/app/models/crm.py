@@ -2,6 +2,7 @@ import datetime as dt
 from typing import Optional
 
 from sqlalchemy import (
+    JSON,
     BigInteger,
     Boolean,
     DateTime,
@@ -41,6 +42,13 @@ class Company(Base):
 
 class Contact(Base):
     __tablename__ = "contacts"
+    __table_args__ = (
+        # Webhook idempotency: the platform's own lead id (leadgen_id /
+        # lead_id) — a retried delivery finds this row instead of duplicating.
+        UniqueConstraint(
+            "client_id", "source_external_id", name="uq_contact_source_external"
+        ),
+    )
 
     id: Mapped[str] = id_column()
     organization_id: Mapped[str] = mapped_column(
@@ -57,6 +65,23 @@ class Contact(Base):
     # Where the lead came from: meta_instant_form | google_lead_form |
     # landing_page | manual — attribution details live on the landing event.
     source: Mapped[Optional[str]] = mapped_column(String(50))
+    source_external_id: Mapped[Optional[str]] = mapped_column(String(100))
+    # Native-form linkage the platform sent with the lead (campaign_id, ad_id,
+    # form_id …) — kept verbatim for audit; metric attribution still comes
+    # from the landing event / source rules in services/metrics.py.
+    source_detail: Mapped[Optional[dict]] = mapped_column(JSON)
+    # Phase 6 qualified-lead workflow. `qualification` holds the checklist
+    # state ({criterion_key: bool}) against the Organization's configured
+    # criteria; `qualified_at` is THE qualified flag every consumer reads
+    # (LQA-CPL, guarantee tracker, client pipeline view) — one status change,
+    # many places it shows up.
+    qualification: Mapped[Optional[dict]] = mapped_column(JSON)
+    qualified_at: Mapped[Optional[dt.datetime]] = mapped_column(
+        DateTime(timezone=True)
+    )
+    # External CRM sync mapping (optional per-client) — the other system's
+    # contact id, so two-way sync updates in place instead of duplicating.
+    external_crm_id: Mapped[Optional[str]] = mapped_column(String(100), index=True)
     created_at: Mapped[dt.datetime] = created_at_column()
 
 
@@ -136,6 +161,9 @@ class Activity(Base):
         String(30), nullable=False
     )  # call | note | email | sms | meeting
     body: Mapped[Optional[str]] = mapped_column(Text)
+    # Organization-internal entries are excluded from client-role queries at
+    # the data layer (api/crm.py filters on it), not just hidden in the UI.
+    is_internal: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     occurred_at: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
     )
@@ -174,6 +202,35 @@ class Tag(Base):
         ForeignKey("clients.id"), nullable=False, index=True
     )
     name: Mapped[str] = mapped_column(String(100), nullable=False)
+
+
+class LeadFormConfig(Base):
+    """Routes a platform's native lead-form delivery to one client.
+
+    Meta leadgen webhooks arrive on ONE app-level endpoint for every tenant,
+    so the page_id in the payload is the routing key (external_key). Google
+    lead-form webhooks are configured per form with a per-client URL + key,
+    so external_key is the shared google_key the advertiser sets in Google
+    Ads. Routing by an indexed key — never by trusting anything else in a
+    public payload — is what keeps one tenant's leads out of another's CRM.
+    """
+
+    __tablename__ = "lead_form_configs"
+    __table_args__ = (
+        UniqueConstraint("platform", "external_key", name="uq_lead_form_platform_key"),
+    )
+
+    id: Mapped[str] = id_column()
+    organization_id: Mapped[str] = mapped_column(
+        ForeignKey("organizations.id"), nullable=False, index=True
+    )
+    client_id: Mapped[str] = mapped_column(
+        ForeignKey("clients.id"), nullable=False, index=True
+    )
+    platform: Mapped[str] = mapped_column(String(20), nullable=False)  # meta | google
+    external_key: Mapped[str] = mapped_column(String(200), nullable=False, index=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    created_at: Mapped[dt.datetime] = created_at_column()
 
 
 class ContactTag(Base):

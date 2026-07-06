@@ -18,6 +18,9 @@ class Settings(BaseSettings):
     meta_app_secret: str = ""
     meta_redirect_uri: str = "http://localhost:8000/api/connect/meta/callback"
     meta_api_version: str = "v25.0"
+    # Shared token for Meta's one-time webhook verification GET (Phase 6
+    # leadgen webhooks) — any string, must match the App Dashboard config.
+    meta_webhook_verify_token: str = ""
 
     google_client_id: str = ""
     google_client_secret: str = ""

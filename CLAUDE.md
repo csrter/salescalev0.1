@@ -307,7 +307,47 @@ actually built vs. what's still planned.)_
       happens at lead time); dev DBs need recreating again (new fbp column
       + 3 conversion tables); launch.json gained backend-alt2/frontend-alt2
       (ports 8020/5193, isolated dev-alt2.db).
-- [ ] Phase 6 — Salescale CRM
+- [x] Phase 6 — Salescale CRM (2026-07-06). Lead ingestion from all three
+      sources lands in one upsert (services/lead_ingest.py — match by
+      platform lead id, then email, then digit-normalized phone; fills gaps,
+      never overwrites): Meta Instant Forms via the app-level leadgen
+      webhook (GET handshake + X-Hub-Signature-256 HMAC, routed to a client
+      by page_id through the new lead_form_configs table, lead pulled via
+      Graph /{leadgen_id}), Google Lead Form ads via per-client webhook
+      (google_key check, gcl_id becomes a first-class landing_events row,
+      is_test acknowledged but never ingested), and the Phase 5 landing
+      path (now updates returning leads instead of duplicating). Webhook
+      specs verified against live docs before implementing. Pipeline/kanban:
+      default 4-stage pipeline auto-created per client, stages fully
+      per-client (admin PUT /api/crm/pipelines/{id}/stages), drag = PATCH
+      /api/crm/deals/{id}. Qualified-lead workflow: Organization-level
+      structured checklist (organizations.qualified_lead_criteria, GET/PUT
+      /api/orgs/me/qualified-lead-criteria; empty = plain toggle) drives
+      Contact.qualified_at — the ONE flag set by checklist completion,
+      dragging into an is_qualified_stage, winning a deal, or inbound
+      external sync (services/crm.py set_qualified is the single write
+      point), and read by LQA-CPL + guarantee tracker via lead_quality.py
+      (now marked-qualified OR deal-stage/won). Activities (is_internal
+      flag) + tasks (assignable, due dates, team-only). External CRM sync
+      (opt-in per client, admin PUT /api/clients/{id}/external-sync):
+      outbound signed webhooks (X-Salescale-Signature-256) on status
+      changes, inbound POST /api/crm/external-sync/{client_id} with shared
+      secret, matching by learned external id → our id → email/phone so
+      neither side duplicates; failures never block CRM writes. Client
+      role: read-only board/leads/detail; internal-only activities excluded
+      in the query, internal fields absent from the public schema, tasks
+      and criteria team-only, writes 403, cross-tenant 404. UI: per-client
+      Dashboard|CRM toggle (frontend/src/crm.tsx) — drag-drop kanban,
+      leads table with attribution chips (platform/utm/click-id), contact
+      drawer (checklist, activities, tasks, deals), admin setup panel
+      (stages, criteria, lead-form routing, external sync). 13 new tests
+      (test_crm.py), 107 total passing; kanban drag + checklist → metric
+      verified in-browser. Caveats: live Meta leadgen retrieval needs a
+      token with leads_retrieval (mocked in tests; .env gained
+      META_WEBHOOK_VERIFY_TOKEN); recreate dev DBs yet again (organizations/
+      contacts/activities gained columns; new lead_form_configs table);
+      Atlas Reach's real 14-Day Trial Sprint checklist should be entered by
+      the owner via CRM setup — the dev criteria are placeholders.
 - [ ] Phase 7 — Additional platform adapters (Snapchat, Reddit, LinkedIn,
       Microsoft Advertising, Nextdoor)
 - [ ] Phase 8 — Billing & self-serve onboarding (Stripe, subscription

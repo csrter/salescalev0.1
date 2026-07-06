@@ -22,9 +22,10 @@ from ..models.attribution import LandingEvent
 from ..models.base import utcnow
 from ..models.conversions import ConversionEvent
 from ..models.core import Client
-from ..models.crm import Contact
 from ..schemas import LeadSubmissionIn
+from ..services import lead_ingest
 from ..services.conversion_dispatch import dispatch_conversion
+from ..services.external_sync import push_contact_update
 
 router = APIRouter(tags=["leads"])
 
@@ -77,17 +78,19 @@ def capture_lead(
             if getattr(landing, attr) is None and getattr(body, attr):
                 setattr(landing, attr, getattr(body, attr))
 
-    contact = Contact(
-        organization_id=client.organization_id,
-        client_id=client.id,
-        first_name=body.first_name,
-        last_name=body.last_name,
+    # Create-or-update (Phase 6): a returning lead — same email/phone —
+    # updates the contact it already is instead of duplicating it. Each
+    # submission still gets its own ConversionEvent below (it *is* a new
+    # conversion), and the landing link moves to the latest submission.
+    contact, created = lead_ingest.upsert_contact(
+        db,
+        client,
         email=body.email,
         phone=body.phone,
+        first_name=body.first_name,
+        last_name=body.last_name,
         source="landing_page",
     )
-    db.add(contact)
-    db.flush()
     landing.contact_id = contact.id
 
     event = ConversionEvent(
@@ -121,6 +124,8 @@ def capture_lead(
         or request.headers.get("user-agent"),
     }
     results = dispatch_conversion(db, event, lead)
+    if created:
+        push_contact_update(db, client, contact, event="lead.created")
     return {
         "contact_id": contact.id,
         "conversion_event_id": event.id,

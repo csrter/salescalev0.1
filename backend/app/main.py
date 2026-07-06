@@ -9,7 +9,9 @@ from .api import (
     connect_google,
     connect_meta,
     conversions,
+    crm,
     dashboard,
+    lead_webhooks,
     leads,
     manage,
     metrics,
@@ -40,6 +42,8 @@ app.include_router(leads.router)
 app.include_router(conversions.router)
 app.include_router(metrics.router)
 app.include_router(dashboard.router)
+app.include_router(crm.router)
+app.include_router(lead_webhooks.router)
 
 
 @app.get("/api/health")

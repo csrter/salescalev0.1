@@ -205,6 +205,9 @@ def test_no_unstaged_write_route_exists():
         "/api/ad-accounts",          # creatives/images live here — no spend
         "/api/insights/sync",        # writes local time-series tables only
         "/api/dashboard/",           # per-user UI layout prefs — no spend
+        "/api/crm/",                 # Salescale CRM — contacts/deals/tasks,
+                                     # never a platform write
+        "/api/webhooks/",            # inbound lead deliveries — inserts only
     )
     mutating = []
     for route in app.routes:

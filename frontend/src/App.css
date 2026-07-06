@@ -876,3 +876,212 @@ tr.negative td {
   flex-wrap: wrap;
   font-size: 0.82rem;
 }
+
+/* --- Phase 6: Salescale CRM --- */
+
+.crm-toolbar {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  margin: 10px 0 6px;
+}
+
+.crm-toolbar h3,
+.crm-toolbar h4 {
+  margin: 0;
+}
+
+.crm h5 {
+  margin: 16px 0 6px;
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--ink-soft);
+}
+
+.crm-board {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  overflow-x: auto;
+  padding-bottom: 6px;
+}
+
+.crm-col {
+  flex: 1 1 0;
+  min-width: 180px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 8px;
+  min-height: 140px;
+}
+
+.crm-col.drop-target {
+  border-color: var(--cobalt);
+  background: var(--cobalt-soft);
+}
+
+.crm-col-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.crm-col-head strong {
+  flex: 1;
+}
+
+.crm-card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  margin-bottom: 8px;
+  cursor: grab;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  box-shadow: 0 1px 2px rgba(10, 16, 34, 0.06);
+}
+
+.crm-card:hover {
+  border-color: var(--border-strong);
+}
+
+.crm-card.dragging {
+  opacity: 0.5;
+}
+
+.crm-card-meta,
+.crm-card-badges {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  font-size: 13px;
+}
+
+.crm-empty {
+  text-align: center;
+  font-size: 13px;
+}
+
+.crm-lower {
+  display: grid;
+  grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
+  gap: 16px;
+  align-items: start;
+  margin-top: 12px;
+}
+
+.crm-lower:has(.crm-drawer:only-child) {
+  grid-template-columns: 1fr;
+}
+
+.crm-leads table tr.clickable {
+  cursor: pointer;
+}
+
+.crm-leads table tr.clickable:hover td {
+  background: var(--bg);
+}
+
+.crm-leads table tr.selected td {
+  background: var(--cobalt-soft);
+}
+
+.crm-drawer {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px 16px;
+  position: sticky;
+  top: 12px;
+}
+
+.attr-chips {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.chip {
+  font-size: 12px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--ink-soft);
+  white-space: nowrap;
+}
+
+.chip.muted-chip {
+  color: var(--ink-faint);
+  border-style: dashed;
+}
+
+.crm-check {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 14px;
+  margin: 4px 0;
+}
+
+.crm-qualify {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 4px 12px 10px;
+  margin-top: 10px;
+}
+
+.crm-timeline {
+  list-style: none;
+  padding: 0;
+  margin: 6px 0;
+}
+
+.crm-timeline li {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  padding: 5px 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 14px;
+}
+
+.crm-timeline li:last-child {
+  border-bottom: none;
+}
+
+.crm-setup {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 14px;
+  background: var(--navy-900);
+  color: #e8ecf7;
+  border-radius: 10px;
+  padding: 14px 16px;
+  margin-bottom: 14px;
+}
+
+.crm-setup h5 {
+  color: #cfd9f3;
+  margin-top: 0;
+}
+
+.crm-setup .muted {
+  color: #9fadd3;
+}
+
+.crm-setup-block {
+  min-width: 0;
+}
+
+.crm-setup code {
+  word-break: break-all;
+  color: #cfe0ff;
+}

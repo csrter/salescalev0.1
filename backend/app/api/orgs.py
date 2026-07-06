@@ -26,7 +26,14 @@ from ..models.core import (
     Organization,
     User,
 )
-from ..schemas import OrganizationOut, OrgSignupRequest, TeamMemberCreate, TokenResponse, UserOut
+from ..schemas import (
+    OrganizationOut,
+    OrgSignupRequest,
+    QualifiedLeadCriteriaIn,
+    TeamMemberCreate,
+    TokenResponse,
+    UserOut,
+)
 from ..security import create_access_token, hash_password
 
 router = APIRouter(prefix="/api/orgs", tags=["orgs"])
@@ -71,6 +78,35 @@ def signup(body: OrgSignupRequest, db: Session = Depends(get_db)):
 @router.get("/me", response_model=OrganizationOut)
 def get_my_org(user: User = Depends(require_team), db: Session = Depends(get_db)):
     return db.get(Organization, user.organization_id)
+
+
+@router.get("/me/qualified-lead-criteria")
+def get_qualified_lead_criteria(
+    user: User = Depends(require_team), db: Session = Depends(get_db)
+):
+    """The Organization's own qualified-lead checklist (Phase 6). Team-only:
+    how an agency defines "qualified" is internal workflow, not something a
+    client account needs — clients see the resulting status, not the rubric.
+    """
+    org = db.get(Organization, user.organization_id)
+    return {"criteria": org.qualified_lead_criteria or []}
+
+
+@router.put("/me/qualified-lead-criteria")
+def set_qualified_lead_criteria(
+    body: QualifiedLeadCriteriaIn,
+    user: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Replace the checklist. Organization data through and through —
+    Atlas Reach's 14-Day Trial Sprint list and another agency's (or no
+    list at all) are just different rows here. Existing contacts keep
+    their qualified status; the checklist governs evaluations from now on.
+    """
+    org = db.get(Organization, user.organization_id)
+    org.qualified_lead_criteria = [c.model_dump() for c in body.criteria]
+    db.commit()
+    return {"criteria": org.qualified_lead_criteria}
 
 
 @router.get("/me/members", response_model=List[UserOut])

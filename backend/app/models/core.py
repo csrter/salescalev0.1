@@ -45,6 +45,12 @@ class Organization(Base):
 
     id: Mapped[str] = id_column()
     name: Mapped[str] = mapped_column(String(200), nullable=False)
+    # Phase 6: the Organization's own qualified-lead definition — a structured
+    # checklist (list of {"key", "label"} dicts), not free text. None/empty
+    # means the Organization uses a simple qualified yes/no with no checklist.
+    # Atlas Reach's 14-Day Trial Sprint criteria are one Organization's data
+    # here, never a product assumption.
+    qualified_lead_criteria: Mapped[Optional[list]] = mapped_column(JSON)
     created_at: Mapped[dt.datetime] = created_at_column()
 
 

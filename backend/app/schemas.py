@@ -401,6 +401,200 @@ class LeadSubmissionIn(BaseModel):
     currency: Optional[str] = None
 
 
+# --- Phase 6: Salescale CRM ---
+
+ACTIVITY_TYPES = {"note", "call", "email", "sms", "meeting"}
+DEAL_STATUSES = {"open", "won", "lost"}
+
+
+class StageIn(BaseModel):
+    """One stage in a per-client pipeline edit. `id` present = keep/rename
+    that stage (deals in it survive); absent = create a new stage."""
+
+    id: Optional[str] = None
+    name: str = Field(min_length=1, max_length=200)
+    is_qualified_stage: bool = False
+
+
+class StagesUpdateIn(BaseModel):
+    stages: List[StageIn] = Field(min_length=1, max_length=20)
+
+
+class StageOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    name: str
+    position: int
+    is_qualified_stage: bool
+
+
+# Two serializations of Contact, chosen by caller role — same pattern as
+# ClientOutPublic/ClientOutTeam. The public shape is what a client-role user
+# gets: their own leads' identity + qualified status, but none of the
+# Organization-internal workflow state (checklist, external CRM mapping,
+# raw platform linkage).
+class ContactOutPublic(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    client_id: str
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    source: Optional[str] = None
+    qualified_at: Optional[dt.datetime] = None
+    created_at: dt.datetime
+
+
+class ContactOutTeam(ContactOutPublic):
+    source_external_id: Optional[str] = None
+    source_detail: Optional[Dict[str, Any]] = None
+    qualification: Optional[Dict[str, bool]] = None
+    external_crm_id: Optional[str] = None
+
+
+class ContactCreateIn(BaseModel):
+    client_id: str
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    email: Optional[EmailStr] = None
+    phone: Optional[str] = None
+
+
+class QualificationIn(BaseModel):
+    """The one status change that fans out everywhere. With Organization
+    criteria configured, `checklist` drives qualified (all criteria true);
+    without criteria, `qualified` toggles directly."""
+
+    checklist: Optional[Dict[str, bool]] = None
+    qualified: Optional[bool] = None
+
+
+class DealCreateIn(BaseModel):
+    client_id: str
+    contact_id: str
+    name: Optional[str] = Field(default=None, max_length=300)
+    value_cents: Optional[int] = Field(default=None, ge=0)
+    stage_id: Optional[str] = None  # default: first stage of the pipeline
+
+
+class DealUpdateIn(BaseModel):
+    stage_id: Optional[str] = None
+    name: Optional[str] = Field(default=None, min_length=1, max_length=300)
+    value_cents: Optional[int] = Field(default=None, ge=0)
+    status: Optional[str] = None  # open | won | lost
+
+
+class DealOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    client_id: str
+    contact_id: str
+    pipeline_id: str
+    stage_id: str
+    name: str
+    value_cents: Optional[int] = None
+    status: str
+    created_at: dt.datetime
+    closed_at: Optional[dt.datetime] = None
+
+
+class ActivityCreateIn(BaseModel):
+    contact_id: str
+    type: str  # note | call | email | sms | meeting
+    body: Optional[str] = None
+    is_internal: bool = False
+    occurred_at: Optional[dt.datetime] = None
+
+
+class ActivityOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    contact_id: Optional[str] = None
+    deal_id: Optional[str] = None
+    type: str
+    body: Optional[str] = None
+    is_internal: bool
+    occurred_at: dt.datetime
+    created_by_user_id: Optional[str] = None
+
+
+class CrmTaskCreateIn(BaseModel):
+    client_id: str
+    contact_id: Optional[str] = None
+    deal_id: Optional[str] = None
+    title: str = Field(min_length=1, max_length=300)
+    due_at: Optional[dt.datetime] = None
+    assigned_to_user_id: Optional[str] = None
+
+
+class CrmTaskUpdateIn(BaseModel):
+    title: Optional[str] = Field(default=None, min_length=1, max_length=300)
+    due_at: Optional[dt.datetime] = None
+    assigned_to_user_id: Optional[str] = None
+    completed: Optional[bool] = None
+
+
+class CrmTaskOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    client_id: str
+    contact_id: Optional[str] = None
+    deal_id: Optional[str] = None
+    title: str
+    due_at: Optional[dt.datetime] = None
+    completed_at: Optional[dt.datetime] = None
+    assigned_to_user_id: Optional[str] = None
+    created_at: dt.datetime
+
+
+class QualifiedLeadCriterionIn(BaseModel):
+    key: str = Field(min_length=1, max_length=50, pattern=r"^[a-z0-9_]+$")
+    label: str = Field(min_length=1, max_length=300)
+
+
+class QualifiedLeadCriteriaIn(BaseModel):
+    """The Organization's structured qualified-lead checklist. Empty list =
+    no checklist (simple qualified yes/no)."""
+
+    criteria: List[QualifiedLeadCriterionIn] = Field(max_length=20)
+
+    def model_post_init(self, __context: Any) -> None:
+        keys = [c.key for c in self.criteria]
+        if len(keys) != len(set(keys)):
+            raise ValueError("duplicate criterion keys")
+
+
+class ExternalSyncConfigIn(BaseModel):
+    enabled: bool = True
+    url: str = Field(min_length=1, max_length=2000)
+    secret: str = Field(min_length=8, max_length=200)
+
+
+class LeadFormConfigIn(BaseModel):
+    """Per-client native lead-form routing: meta → the Page ID whose leadgen
+    webhooks belong to this client; google → the google_key set on the form
+    in Google Ads."""
+
+    external_key: str = Field(min_length=1, max_length=200)
+    enabled: bool = True
+
+
+class LeadFormConfigOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    client_id: str
+    platform: str
+    external_key: str
+    enabled: bool
+
+
 class ConversionDispatchOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
