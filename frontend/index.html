@@ -1,13 +1,565 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>frontend</title>
-  </head>
-  <body>
-    <div id="root"></div>
-    <script type="module" src="/src/main.tsx"></script>
-  </body>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Salescale - Marketing Analytics</title>
+    <style>
+        :root {
+            --primary-color: #4f46e5;
+            --secondary-color: #111827;
+            --background-color: #f3f4f6;
+            --text-color: #1f2937;
+            --sidebar-text-color: #d1d5db;
+            --sidebar-active-bg: #1f2937;
+            --card-bg: #ffffff;
+            --border-color: #e5e7eb;
+            --shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
+        }
+
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
+        body {
+            margin: 0;
+            padding: 0;
+            font-family: 'Inter', sans-serif;
+            background-color: var(--background-color);
+            color: var(--text-color);
+            display: flex;
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        /* --- Sidebar --- */
+        .sidebar {
+            width: 250px;
+            background-color: var(--secondary-color);
+            color: var(--sidebar-text-color);
+            display: flex;
+            flex-direction: column;
+            padding: 1.5rem 0;
+            flex-shrink: 0;
+        }
+
+        .sidebar-header {
+            padding: 0 1.5rem 1.5rem 1.5rem;
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: #fff;
+            border-bottom: 1px solid #374151;
+        }
+
+        .sidebar-nav {
+            list-style: none;
+            padding: 1.5rem 0;
+            margin: 0;
+            flex-grow: 1;
+        }
+
+        .nav-item {
+            padding: 0 1rem;
+        }
+
+        .nav-link {
+            display: flex;
+            align-items: center;
+            padding: 0.8rem 1rem;
+            color: var(--sidebar-text-color);
+            text-decoration: none;
+            border-radius: 6px;
+            margin-bottom: 0.5rem;
+            transition: background-color 0.2s ease, color 0.2s ease;
+        }
+        
+        .nav-link svg {
+            width: 20px;
+            height: 20px;
+            margin-right: 1rem;
+        }
+
+        .nav-link:hover {
+            background-color: var(--sidebar-active-bg);
+            color: #fff;
+        }
+
+        .nav-link.active {
+            background-color: var(--primary-color);
+            color: #fff;
+            font-weight: 500;
+        }
+
+        /* --- Main Content --- */
+        .main-content {
+            flex-grow: 1;
+            display: flex;
+            flex-direction: column;
+            overflow-y: auto;
+        }
+
+        /* --- Header --- */
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 1rem 2rem;
+            background-color: var(--card-bg);
+            border-bottom: 1px solid var(--border-color);
+            flex-shrink: 0;
+        }
+        
+        .header h1 {
+            font-size: 1.75rem;
+            margin: 0;
+        }
+
+        .user-profile {
+            display: flex;
+            align-items: center;
+        }
+
+        .user-profile img {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            margin-left: 1rem;
+        }
+        
+        .user-profile span {
+            font-weight: 500;
+        }
+
+        /* --- Page Content --- */
+        .page-content {
+            padding: 2rem;
+        }
+        
+        .content-section {
+            display: none;
+        }
+
+        .content-section.active {
+            display: block;
+        }
+        
+        /* --- General Components --- */
+        .card {
+            background-color: var(--card-bg);
+            border-radius: 8px;
+            padding: 1.5rem;
+            box-shadow: var(--shadow);
+            margin-bottom: 2rem;
+        }
+        
+        .card-header {
+            font-size: 1.25rem;
+            font-weight: 600;
+            margin-bottom: 1rem;
+            padding-bottom: 1rem;
+            border-bottom: 1px solid var(--border-color);
+        }
+        
+        .grid {
+            display: grid;
+            gap: 1.5rem;
+        }
+        
+        .grid-cols-4 {
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+        }
+
+        .grid-cols-2 {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+        
+        .stat-card {
+            padding: 1rem;
+            text-align: center;
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+        }
+        
+        .stat-card .value {
+            font-size: 2rem;
+            font-weight: 700;
+        }
+        
+        .stat-card .label {
+            color: #6b7280;
+        }
+        
+        .chart-placeholder {
+            width: 100%;
+            height: 300px;
+            background-color: #e5e7eb;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #9ca3af;
+            border-radius: 6px;
+            font-style: italic;
+        }
+        
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        th, td {
+            text-align: left;
+            padding: 0.75rem 1rem;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        thead {
+            background-color: #f9fafb;
+        }
+
+        th {
+            font-weight: 600;
+            color: #4b5563;
+        }
+        
+        .btn {
+            padding: 0.6rem 1.2rem;
+            border: none;
+            border-radius: 6px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: background-color 0.2s ease;
+        }
+        
+        .btn-primary {
+            background-color: var(--primary-color);
+            color: #fff;
+        }
+
+        .btn-primary:hover {
+            background-color: #4338ca;
+        }
+
+        .btn-secondary {
+            background-color: var(--border-color);
+            color: var(--text-color);
+        }
+
+        .btn-secondary:hover {
+            background-color: #d1d5db;
+        }
+
+        @media (max-width: 768px) {
+            body {
+                flex-direction: column;
+            }
+            .sidebar {
+                width: 100%;
+                height: auto;
+                flex-direction: row;
+                justify-content: space-around;
+                padding: 0.5rem;
+                overflow-x: auto;
+            }
+            .sidebar-header {
+                display: none;
+            }
+            .sidebar-nav {
+                display: flex;
+                flex-direction: row;
+                padding: 0;
+            }
+            .nav-item {
+                padding: 0 0.2rem;
+            }
+            .nav-link {
+                flex-direction: column;
+                padding: 0.5rem;
+            }
+            .nav-link svg {
+                margin-right: 0;
+                margin-bottom: 0.2rem;
+            }
+            .grid-cols-4, .grid-cols-2 {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+
+    <!-- Sidebar -->
+    <nav class="sidebar">
+        <div class="sidebar-header">Salescale</div>
+        <ul class="sidebar-nav">
+            <li class="nav-item">
+                <a href="#dashboard" class="nav-link active">
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M2.25 12l8.954-8.955c.44-.439 1.152-.439 1.591 0L21.75 12M4.5 9.75v10.125c0 .621.504 1.125 1.125 1.125H9.75v-4.875c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125V21h4.125c.621 0 1.125-.504 1.125-1.125V9.75M8.25 21h8.25" /></svg>
+                    Dashboard
+                </a>
+            </li>
+            <li class="nav-item">
+                <a href="#platforms" class="nav-link">
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M10.5 6h9.75M10.5 6a1.5 1.5 0 11-3 0m3 0a1.5 1.5 0 10-3 0M3.75 6H7.5m3 12h9.75m-9.75 0a1.5 1.5 0 01-3 0m3 0a1.5 1.5 0 00-3 0m-3.75 0H7.5m9-6h3.75m-3.75 0a1.5 1.5 0 01-3 0m3 0a1.5 1.5 0 00-3 0m-9.75 0h9.75" /></svg>
+                    Platforms
+                </a>
+            </li>
+            <li class="nav-item">
+                <a href="#organization" class="nav-link">
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M18 18.72a9.094 9.094 0 003.741-.479 3 3 0 00-4.682-2.72m-7.5-2.228a4.5 4.5 0 00-1.897 1.897M15.75 9a3.75 3.75 0 11-7.5 0 3.75 3.75 0 017.5 0zM4.501 20.118a7.5 7.5 0 0114.998 0A17.933 17.933 0 0112 21.75c-2.676 0-5.216-.584-7.499-1.632z" /></svg>
+                    Organization
+                </a>
+            </li>
+            <li class="nav-item">
+                <a href="#reporting" class="nav-link">
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M10.5 6a7.5 7.5 0 100 15 7.5 7.5 0 000-15zM21 21l-5.197-5.197" /></svg>
+                    Reporting
+                </a>
+            </li>
+            <li class="nav-item">
+                <a href="#settings" class="nav-link">
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M9.594 3.94c.09-.542.56-1.007 1.11-1.226.55-.22 1.156-.22 1.706 0 .55.22 1.02.684 1.11 1.226l.043.25a2.25 2.25 0 004.16 0l.043-.25c.09-.542.56-1.007 1.11-1.226.55-.22 1.156-.22 1.706 0 .55.22 1.02.684 1.11 1.226l.043.25a2.25 2.25 0 004.16 0l.043-.25c.09-.542.56-1.007 1.11-1.226.55-.22 1.156-.22 1.706 0 .55.22 1.02.684 1.11 1.226l.043.25a2.25 2.25 0 004.16 0l.043-.25c.09-.542.56-1.007 1.11-1.226a1.75 1.75 0 00-1.706 0c-.55.22-1.02.684-1.11 1.226l-.043.25a2.25 2.25 0 00-4.16 0l-.043-.25c-.09-.542-.56-1.007-1.11-1.226a1.75 1.75 0 00-1.706 0c-.55.22-1.02.684-1.11 1.226l-.043.25a2.25 2.25 0 00-4.16 0l-.043-.25c-.09-.542-.56-1.007-1.11-1.226a1.75 1.75 0 00-1.706 0c-.55.22-1.02.684-1.11 1.226l-.043.25a2.25 2.25 0 00-4.16 0l-.043-.25c-.09-.542-.56-1.007-1.11-1.226zM12 15.75a3.75 3.75 0 100-7.5 3.75 3.75 0 000 7.5z" /></svg>
+                    Settings
+                </a>
+            </li>
+        </ul>
+    </nav>
+
+    <!-- Main Content -->
+    <main class="main-content">
+        <!-- Header -->
+        <header class="header">
+            <h1 id="page-title">Dashboard</h1>
+            <div class="user-profile">
+                <span>Jane Doe</span>
+                <img src="https://i.pravatar.cc/150?u=a042581f4e29026704d" alt="User Avatar">
+            </div>
+        </header>
+
+        <!-- Page Content -->
+        <div class="page-content">
+
+            <!-- Dashboard Section -->
+            <section id="dashboard" class="content-section active">
+                <div class="grid grid-cols-4">
+                    <div class="stat-card">
+                        <div class="value">12,345</div>
+                        <div class="label">Total Leads</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="value">$89,400</div>
+                        <div class="label">Revenue</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="value">2,103</div>
+                        <div class="label">New Customers</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="value">15.3%</div>
+                        <div class="label">Conversion Rate</div>
+                    </div>
+                </div>
+                <div class="grid grid-cols-2" style="margin-top: 2rem;">
+                    <div class="card">
+                        <div class="card-header">Lead Generation Over Time</div>
+                        <div class="chart-placeholder">Chart Placeholder</div>
+                    </div>
+                    <div class="card">
+                        <div class="card-header">Revenue by Source</div>
+                        <div class="chart-placeholder">Chart Placeholder</div>
+                    </div>
+                </div>
+                <div class="card">
+                    <div class="card-header">Recent Activity</div>
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Timestamp</th>
+                                <th>User</th>
+                                <th>Action</th>
+                                <th>Details</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td>2026-07-07 10:30 AM</td>
+                                <td>john@example.com</td>
+                                <td>New Lead</td>
+                                <td>From "Google Ads" campaign</td>
+                            </tr>
+                            <tr>
+                                <td>2026-07-07 10:28 AM</td>
+                                <td>sara@example.com</td>
+                                <td>Platform Sync</td>
+                                <td>Facebook Ads successfully synced</td>
+                            </tr>
+                             <tr>
+                                <td>2026-07-07 10:15 AM</td>
+                                <td>mike@example.com</td>
+                                <td>Report Generated</td>
+                                <td>"Q2 Performance Report"</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+
+            <!-- Platform Management Section -->
+            <section id="platforms" class="content-section">
+                <div class="card">
+                    <div class="card-header">Connected Platforms</div>
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Platform</th>
+                                <th>Status</th>
+                                <th>Last Sync</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td>Facebook Ads</td>
+                                <td>Connected</td>
+                                <td>2026-07-07 10:28 AM</td>
+                                <td><button class="btn btn-secondary">Refresh</button></td>
+                            </tr>
+                            <tr>
+                                <td>Google Analytics</td>
+                                <td>Connected</td>
+                                <td>2026-07-07 09:55 AM</td>
+                                <td><button class="btn btn-secondary">Refresh</button></td>
+                            </tr>
+                             <tr>
+                                <td>HubSpot</td>
+                                <td>Error</td>
+                                <td>2026-07-06 05:00 PM</td>
+                                <td><button class="btn btn-secondary">Reconnect</button></td>
+                            </tr>
+                        </tbody>
+                    </table>
+                    <button class="btn btn-primary" style="margin-top: 1.5rem;">Add New Platform</button>
+                </div>
+            </section>
+
+            <!-- Organization & User Management Section -->
+            <section id="organization" class="content-section">
+                <div class="card">
+                    <div class="card-header">Users</div>
+                     <table>
+                        <thead>
+                            <tr>
+                                <th>Name</th>
+                                <th>Email</th>
+                                <th>Role</th>
+                                <th>Status</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td>Jane Doe</td>
+                                <td>jane.doe@example.com</td>
+                                <td>Admin</td>
+                                <td>Active</td>
+                            </tr>
+                            <tr>
+                                <td>John Smith</td>
+                                <td>john.smith@example.com</td>
+                                <td>Analyst</td>
+                                <td>Active</td>
+                            </tr>
+                             <tr>
+                                <td>Peter Jones</td>
+                                <td>peter.jones@example.com</td>
+                                <td>Viewer</td>
+                                <td>Invited</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                    <button class="btn btn-primary" style="margin-top: 1.5rem;">Invite User</button>
+                </div>
+            </section>
+            
+            <!-- Reporting and Analytics Section -->
+            <section id="reporting" class="content-section">
+                 <div class="card">
+                    <div class="card-header">Generated Reports</div>
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Report Name</th>
+                                <th>Date Range</th>
+                                <th>Created By</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td>Q2 Performance Report</td>
+                                <td>Apr 1, 2026 - Jun 30, 2026</td>
+                                <td>mike@example.com</td>
+                                <td><button class="btn btn-secondary">Download</button></td>
+                            </tr>
+                             <tr>
+                                <td>June Lead Source Analysis</td>
+                                <td>Jun 1, 2026 - Jun 30, 2026</td>
+                                <td>jane.doe@example.com</td>
+                                <td><button class="btn btn-secondary">Download</button></td>
+                            </tr>
+                        </tbody>
+                    </table>
+                    <button class="btn btn-primary" style="margin-top: 1.5rem;">Create New Report</button>
+                </div>
+            </section>
+            
+            <!-- Settings Section -->
+            <section id="settings" class="content-section">
+                <div class="card">
+                    <div class="card-header">Account Settings</div>
+                    <p>Placeholder for account settings form.</p>
+                </div>
+                 <div class="card">
+                    <div class="card-header">Billing Information</div>
+                    <p>Placeholder for billing information and subscription plans.</p>
+                </div>
+                 <div class="card">
+                    <div class="card-header">API & Integrations</div>
+                    <p>Placeholder for API key management and integration settings.</p>
+                </div>
+            </section>
+            
+        </div>
+    </main>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            const navLinks = document.querySelectorAll('.nav-link');
+            const contentSections = document.querySelectorAll('.content-section');
+            const pageTitle = document.getElementById('page-title');
+
+            navLinks.forEach(link => {
+                link.addEventListener('click', function(e) {
+                    e.preventDefault();
+
+                    // Update active link
+                    navLinks.forEach(l => l.classList.remove('active'));
+                    this.classList.add('active');
+                    
+                    // Get target section
+                    const targetId = this.getAttribute('href').substring(1);
+                    const targetSection = document.getElementById(targetId);
+                    
+                    // Update Page Title
+                    pageTitle.textContent = this.textContent.trim();
+
+                    // Show/hide sections
+                    contentSections.forEach(section => {
+                        if (section.id === targetId) {
+                            section.classList.add('active');
+                        } else {
+                            section.classList.remove('active');
+                        }
+                    });
+                });
+            });
+        });
+    </script>
+</body>
 </html>
