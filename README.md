@@ -94,10 +94,14 @@ This project is fully containerized with Docker, which makes it easy to run on a
     - The **frontend** will be available at [http://localhost:8080](http://localhost:8080).
     - The **backend** API will be available at [http://localhost:8000](http://localhost:8000).
 
-### Setting up the Database
+### Building the Desktop App (.dmg)
 
-Before you can use the application, you need to create the necessary tables in your Supabase database.
+To package the application into a distributable `.dmg` file for macOS, run the main build script from the root of the project:
 
-1.  Go to the **SQL Editor** in your Supabase project dashboard.
-2.  Open the `schema.sql` file from this repository.
-3.  Copy the entire content of the file, paste it into the SQL Editor, and click **"Run"**.
+```bash
+./build-macos.sh
+```
+
+This script will handle everything: it will install all dependencies for both the backend and the Electron app, package the Python server into an executable, and build the final `.dmg` installer.
+
+When it's finished, you will find the installer in the `electron-app/dist` directory.

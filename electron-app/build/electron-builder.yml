@@ -1,0 +1,18 @@
+appId: com.salescale.app
+productName: Salescale
+directories:
+  output: dist
+files:
+  - "main.js"
+  - "preload.js"
+  - "package.json"
+  - from: ../frontend
+    to: frontend
+mac:
+  target: dmg
+  arch:
+    - x64
+    - arm64
+extraResources:
+  - from: ../backend/dist/main
+    to: backend/main

@@ -1,0 +1,17 @@
+{
+  "name": "salescale-app",
+  "version": "0.1.0",
+  "description": "Salescale Desktop Application",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder"
+  },
+  "author": "csrter",
+  "license": "MIT",
+  "devDependencies": {
+    "electron": "^28.0.0",
+    "electron-builder": "^24.6.4"
+  },
+  "dependencies": {}
+}
