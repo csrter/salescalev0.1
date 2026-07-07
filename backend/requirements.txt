@@ -1,17 +1,5 @@
-fastapi>=0.110
-uvicorn[standard]>=0.29
-sqlalchemy>=2.0
-alembic>=1.13
-pydantic[email]>=2.6
-pydantic-settings>=2.2
-PyJWT>=2.8
-bcrypt>=4.1
-# <49: cryptography 49+ ships no prebuilt wheels for Intel macs (dev machine)
-cryptography>=42.0,<49
-httpx>=0.27
-google-ads
-psycopg2-binary
-# Phase 9: AI insights (Claude API) + custom-domain DNS TXT verification
-anthropic>=0.60
-dnspython>=2.6
-pytest>=8.0
+fastapi
+uvicorn
+supabase-py
+pydantic
+python-dotenv

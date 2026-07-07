@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Salescale - Marketing Analytics</title>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     <style>
         :root {
             --primary-color: #4f46e5;
@@ -528,38 +529,43 @@
         </div>
     </main>
 
-    <script>
-        document.addEventListener('DOMContentLoaded', function() {
-            const navLinks = document.querySelectorAll('.nav-link');
-            const contentSections = document.querySelectorAll('.content-section');
-            const pageTitle = document.getElementById('page-title');
+        <script>
+            const SUPABASE_URL = 'https://jtzowohhtrrfzxbchujj.supabase.co';
+            const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imp0em93b2hodHJyZnp4YmNodWpqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODM0MDQ2MzEsImV4cCI6MjA5ODk4MDYzMX0.imJTWH7ENMxWN5hVnPK3Hprn_Ph-g0OhG-LJeLxyYhM';
 
-            navLinks.forEach(link => {
-                link.addEventListener('click', function(e) {
-                    e.preventDefault();
+            const { createClient } = supabase;
+            const _supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
-                    // Update active link
-                    navLinks.forEach(l => l.classList.remove('active'));
-                    this.classList.add('active');
+            document.addEventListener('DOMContentLoaded', function() {
+                const navLinks = document.querySelectorAll('.nav-link');
+                const contentSections = document.querySelectorAll('.content-section');
+                const pageTitle = document.getElementById('page-title');
+
+                navLinks.forEach(link => {
+                    link.addEventListener('click', function(e) {
+                        e.preventDefault();
+
+                        // Update active link
+                        navLinks.forEach(l => l.classList.remove('active'));
+                        this.classList.add('active');
                     
-                    // Get target section
-                    const targetId = this.getAttribute('href').substring(1);
-                    const targetSection = document.getElementById(targetId);
+                        // Get target section
+                        const targetId = this.getAttribute('href').substring(1);
+                        const targetSection = document.getElementById(targetId);
                     
-                    // Update Page Title
-                    pageTitle.textContent = this.textContent.trim();
+                        // Update Page Title
+                        pageTitle.textContent = this.textContent.trim();
 
-                    // Show/hide sections
-                    contentSections.forEach(section => {
-                        if (section.id === targetId) {
-                            section.classList.add('active');
-                        } else {
-                            section.classList.remove('active');
-                        }
+                        // Show/hide sections
+                        contentSections.forEach(section => {
+                            if (section.id === targetId) {
+                                section.classList.add('active');
+                            } else {
+                                section.classList.remove('active');
+                            }
+                        });
                     });
                 });
             });
-        });
-    </script>
-</body>
-</html>
+        </script>
+    </body>

@@ -22,3 +22,4 @@ frontend/dist/
 .DS_Store
 .idea/
 .vscode/
+\n# Supabase credentials\n.env
