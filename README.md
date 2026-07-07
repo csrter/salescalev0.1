@@ -61,3 +61,43 @@ gives a lighter-weight version to build instead if Phase 8 isn't done yet.
 Phase 1, 2, 3, and 6, not Phase 7, 8, or 9 — so you can run Phase 9 and
 Phase 10 in either order, or interleave them with Phase 7/8, whatever
 fits your priorities.
+
+---
+
+## Getting Started with Docker
+
+This project is fully containerized with Docker, which makes it easy to run on any machine, including both Intel and Apple Silicon Macs.
+
+### Prerequisites
+
+- [Docker Desktop](https://www.docker.com/products/docker-desktop) installed on your machine.
+
+### Running the Application
+
+1.  **Clone the repository:**
+    ```bash
+    git clone https://github.com/csrter/salescalev0.1.git
+    cd salescalev0.1
+    ```
+
+2.  **Set up your environment variables:**
+    - Make a copy of the `.env.example` file and name it `.env`.
+    - Fill in the required Supabase credentials in the new `.env` file.
+
+3.  **Build and run the application:**
+    ```bash
+    docker-compose up --build
+    ```
+    This command will build the Docker images for both the frontend and backend services and start the application.
+
+4.  **Access the application:**
+    - The **frontend** will be available at [http://localhost:8080](http://localhost:8080).
+    - The **backend** API will be available at [http://localhost:8000](http://localhost:8000).
+
+### Setting up the Database
+
+Before you can use the application, you need to create the necessary tables in your Supabase database.
+
+1.  Go to the **SQL Editor** in your Supabase project dashboard.
+2.  Open the `schema.sql` file from this repository.
+3.  Copy the entire content of the file, paste it into the SQL Editor, and click **"Run"**.
