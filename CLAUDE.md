@@ -1,9 +1,11 @@
 # Project: Salescale — Multi-Tenant Ads + CRM SaaS Platform
 
-_(Name confirmed: **Salescale** is the product name for the whole
-platform; the CRM module is "Salescale CRM". Earlier planning called this
-"Atlas Reach Ads Platform + Salescale CRM" — any lingering references to
-that name are stale.)_
+_(Working name: this project used "Atlas Reach Ads Platform + Salescale
+CRM" and "Salescale" for the CRM module in earlier planning. Since this is
+now launching as a SaaS any agency can sign up for, this file uses
+**Salescale** as the product name for the whole platform going forward —
+confirm or rename before this goes further; every reference below assumes
+this name.)_
 
 Claude Code auto-loads this file at the start of every session in this repo.
 Keep it accurate as the build progresses — update it at the end of each
@@ -97,6 +99,20 @@ a hardcoded assumption.
    subscription billing (Starter/Pro/Agency — see Phase 8), so a new
    agency can sign up, pick a plan, and start connecting ad accounts
    without Salescale's own team doing anything manually.
+9. White-labeling (Phase 9): custom domain, logo/color branding, and
+   branded transactional email per Organization, so an agency's own
+   clients see that agency's brand — not Salescale's — anywhere they
+   interact with the platform.
+10. An AI insights layer (Phase 9), built on the Claude API: natural
+    language explanations of metrics and auto-generated report summaries,
+    grounded in each Organization's own real computed data — never
+    free-generated numbers, and never able to cross tenant boundaries.
+11. Client-relationship intelligence (Phase 10): call tracking attributed
+    back to the original campaign/UTM, a transparent composite account
+    health score per client, a client-facing creative approval workflow,
+    satisfaction/NPS tracking, and GDPR/CCPA data export and deletion —
+    giving Organizations a fuller picture of each client relationship, not
+    just isolated campaign metrics.
 
 ## ARCHITECTURE (proposed defaults — confirm/adjust in Phase 1, then treat as fixed)
 
@@ -196,162 +212,18 @@ a hardcoded assumption.
 _(Update after each phase — this section is the source of truth for what's
 actually built vs. what's still planned.)_
 
-- [x] Phase 1 — Foundation (now includes Organization tenancy). Built
-      originally as single-agency, then retrofitted (2026-07-06) for the
-      multi-tenant SaaS replan: Organization root entity, self-serve
-      signup (`POST /api/orgs/signup` — Atlas Reach is created through
-      this same generic flow), Owner/Admin/Member/Client roles
-      (owner: everything incl. team; admin: clients/connections/team
-      members; member: campaign work only), `organization_id` on every
-      tenant table, two-level TenantScope enforced in the data-access
-      layer, and org-to-org isolation tests (`test_org_isolation.py`).
-- [x] Phase 2 — Core management features (2026-07-06). Create/edit/pause/
-      resume for campaigns / ad sets/groups / ads on Meta (Graph API v25.0)
-      and Google (Google Ads API v24 via google-ads 31.1.0), both verified
-      current against live docs. Guardrail architecture: every
-      spend-affecting write is staged as a PendingChange with a before/after
-      diff, executes only via an explicit confirm (`/api/manage/changes/
-      {id}/execute`), expires after 30 min, and writes an immutable audit
-      entry on every attempt — `test_manage_flow.py` proves the flow plus a
-      structural test that no unstaged mutating route exists. UI: staged-
-      diff confirmation modal, pending-changes tab, queryable audit-log
-      tab, Meta creative builder with placement-accurate previews (Meta
-      /previews edge), and a Google-only surface (keywords/match types/
-      negatives, search-terms review with add-as-negative, PMax asset
-      groups). Caveat: end-to-end against *live* ad accounts still needs
-      real platform credentials (.env) — flow verified with mocked
-      platform calls in tests and a live-failure path in dev.
-- [x] Phase 3 — Advanced metrics layer (2026-07-06). Insights ingestion
-      (Meta ad-level daily, Google ad-group-level daily + keyword Quality
-      Score and ad-strength snapshots) with per-platform isolation — one
-      platform failing never blocks the other; on-demand via
-      POST /api/insights/sync (recurring background polling still TODO,
-      the sync function is the unit a scheduler will call). Metrics with
-      formulas documented at the computation site
-      (backend/app/services/metrics.py): blended CAC/ROAS (Salescale
-      won-deal revenue, not platform claims), channel mix with tracked-vs-
-      platform CPL side by side, funnel tiers via configurable campaign-
-      name patterns, creative fatigue (recent CTR vs own baseline, ≥30%
-      drop flagged), QS/ad-strength trend flags, lead-quality-adjusted CPL
-      behind a pluggable LeadQualityProvider (Salescale-native default +
-      external-CRM registry for transition clients), vertical benchmarking
-      (organization-scoped only — Client.vertical), attribution
-      reconciliation (platform claims vs UTM/click-id trail, flags
-      over-credit and no-UTM leads), and a UTM builder + convention-
-      violation checker. 12 new tests incl. the DoD deliberate-discrepancy
-      flag; per-client metrics panel in the UI. Note: dev DB schema
-      changed (clients gained vertical/lead_quality_source/metric_settings;
-      new quality_snapshots table) — recreate local dev DBs.
-- [x] Phase 4 — Customizable UI (2026-07-06). Real widget dashboard
-      (frontend/src/dashboard.tsx + widgets.tsx, hand-rolled — no grid
-      library): add/remove via registry menu, drag-header to rearrange,
-      corner-handle resize on a 12-col grid, layout persisted per user per
-      client view (dashboard_layouts table, GET/PUT /api/dashboard/layout;
-      no row = role default). Widgets: blended overview, channel mix,
-      spend/pacing SVG chart (new /api/metrics/spend-daily, zero-filled
-      daily series), funnel tiers, creative-fatigue + QS alerts,
-      attribution-discrepancy view, raw campaign table (new flat
-      GET /api/campaigns reading the local cache, staged pause/resume from
-      the row), vertical benchmark + UTM builder (team-only), and a
-      guarantee tracker: terms are per-client Organization data
-      (metric_settings["guarantee"]; PUT/DELETE /api/clients/{id}/guarantee,
-      admin-gated; metric ∈ tracked_leads|qualified_leads|won_deals) with
-      progress summed across whichever platforms contribute. One platform
-      toggle (Blended/Meta/Google, no reload) governs every widget:
-      blended/LQA/guarantee/spend-daily accept ?platforms= server-side
-      (spend, tracked leads, and won-deal revenue all narrow consistently;
-      unattributed leads drop out under a filter), per-platform tables
-      filter client-side, and single-platform widgets say so when the
-      filter hides them. Navy/cobalt fintech restyle across every screen
-      (App.css token set — login, header, modals, Phase 2 panels, and the
-      client-role view; metrics.tsx's Phase 3 reference panel is retired,
-      its displays now live as widgets). 11 new tests
-      (test_dashboard_ui.py) incl. layout tenant isolation at both levels;
-      verified in-browser incl. drag/resize/reload persistence and the
-      client-role view. Note: /api/dashboard/ was added to
-      test_manage_flow's mutating-route allowlist (UI-pref writes, no
-      spend); .claude/launch.json gained backend-alt/frontend-alt configs
-      (ports 8010/5183) for previewing when 8000/5173 are busy.
-- [x] Phase 5 — Server-side conversion tracking (2026-07-06). Specs
-      verified against live docs before implementing (per-platform hashing
-      differs and is documented at the source: backend/app/services/pii.py —
-      Meta wants bare-digit phones and keeps gmail dots; Google wants E.164
-      and strips gmail dots/plus-suffixes; both SHA-256 hex; fbc/fbp/IP/UA
-      never hashed). Architecture: ConversionEvent (platform-agnostic, one
-      per lead, event_id = the browser pixel's eventID for Meta's 48h
-      (event_name, event_id) dedup) → conversion_dispatch.py SENDERS
-      registry (the Phase 7 adapter seam — per-platform isolation, one
-      ConversionDispatch log row per attempt recording match KEYS, never
-      values) → meta_capi.py (POST /{dataset_id}/events, test_event_code
-      only on explicit test sends) and google_conversions.py
-      (ConversionUploadService ClickConversion: gclid + hashed
-      user_identifiers/FIRST_PARTY, consent, partial_failure,
-      order_id=event_id for Google-side dedup; readiness check for
-      accepted_customer_data_terms + enhanced_conversions_for_leads_enabled
-      and an UPLOAD_CLICKS action lister for the config UI). Lead capture:
-      public POST /api/track/lead joins the visitor's landing_events row
-      (UTMs + fbclid/fbp/gclid on one record; landing_events gained fbp;
-      fbc derived as fb.1.{landing_ms}.{fbclid}), creates the Contact,
-      backfills click IDs the landing ping missed, and fans out sends.
-      Per-client destinations in conversion_configs (meta dataset_id /
-      google customer+action, admin-gated PUT
-      /api/clients/{id}/conversion-configs/{platform}). UI: team-only
-      "Conversion tracking (server-side)" widget — live EMQ per event (GET
-      /dataset_quality), dispatch log, inline admin config + test-send.
-      13 new tests (test_conversions.py): hash vectors vs independently
-      computed SHA-256, dedup key pass-through, click-ID ride-through,
-      failure isolation, org/role gates. Caveats: platform calls mocked in
-      tests — the DoD's in-platform dedup/EMQ verification (Events Manager
-      Test Events, Google diagnostics) still needs real credentials, via
-      the widget's test-send; recurring background sending not needed (send
-      happens at lead time); dev DBs need recreating again (new fbp column
-      + 3 conversion tables); launch.json gained backend-alt2/frontend-alt2
-      (ports 8020/5193, isolated dev-alt2.db).
-- [x] Phase 6 — Salescale CRM (2026-07-06). Lead ingestion from all three
-      sources lands in one upsert (services/lead_ingest.py — match by
-      platform lead id, then email, then digit-normalized phone; fills gaps,
-      never overwrites): Meta Instant Forms via the app-level leadgen
-      webhook (GET handshake + X-Hub-Signature-256 HMAC, routed to a client
-      by page_id through the new lead_form_configs table, lead pulled via
-      Graph /{leadgen_id}), Google Lead Form ads via per-client webhook
-      (google_key check, gcl_id becomes a first-class landing_events row,
-      is_test acknowledged but never ingested), and the Phase 5 landing
-      path (now updates returning leads instead of duplicating). Webhook
-      specs verified against live docs before implementing. Pipeline/kanban:
-      default 4-stage pipeline auto-created per client, stages fully
-      per-client (admin PUT /api/crm/pipelines/{id}/stages), drag = PATCH
-      /api/crm/deals/{id}. Qualified-lead workflow: Organization-level
-      structured checklist (organizations.qualified_lead_criteria, GET/PUT
-      /api/orgs/me/qualified-lead-criteria; empty = plain toggle) drives
-      Contact.qualified_at — the ONE flag set by checklist completion,
-      dragging into an is_qualified_stage, winning a deal, or inbound
-      external sync (services/crm.py set_qualified is the single write
-      point), and read by LQA-CPL + guarantee tracker via lead_quality.py
-      (now marked-qualified OR deal-stage/won). Activities (is_internal
-      flag) + tasks (assignable, due dates, team-only). External CRM sync
-      (opt-in per client, admin PUT /api/clients/{id}/external-sync):
-      outbound signed webhooks (X-Salescale-Signature-256) on status
-      changes, inbound POST /api/crm/external-sync/{client_id} with shared
-      secret, matching by learned external id → our id → email/phone so
-      neither side duplicates; failures never block CRM writes. Client
-      role: read-only board/leads/detail; internal-only activities excluded
-      in the query, internal fields absent from the public schema, tasks
-      and criteria team-only, writes 403, cross-tenant 404. UI: per-client
-      Dashboard|CRM toggle (frontend/src/crm.tsx) — drag-drop kanban,
-      leads table with attribution chips (platform/utm/click-id), contact
-      drawer (checklist, activities, tasks, deals), admin setup panel
-      (stages, criteria, lead-form routing, external sync). 13 new tests
-      (test_crm.py), 107 total passing; kanban drag + checklist → metric
-      verified in-browser. Caveats: live Meta leadgen retrieval needs a
-      token with leads_retrieval (mocked in tests; .env gained
-      META_WEBHOOK_VERIFY_TOKEN); recreate dev DBs yet again (organizations/
-      contacts/activities gained columns; new lead_form_configs table);
-      Atlas Reach's real 14-Day Trial Sprint checklist should be entered by
-      the owner via CRM setup — the dev criteria are placeholders.
+- [ ] Phase 1 — Foundation (now includes Organization tenancy)
+- [ ] Phase 2 — Core management features
+- [ ] Phase 3 — Advanced metrics layer
+- [ ] Phase 4 — Customizable UI
+- [ ] Phase 5 — Server-side conversion tracking (CAPI + Google)
+- [ ] Phase 6 — Salescale CRM
 - [ ] Phase 7 — Additional platform adapters (Snapchat, Reddit, LinkedIn,
       Microsoft Advertising, Nextdoor)
 - [ ] Phase 8 — Billing & self-serve onboarding (Stripe, subscription
       tiers, Organization signup)
+- [ ] Phase 9 — White-labeling & AI insights
+- [ ] Phase 10 — Call tracking, account health & client trust
 
 ## PHASE FILES
 
@@ -359,10 +231,15 @@ Run these one at a time, in order, as separate Claude Code sessions or
 prompts: `PHASE_1_FOUNDATION.md`, `PHASE_2_CORE_MANAGEMENT.md`,
 `PHASE_3_ADVANCED_METRICS.md`, `PHASE_4_CUSTOMIZABLE_UI.md`,
 `PHASE_5_CONVERSION_TRACKING.md`, `PHASE_6_SALESCALE_CRM.md`,
-`PHASE_7_ADDITIONAL_PLATFORMS.md`, `PHASE_8_BILLING_ONBOARDING.md`. Each
-is self-contained but assumes this file's architecture and guardrails as
+`PHASE_7_ADDITIONAL_PLATFORMS.md`, `PHASE_8_BILLING_ONBOARDING.md`,
+`PHASE_9_WHITELABEL_AI_INSIGHTS.md`, `PHASE_10_HEALTH_TRUST.md`. Each is
+self-contained but assumes this file's architecture and guardrails as
 fixed context. See also `PLATFORMS.md` for per-platform reference details
 used across Phases 1, 2, 3, 5, and 7.
+
+Note: Phase 9 and Phase 10 are both built to be droppable right after
+Phase 6 — neither hard-depends on Phase 7 or Phase 8. Run them in whatever
+order suits you; each phase file states its real dependencies at the top.
 
 Note: Phase 8 (billing/signup) is sequenced last here to match the
 existing phase numbering, but its core requirement — the Organization
