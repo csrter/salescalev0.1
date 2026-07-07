@@ -1,7 +1,7 @@
 # How to run this build in Claude Code
 
 1. **Create the repo** and drop all of these files (`CLAUDE.md`,
-   `PLATFORMS.md`, and `PHASE_1...9`) into the root before starting any
+   `PLATFORMS.md`, and `PHASE_1...10`) into the root before starting any
    session. Claude Code auto-loads `CLAUDE.md` at the start of every
    session in this directory, so the architecture and guardrails are
    always in context without you re-pasting them.
@@ -44,7 +44,8 @@
 `PHASE_6_SALESCALE_CRM.md` →
 `PHASE_7_ADDITIONAL_PLATFORMS.md` →
 `PHASE_8_BILLING_ONBOARDING.md` →
-`PHASE_9_WHITELABEL_AI_INSIGHTS.md`
+`PHASE_9_WHITELABEL_AI_INSIGHTS.md` →
+`PHASE_10_HEALTH_TRUST.md`
 
 Note: Phase 1 now includes the Organization tenancy model that Phase 8's
 billing/signup flow depends on — Phase 8 is sequenced last to match the
@@ -56,3 +57,7 @@ their data — **it does not depend on Phase 7 or Phase 8**, and can be run
 directly after Phase 6 if that's a better order for you. Phase 9 itself
 notes where its tasks would normally tie into Phase 8's tier model and
 gives a lighter-weight version to build instead if Phase 8 isn't done yet.
+**Phase 10 has the same droppable property** — its real dependencies are
+Phase 1, 2, 3, and 6, not Phase 7, 8, or 9 — so you can run Phase 9 and
+Phase 10 in either order, or interleave them with Phase 7/8, whatever
+fits your priorities.
