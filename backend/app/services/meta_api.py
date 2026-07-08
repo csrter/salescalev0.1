@@ -13,6 +13,7 @@ from urllib.parse import urlencode
 import httpx
 
 from ..config import get_settings
+from . import integration_creds
 
 GRAPH = "https://graph.facebook.com"
 
@@ -56,8 +57,9 @@ def _post(url: str, data: Dict[str, Any]) -> Dict[str, Any]:
 
 def build_oauth_url(state: str) -> str:
     settings = get_settings()
+    creds = integration_creds.current_meta()  # org's own app, or global fallback
     params = {
-        "client_id": settings.meta_app_id,
+        "client_id": creds.app_id,
         "redirect_uri": settings.meta_redirect_uri,
         "state": state,
         "scope": META_SCOPES,
@@ -70,11 +72,12 @@ def build_oauth_url(state: str) -> str:
 
 def exchange_code_for_token(code: str) -> Dict[str, Any]:
     settings = get_settings()
+    creds = integration_creds.current_meta()
     return _get(
         f"{_base()}/oauth/access_token",
         {
-            "client_id": settings.meta_app_id,
-            "client_secret": settings.meta_app_secret,
+            "client_id": creds.app_id,
+            "client_secret": creds.app_secret,
             "redirect_uri": settings.meta_redirect_uri,
             "code": code,
         },
@@ -82,13 +85,13 @@ def exchange_code_for_token(code: str) -> Dict[str, Any]:
 
 
 def exchange_for_long_lived_token(short_token: str) -> Dict[str, Any]:
-    settings = get_settings()
+    creds = integration_creds.current_meta()
     return _get(
         f"{_base()}/oauth/access_token",
         {
             "grant_type": "fb_exchange_token",
-            "client_id": settings.meta_app_id,
-            "client_secret": settings.meta_app_secret,
+            "client_id": creds.app_id,
+            "client_secret": creds.app_secret,
             "fb_exchange_token": short_token,
         },
     )

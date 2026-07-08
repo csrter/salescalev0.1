@@ -1,0 +1,13 @@
+venv/
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+tests/
+build/
+dist/
+*.spec
+*.db
+*.sqlite3
+.env
+.env.*

@@ -6,13 +6,13 @@ files:
   - "main.js"
   - "preload.js"
   - "package.json"
-  - from: ../frontend
+  - from: ../frontend/dist
     to: frontend
 mac:
-  target: dmg
-  arch:
-    - x64
-    - arm64
+  target:
+    - target: dmg
+      arch:
+        - arm64
 extraResources:
   - from: ../backend/dist/main
     to: backend/main

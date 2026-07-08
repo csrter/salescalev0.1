@@ -61,6 +61,27 @@ def decode_state_token(token: str, purpose: str) -> tuple[str, str]:
     return payload["organization_id"], payload["client_id"]
 
 
+def create_action_token(purpose: str, user_id: str, minutes: int) -> str:
+    """Short-lived signed token for a one-off account action (email
+    verification, password reset). Bound to a purpose so a verify link can't
+    be replayed as a reset, and vice versa."""
+    settings = get_settings()
+    payload = {
+        "purpose": purpose,
+        "sub": user_id,
+        "exp": dt.datetime.now(dt.timezone.utc) + dt.timedelta(minutes=minutes),
+    }
+    return jwt.encode(payload, settings.jwt_secret, algorithm="HS256")
+
+
+def decode_action_token(token: str, purpose: str) -> str:
+    """Return the user_id from a valid action token, or raise jwt errors."""
+    payload = jwt.decode(token, get_settings().jwt_secret, algorithms=["HS256"])
+    if payload.get("purpose") != purpose:
+        raise jwt.InvalidTokenError("action token purpose mismatch")
+    return payload["sub"]
+
+
 def _fernet() -> Fernet:
     key = get_settings().token_encryption_key
     if not key:

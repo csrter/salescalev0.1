@@ -12,11 +12,18 @@ os.environ["TOKEN_ENCRYPTION_KEY"] = (
 # Phase 6 lead webhooks: signature/handshake secrets (test-only values).
 os.environ["META_APP_SECRET"] = "test-meta-app-secret"
 os.environ["META_WEBHOOK_VERIFY_TOKEN"] = "test-verify-token"
+# One dedicated platform super-admin for the /api/admin tests. No org-scoped
+# test uses this address, so it doesn't affect the isolation fixtures.
+os.environ["SUPERADMIN_EMAILS"] = "platform@salescale.com,pager@salescale.com"
+# The suite makes many signup/login calls from one client; the limiter is
+# exercised separately in test_ratelimit.py.
+os.environ["RATE_LIMIT_ENABLED"] = "false"
 
 import pytest
 from fastapi.testclient import TestClient
 
 from app.db import Base, SessionLocal, engine
+from app.migrations import upgrade_to_head
 from app.main import app
 from app.models.ads import Campaign
 from app.models.attribution import LandingEvent
@@ -41,10 +48,15 @@ def seeded():
     test runs against. Organization #2 is created separately, through the
     public signup API (see org2_headers), per the Phase 1 definition of done.
     """
+    # Build the schema the same way the app does — via Alembic — so the DB is
+    # stamped and the app's startup migration is a no-op instead of colliding.
     Base.metadata.drop_all(engine)
-    Base.metadata.create_all(engine)
+    upgrade_to_head()
     db = SessionLocal()
-    org = Organization(name="Atlas Reach")
+    # Unlimited tier: many tests add clients/members to this shared org, so
+    # subscription limits (exercised separately in test_billing) must not
+    # couple them.
+    org = Organization(name="Atlas Reach", plan="agency")
     db.add(org)
     db.flush()
 

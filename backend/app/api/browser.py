@@ -14,7 +14,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..db import get_db
-from ..deps import TenantScope, get_scope
+from ..deps import TenantScope, bind_integration_creds, get_scope
 from ..models.ads import Ad, AdGroup, Campaign
 from ..models.base import utcnow
 from ..models.core import AdAccount, PLATFORM_GOOGLE, PLATFORM_META, PlatformConnection
@@ -22,7 +22,9 @@ from ..schemas import AdAccountOut, AdGroupOut, AdOut, CampaignOut
 from ..services import connections as conn_svc
 from ..services import google_ads_api, meta_api
 
-router = APIRouter(prefix="/api", tags=["browser"])
+router = APIRouter(
+    prefix="/api", tags=["browser"], dependencies=[Depends(bind_integration_creds)]
+)
 
 
 def _connection_for(db: Session, account: AdAccount) -> PlatformConnection:

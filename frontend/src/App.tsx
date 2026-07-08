@@ -3,6 +3,7 @@ import {
   ADMIN_ROLES,
   TEAM_ROLES,
   api,
+  createClient,
   getSession,
   login,
   setSession,
@@ -25,128 +26,450 @@ import {
 } from "./manage";
 import { Dashboard } from "./dashboard";
 import { CrmView } from "./crm";
+import { SuperAdmin, TeamAdmin } from "./admin";
+import { Billing, ResetPassword, VerifyEmail } from "./account";
+import { Integrations } from "./integrations";
+import {
+  forgotPassword,
+  oauthStart,
+  resendVerification,
+  sessionFromToken,
+} from "./api";
 import "./App.css";
 
-type Tab = "clients" | "changes" | "audit";
+type IconName =
+  | "clients"
+  | "changes"
+  | "audit"
+  | "team"
+  | "billing"
+  | "integrations"
+  | "admin"
+  | "logout"
+  | "plus"
+  | "chevron";
+
+const ICON_PATHS: Record<IconName, string> = {
+  clients:
+    "M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2 M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8 M23 21v-2a4 4 0 0 0-3-3.87 M16 3.13a4 4 0 0 1 0 7.75",
+  changes: "M6 3v12 M18 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6 M6 21a3 3 0 1 0 0-6 3 3 0 0 0 0 6 M15 6a9 9 0 0 0-9 9",
+  audit: "M9 11l3 3L22 4 M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11",
+  team: "M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2 M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8 M23 21v-2a4 4 0 0 0-3-3.87 M16 3.13a4 4 0 0 1 0 7.75",
+  admin: "M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z",
+  billing: "M2 7a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2z M2 10h20",
+  integrations: "M10 13a5 5 0 0 0 7 0l3-3a5 5 0 0 0-7-7l-1 1 M14 11a5 5 0 0 0-7 0l-3 3a5 5 0 0 0 7 7l1-1",
+  logout: "M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4 M16 17l5-5-5-5 M21 12H9",
+  plus: "M12 5v14 M5 12h14",
+  chevron: "M9 18l6-6-6-6",
+};
+
+function Icon({ name }: { name: IconName }) {
+  return (
+    <svg
+      className="icon"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      {ICON_PATHS[name].split(" M").map((seg, i) => (
+        <path key={i} d={i === 0 ? seg : "M" + seg} />
+      ))}
+    </svg>
+  );
+}
+
+function initials(name: string): string {
+  return name
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((w) => w[0]!.toUpperCase())
+    .join("");
+}
+
+type Tab =
+  | "clients"
+  | "changes"
+  | "audit"
+  | "team"
+  | "integrations"
+  | "billing"
+  | "admin";
+
+const PAGE_TITLES: Record<Tab, string> = {
+  clients: "Clients",
+  changes: "Pending changes",
+  audit: "Audit log",
+  team: "Team",
+  integrations: "Integrations",
+  billing: "Billing",
+  admin: "Platform admin",
+};
+
+function clearAuthQuery() {
+  window.history.replaceState({}, "", window.location.pathname);
+}
 
 export default function App() {
   const [session, setSess] = useState<Session | null>(getSession());
   const [tab, setTab] = useState<Tab>("clients");
+  const [authRoute, setAuthRoute] = useState<{ kind: "verify" | "reset"; token: string } | null>(
+    () => {
+      const p = new URLSearchParams(window.location.search);
+      const verify = p.get("verify");
+      const reset = p.get("reset");
+      if (verify) return { kind: "verify", token: verify };
+      if (reset) return { kind: "reset", token: reset };
+      return null;
+    }
+  );
+  // Social login returns with the token in the URL fragment (#access_token=…).
+  const [oauthBusy, setOauthBusy] = useState(() =>
+    window.location.hash.includes("access_token=")
+  );
+
+  useEffect(() => {
+    const m = window.location.hash.match(/access_token=([^&]+)/);
+    if (!m) return;
+    sessionFromToken(m[1])
+      .then(setSess)
+      .catch(() => setSession(null))
+      .finally(() => {
+        window.history.replaceState({}, "", window.location.pathname);
+        setOauthBusy(false);
+      });
+  }, []);
+
+  if (oauthBusy)
+    return (
+      <div className="auth-center">
+        <div className="auth-card">
+          <div className="brand auth-brand">
+            <span className="brand-mark">◈</span>
+            <span className="brand-name">Salescale</span>
+          </div>
+          <p className="auth-sub">Signing you in…</p>
+        </div>
+      </div>
+    );
+
+  // Links from verification / reset emails land here before any session.
+  if (authRoute?.kind === "verify")
+    return (
+      <VerifyEmail
+        token={authRoute.token}
+        onDone={() => {
+          clearAuthQuery();
+          setAuthRoute(null);
+        }}
+      />
+    );
+  if (authRoute?.kind === "reset")
+    return (
+      <ResetPassword
+        token={authRoute.token}
+        onDone={() => {
+          clearAuthQuery();
+          setAuthRoute(null);
+        }}
+      />
+    );
+
   if (!session) return <Login onLogin={setSess} />;
   const isTeam = TEAM_ROLES.includes(session.role);
+  const isAdmin = ADMIN_ROLES.includes(session.role);
+  const isOwner = session.role === "owner";
+  const nav: { key: Tab; label: string; icon: IconName; show: boolean }[] = [
+    { key: "clients", label: "Clients", icon: "clients", show: true },
+    { key: "changes", label: "Pending changes", icon: "changes", show: isTeam },
+    { key: "audit", label: "Audit log", icon: "audit", show: true },
+    { key: "team", label: "Team", icon: "team", show: isAdmin },
+    { key: "integrations", label: "Integrations", icon: "integrations", show: isAdmin },
+    { key: "billing", label: "Billing", icon: "billing", show: isOwner },
+    { key: "admin", label: "Admin", icon: "admin", show: !!session.is_superadmin },
+  ];
   return (
     <ManageProvider>
-      <div className="shell">
-        <header>
-          <h1>{session.organization_name}</h1>
-          <nav className="toggle">
-            <button
-              className={tab === "clients" ? "active" : ""}
-              onClick={() => setTab("clients")}
-            >
-              Clients
-            </button>
-            {isTeam && (
-              <button
-                className={tab === "changes" ? "active" : ""}
-                onClick={() => setTab("changes")}
-              >
-                Pending changes
-              </button>
-            )}
-            <button
-              className={tab === "audit" ? "active" : ""}
-              onClick={() => setTab("audit")}
-            >
-              Audit log
-            </button>
+      <div className="app">
+        <aside className="sidebar">
+          <div className="brand">
+            <span className="brand-mark">◈</span>
+            <span className="brand-name">Salescale</span>
+          </div>
+          <nav className="side-nav">
+            {nav
+              .filter((n) => n.show)
+              .map((n) => (
+                <button
+                  key={n.key}
+                  className={`nav-item ${tab === n.key ? "active" : ""}`}
+                  onClick={() => setTab(n.key)}
+                >
+                  <Icon name={n.icon} />
+                  <span>{n.label}</span>
+                </button>
+              ))}
           </nav>
-          <span>
-            {session.full_name} ({session.role})
-          </span>
-          <button
-            onClick={() => {
-              setSession(null);
-              setSess(null);
-            }}
-          >
-            Log out
-          </button>
-        </header>
-        {tab === "clients" && <Clients session={session} />}
-        {tab === "changes" && <PendingChangesPanel />}
-        {tab === "audit" && <AuditLogView />}
+          <div className="side-foot">
+            <div className="user-chip">
+              <div className="avatar">{initials(session.full_name)}</div>
+              <div className="user-meta">
+                <strong>{session.full_name}</strong>
+                <span>
+                  {session.role}
+                  {session.is_superadmin ? " · platform" : ""}
+                </span>
+              </div>
+            </div>
+            <button
+              className="logout"
+              onClick={() => {
+                setSession(null);
+                setSess(null);
+              }}
+            >
+              <Icon name="logout" />
+              <span>Log out</span>
+            </button>
+          </div>
+        </aside>
+        <div className="main">
+          <header className="topbar">
+            <div className="workspace">
+              <span className="workspace-avatar">
+                {initials(session.organization_name)}
+              </span>
+              <div className="workspace-meta">
+                <span className="workspace-label">Workspace</span>
+                <strong>{session.organization_name}</strong>
+              </div>
+            </div>
+            <span className="breadcrumb">{PAGE_TITLES[tab]}</span>
+          </header>
+          <div className="content">
+            {session.email_verified === false && <VerifyBanner />}
+            {tab === "clients" && <Clients session={session} />}
+            {tab === "changes" && <PendingChangesPanel />}
+            {tab === "audit" && <AuditLogView />}
+            {tab === "team" && isAdmin && <TeamAdmin session={session} />}
+            {tab === "integrations" && isAdmin && <Integrations />}
+            {tab === "billing" && isOwner && <Billing session={session} />}
+            {tab === "admin" && session.is_superadmin && <SuperAdmin />}
+          </div>
+        </div>
       </div>
     </ManageProvider>
   );
 }
 
+function VerifyBanner() {
+  const [sent, setSent] = useState(false);
+  return (
+    <div className="verify-banner">
+      <span>Please verify your email address to secure your account.</span>
+      <button
+        className="ghost"
+        disabled={sent}
+        onClick={async () => {
+          try {
+            await resendVerification();
+            setSent(true);
+          } catch {
+            /* ignore — best effort */
+          }
+        }}
+      >
+        {sent ? "Sent ✓" : "Resend email"}
+      </button>
+    </div>
+  );
+}
+
 function Login({ onLogin }: { onLogin: (s: Session) => void }) {
-  const [mode, setMode] = useState<"login" | "signup">("login");
+  const [mode, setMode] = useState<"login" | "signup" | "forgot">("login");
   const [orgName, setOrgName] = useState("");
   const [fullName, setFullName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [resetSent, setResetSent] = useState(false);
+  const oauth = async (provider: "google" | "meta") => {
+    setError(null);
+    try {
+      const { url } = await oauthStart(provider);
+      window.location.href = url;
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  };
   return (
-    <form
-      className="login"
-      onSubmit={async (e) => {
-        e.preventDefault();
-        try {
-          onLogin(
-            mode === "login"
-              ? await login(email, password)
-              : await signup(orgName, email, password, fullName)
-          );
-        } catch (err) {
-          setError((err as Error).message);
-        }
-      }}
-    >
-      <h1>Salescale</h1>
-      {mode === "signup" && (
-        <>
-          <input
-            placeholder="Agency / organization name"
-            value={orgName}
-            onChange={(e) => setOrgName(e.target.value)}
-          />
-          <input
-            placeholder="Your name"
-            value={fullName}
-            onChange={(e) => setFullName(e.target.value)}
-          />
-        </>
-      )}
-      <input
-        placeholder="Email"
-        value={email}
-        onChange={(e) => setEmail(e.target.value)}
-      />
-      <input
-        placeholder="Password"
-        type="password"
-        value={password}
-        onChange={(e) => setPassword(e.target.value)}
-      />
-      <button type="submit">
-        {mode === "login" ? "Log in" : "Create organization"}
-      </button>
-      <button
-        type="button"
-        className="link"
-        onClick={() => {
+    <div className="auth-shell">
+      <div className="auth-aside">
+        <div className="brand auth-brand">
+          <span className="brand-mark">◈</span>
+          <span className="brand-name">Salescale</span>
+        </div>
+        <h2 className="auth-headline">
+          Every client's ads &amp; CRM, in one place.
+        </h2>
+        <p className="auth-tag">
+          Meta, Google and more — blended cross-platform metrics, server-side
+          conversions and a native CRM, built for modern agencies.
+        </p>
+        <ul className="auth-points">
+          <li>Manage every client's ad accounts from one login</li>
+          <li>Blended CAC / ROAS the platforms can't show you</li>
+          <li>Leads flow straight into the built-in CRM</li>
+        </ul>
+      </div>
+      <form
+        className="auth-card"
+        onSubmit={async (e) => {
+          e.preventDefault();
           setError(null);
-          setMode(mode === "login" ? "signup" : "login");
+          try {
+            if (mode === "forgot") {
+              await forgotPassword(email);
+              setResetSent(true);
+            } else {
+              onLogin(
+                mode === "login"
+                  ? await login(email, password)
+                  : await signup(orgName, email, password, fullName)
+              );
+            }
+          } catch (err) {
+            setError((err as Error).message);
+          }
         }}
       >
-        {mode === "login"
-          ? "New agency? Sign up"
-          : "Already have an account? Log in"}
-      </button>
-      {error && <p className="error">{error}</p>}
-    </form>
+        <h1>
+          {mode === "login"
+            ? "Welcome back"
+            : mode === "signup"
+            ? "Create your organization"
+            : "Reset your password"}
+        </h1>
+        <p className="auth-sub">
+          {mode === "login"
+            ? "Log in to your Salescale workspace."
+            : mode === "signup"
+            ? "Start managing your agency's clients in minutes."
+            : "We'll email you a link to set a new password."}
+        </p>
+        {mode === "forgot" && resetSent ? (
+          <>
+            <p className="notice">
+              If an account exists for {email}, a reset link is on its way.
+            </p>
+            <button
+              type="button"
+              className="link auth-toggle"
+              onClick={() => {
+                setMode("login");
+                setResetSent(false);
+              }}
+            >
+              Back to login
+            </button>
+          </>
+        ) : (
+          <>
+            {mode === "signup" && (
+              <>
+                <label className="field">
+                  <span>Agency / organization name</span>
+                  <input
+                    placeholder="Atlas Reach"
+                    value={orgName}
+                    onChange={(e) => setOrgName(e.target.value)}
+                  />
+                </label>
+                <label className="field">
+                  <span>Your name</span>
+                  <input
+                    placeholder="Jane Doe"
+                    value={fullName}
+                    onChange={(e) => setFullName(e.target.value)}
+                  />
+                </label>
+              </>
+            )}
+            <label className="field">
+              <span>Email</span>
+              <input
+                type="email"
+                placeholder="you@agency.com"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+              />
+            </label>
+            {mode !== "forgot" && (
+              <label className="field">
+                <span>Password</span>
+                <input
+                  placeholder="••••••••"
+                  type="password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                />
+              </label>
+            )}
+            <button type="submit" className="primary block">
+              {mode === "login"
+                ? "Log in"
+                : mode === "signup"
+                ? "Create organization"
+                : "Send reset link"}
+            </button>
+            {error && <p className="error">{error}</p>}
+            {mode !== "forgot" && (
+              <>
+                <div className="oauth-divider">
+                  <span>or</span>
+                </div>
+                <button type="button" className="oauth-btn" onClick={() => oauth("google")}>
+                  Continue with Google
+                </button>
+                <button type="button" className="oauth-btn" onClick={() => oauth("meta")}>
+                  Continue with Meta
+                </button>
+              </>
+            )}
+            {mode === "login" && (
+              <button
+                type="button"
+                className="link"
+                onClick={() => {
+                  setError(null);
+                  setMode("forgot");
+                }}
+              >
+                Forgot password?
+              </button>
+            )}
+            <button
+              type="button"
+              className="link auth-toggle"
+              onClick={() => {
+                setError(null);
+                setMode(mode === "login" ? "signup" : "login");
+              }}
+            >
+              {mode === "login"
+                ? "New agency? Sign up"
+                : mode === "signup"
+                ? "Already have an account? Log in"
+                : "Back to login"}
+            </button>
+          </>
+        )}
+      </form>
+    </div>
   );
 }
 
@@ -154,9 +477,17 @@ function Clients({ session }: { session: Session }) {
   const [clients, setClients] = useState<Client[]>([]);
   const [selected, setSelected] = useState<Client | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [adding, setAdding] = useState(false);
+  const [loaded, setLoaded] = useState(false);
+  const isAdmin = ADMIN_ROLES.includes(session.role);
 
+  const load = () =>
+    api<Client[]>("/api/clients")
+      .then(setClients)
+      .catch((e) => setError(e.message))
+      .finally(() => setLoaded(true));
   useEffect(() => {
-    api<Client[]>("/api/clients").then(setClients).catch((e) => setError(e.message));
+    load();
   }, []);
 
   if (selected)
@@ -164,22 +495,151 @@ function Clients({ session }: { session: Session }) {
       <ClientDetail
         client={selected}
         session={session}
-        onBack={() => setSelected(null)}
+        onBack={() => {
+          setSelected(null);
+          load();
+        }}
       />
     );
 
   return (
     <div>
-      <h2>Clients</h2>
+      <div className="page-head">
+        <div>
+          <h2>Clients</h2>
+          <p className="page-sub">
+            {clients.length} {clients.length === 1 ? "client" : "clients"} in{" "}
+            {session.organization_name}
+          </p>
+        </div>
+        {isAdmin && clients.length > 0 && (
+          <button className="primary" onClick={() => setAdding(true)}>
+            <Icon name="plus" /> Add client
+          </button>
+        )}
+      </div>
       {error && <p className="error">{error}</p>}
-      <ul className="cards">
-        {clients.map((c) => (
-          <li key={c.id} onClick={() => setSelected(c)}>
-            <strong>{c.name}</strong>
-            <span className={`badge ${c.status}`}>{c.status}</span>
-          </li>
-        ))}
-      </ul>
+      {loaded && clients.length === 0 ? (
+        <div className="empty-state">
+          <div className="empty-icon">
+            <Icon name="clients" />
+          </div>
+          <h3>No clients yet</h3>
+          <p>
+            {isAdmin
+              ? "Add your first client to start connecting ad accounts and tracking performance."
+              : "No clients have been added to this organization yet."}
+          </p>
+          {isAdmin && (
+            <button className="primary" onClick={() => setAdding(true)}>
+              <Icon name="plus" /> Add your first client
+            </button>
+          )}
+        </div>
+      ) : (
+        <ul className="client-grid">
+          {clients.map((c) => (
+            <li
+              key={c.id}
+              className="client-card"
+              onClick={() => setSelected(c)}
+            >
+              <div className="client-avatar">{initials(c.name)}</div>
+              <div className="client-info">
+                <strong>{c.name}</strong>
+                <span className={`badge ${c.status}`}>{c.status}</span>
+              </div>
+              <Icon name="chevron" />
+            </li>
+          ))}
+        </ul>
+      )}
+      {adding && (
+        <AddClientModal
+          onClose={() => setAdding(false)}
+          onCreated={(c) => {
+            setAdding(false);
+            setClients((prev) => [...prev, c]);
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+function AddClientModal({
+  onClose,
+  onCreated,
+}: {
+  onClose: () => void;
+  onCreated: (c: Client) => void;
+}) {
+  const [name, setName] = useState("");
+  const [notes, setNotes] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="modal" onClick={(e) => e.stopPropagation()}>
+        <h3>Add a client</h3>
+        <p className="modal-sub">
+          Create a client to connect their ad accounts and track performance.
+        </p>
+        <form
+          className="form-grid"
+          onSubmit={async (e) => {
+            e.preventDefault();
+            setSaving(true);
+            setError(null);
+            try {
+              const c = await createClient({
+                name: name.trim(),
+                internal_notes: notes.trim() || undefined,
+              });
+              onCreated(c);
+            } catch (err) {
+              setError((err as Error).message);
+              setSaving(false);
+            }
+          }}
+        >
+          <label className="field">
+            <span>Client name</span>
+            <input
+              autoFocus
+              placeholder="e.g. Paganelli HVAC"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              required
+            />
+          </label>
+          <label className="field">
+            <span>
+              Internal notes <em className="opt">optional</em>
+            </span>
+            <textarea
+              rows={3}
+              placeholder="Only your team sees this — never the client."
+              value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+            />
+          </label>
+          {error && <p className="error">{error}</p>}
+          <div className="modal-actions">
+            <button type="button" className="ghost" onClick={onClose}>
+              Cancel
+            </button>
+            <button
+              type="submit"
+              className="primary"
+              disabled={saving || !name.trim()}
+            >
+              {saving ? "Adding…" : "Add client"}
+            </button>
+          </div>
+        </form>
+      </div>
     </div>
   );
 }

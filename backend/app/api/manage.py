@@ -17,7 +17,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..db import get_db
-from ..deps import TenantScope, get_scope, require_team
+from ..deps import TenantScope, bind_integration_creds, get_scope, require_team
 from ..models.ads import Ad, AdGroup, Campaign, Creative
 from ..models.audit import (
     AUDIT_FAILED,
@@ -53,7 +53,9 @@ from ..services import change_executor
 from ..services import connections as conn_svc
 from ..services import google_ads_api, meta_api
 
-router = APIRouter(prefix="/api", tags=["manage"])
+router = APIRouter(
+    prefix="/api", tags=["manage"], dependencies=[Depends(bind_integration_creds)]
+)
 
 _ENTITY_MODELS = {"campaign": Campaign, "ad_group": AdGroup, "ad": Ad}
 

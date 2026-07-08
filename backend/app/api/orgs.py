@@ -18,7 +18,9 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..db import get_db
-from ..deps import require_admin, require_team
+from ..deps import is_superadmin, require_admin, require_owner, require_team
+from ..ratelimit import rate_limit
+from ..services import auth_email, entitlements
 from ..models.core import (
     ROLE_ADMIN,
     ROLE_MEMBER,
@@ -31,6 +33,7 @@ from ..schemas import (
     OrgSignupRequest,
     QualifiedLeadCriteriaIn,
     TeamMemberCreate,
+    TeamMemberUpdate,
     TokenResponse,
     UserOut,
 )
@@ -38,9 +41,12 @@ from ..security import create_access_token, hash_password
 
 router = APIRouter(prefix="/api/orgs", tags=["orgs"])
 
+# Anti-abuse brake on open signup: 10 new organizations per hour per IP.
+_signup_limit = rate_limit("signup", limit=10, window_seconds=3600)
+
 
 @router.post("/signup", response_model=TokenResponse, status_code=201)
-def signup(body: OrgSignupRequest, db: Session = Depends(get_db)):
+def signup(body: OrgSignupRequest, db: Session = Depends(get_db), _: None = _signup_limit):
     """Public: create an Organization and its first user (the Owner), and
     log them in. This inserts only into the new tenant — it can neither read
     nor touch any other Organization's rows."""
@@ -64,6 +70,11 @@ def signup(body: OrgSignupRequest, db: Session = Depends(get_db)):
     db.add(owner)
     db.commit()
 
+    # Fire off the "confirm your email" message (delivered if SMTP is
+    # configured, otherwise recorded in email_log).
+    auth_email.send_verification_email(db, org, owner)
+    db.commit()
+
     token = create_access_token(owner.id, owner.role, org.id, None)
     return TokenResponse(
         access_token=token,
@@ -72,6 +83,7 @@ def signup(body: OrgSignupRequest, db: Session = Depends(get_db)):
         organization_name=org.name,
         client_id=None,
         full_name=owner.full_name,
+        is_superadmin=is_superadmin(owner),
     )
 
 
@@ -132,6 +144,7 @@ def add_member(
         raise HTTPException(400, "Role must be admin or member")
     if body.role == ROLE_ADMIN and user.role != ROLE_OWNER:
         raise HTTPException(403, "Only the Owner can add admins")
+    entitlements.enforce_can_add_seat(db, db.get(Organization, user.organization_id))
     email = body.email.lower()
     if db.execute(select(User).where(User.email == email)).scalar_one_or_none():
         raise HTTPException(409, "A user with this email already exists")
@@ -144,4 +157,34 @@ def add_member(
     )
     db.add(member)
     db.commit()
+    return member
+
+
+@router.patch("/me/members/{member_id}", response_model=UserOut)
+def update_member(
+    member_id: str,
+    body: TeamMemberUpdate,
+    user: User = Depends(require_owner),
+    db: Session = Depends(get_db),
+):
+    """Owner-only: change a team member's role or activate/deactivate them.
+    Scoped to the Owner's own Organization; the Owner can't lock themselves
+    out or convert their own account through here."""
+    member = db.get(User, member_id)
+    if member is None or member.organization_id != user.organization_id:
+        raise HTTPException(404, "Member not found")
+    if member.id == user.id:
+        raise HTTPException(400, "You can't change your own membership here")
+    if member.role == ROLE_OWNER:
+        raise HTTPException(400, "The Owner account can't be modified here")
+
+    if body.role is not None:
+        if body.role not in (ROLE_ADMIN, ROLE_MEMBER):
+            raise HTTPException(400, "Role must be admin or member")
+        member.role = body.role
+    if body.is_active is not None:
+        member.is_active = body.is_active
+
+    db.commit()
+    db.refresh(member)
     return member

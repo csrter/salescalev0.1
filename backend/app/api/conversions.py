@@ -14,7 +14,13 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..db import get_db
-from ..deps import TenantScope, get_scope, require_admin, require_team
+from ..deps import (
+    TenantScope,
+    bind_integration_creds,
+    get_scope,
+    require_admin,
+    require_team,
+)
 from ..models.base import utcnow
 from ..models.conversions import (
     ConversionConfig,
@@ -42,7 +48,9 @@ from ..services import connections as conn_svc
 from ..services import google_conversions, meta_capi
 from ..services.conversion_dispatch import dispatch_conversion
 
-router = APIRouter(tags=["conversions"])
+router = APIRouter(
+    tags=["conversions"], dependencies=[Depends(bind_integration_creds)]
+)
 
 
 def _team_client_or_404(db: Session, user: User, client_id: str) -> Client:

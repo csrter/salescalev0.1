@@ -1,4 +1,9 @@
-version: '3.8'
+# Full hosted stack (backend API + web frontend). For a real deployment you'll
+# typically run these on managed services instead — see DEPLOYMENT.md — but this
+# brings up the same production images locally.
+#
+# Backend reads secrets from ./backend/.env (DATABASE_URL, JWT_SECRET,
+# TOKEN_ENCRYPTION_KEY, FRONTEND_ORIGIN, SUPERADMIN_EMAILS, platform keys).
 
 services:
   backend:
@@ -6,13 +11,18 @@ services:
     ports:
       - "8000:8000"
     env_file:
-      - .env
-    volumes:
-      - ./backend:/app
+      - ./backend/.env
+    restart: unless-stopped
 
   frontend:
-    build: ./frontend
+    build:
+      context: ./frontend
+      args:
+        # Where the browser reaches the API. Match the backend's public URL in
+        # a real deploy; for this local stack the API is published on :8000.
+        VITE_API_URL: "http://localhost:8000"
     ports:
       - "8080:80"
-    volumes:
-      - ./frontend:/usr/share/nginx/html
+    depends_on:
+      - backend
+    restart: unless-stopped

@@ -1,8 +1,18 @@
-# Use a lightweight Nginx image
+# Salescale web frontend — production image.
+# Stage 1 builds the Vite app (baking in the API URL); stage 2 serves the
+# static output with nginx.
+
+FROM node:22-alpine AS build
+WORKDIR /app
+COPY package*.json ./
+RUN npm ci
+COPY . .
+# The hosted backend URL, baked in at build time (see src/api.ts VITE_API_URL).
+ARG VITE_API_URL
+ENV VITE_API_URL=$VITE_API_URL
+RUN npm run build
+
 FROM nginx:alpine
-
-# Copy the static content to the Nginx web server directory
-COPY . /usr/share/nginx/html
-
-# Expose port 80 for the web server
+COPY nginx.conf /etc/nginx/conf.d/default.conf
+COPY --from=build /app/dist /usr/share/nginx/html
 EXPOSE 80

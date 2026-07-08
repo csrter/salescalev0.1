@@ -1,20 +1,28 @@
-# Use an official Python runtime as a parent image
+# Salescale backend — production image.
+# Runs the FastAPI app under uvicorn. Schema migrations run automatically on
+# startup (alembic upgrade head), so a fresh Postgres/Supabase database is
+# brought fully up to date on first boot.
 FROM python:3.11-slim
 
-# Set the working directory in the container
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1
+
 WORKDIR /app
 
-# Copy the dependencies file to the working directory
+# Install deps first for better layer caching. Upgrade pip/setuptools first —
+# the base image's setuptools has known (build-time) CVEs.
 COPY requirements.txt .
+RUN pip install --upgrade pip setuptools && pip install -r requirements.txt
 
-# Install any needed packages specified in requirements.txt
-RUN pip install --no-cache-dir -r requirements.txt
-
-# Copy the rest of the backend application code
+# App code (see .dockerignore for exclusions: venv, .env, dist, tests…).
 COPY . .
 
-# Expose the port the app runs on
-EXPOSE 8000
+# Run as a non-root user.
+RUN useradd --create-home --uid 10001 appuser
+USER appuser
 
-# Define the command to run the application
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Hosts commonly inject $PORT; default to 8000 locally.
+ENV PORT=8000
+EXPOSE 8000
+CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT}"]

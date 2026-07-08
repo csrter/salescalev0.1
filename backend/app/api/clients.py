@@ -6,8 +6,10 @@ from sqlalchemy.orm import Session
 
 from ..db import get_db
 from ..deps import TenantScope, get_scope, require_admin
-from ..models.core import Client, PlatformConnection, User
+from ..models.core import Client, Organization, PlatformConnection, User
 from ..models.crm import LeadFormConfig
+from ..pagination import Page, paginator
+from ..services import entitlements
 from ..schemas import (
     ClientCreate,
     ClientOutPublic,
@@ -32,9 +34,17 @@ def _serialize_client(client: Client, scope: TenantScope):
 
 @router.get("")
 def list_clients(
-    scope: TenantScope = Depends(get_scope), db: Session = Depends(get_db)
+    scope: TenantScope = Depends(get_scope),
+    db: Session = Depends(get_db),
+    page: Page = paginator(default=100, maximum=500),
 ):
-    stmt = select(Client).where(Client.organization_id == scope.organization_id)
+    stmt = (
+        select(Client)
+        .where(Client.organization_id == scope.organization_id)
+        .order_by(Client.created_at)
+        .limit(page.limit)
+        .offset(page.offset)
+    )
     if not scope.is_team:
         stmt = stmt.where(Client.id == scope.client_id)
     clients = db.execute(stmt).scalars().all()
@@ -68,6 +78,8 @@ def create_client(
     user: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
+    org = db.get(Organization, user.organization_id)
+    entitlements.enforce_can_add_client(db, org)
     client = Client(
         organization_id=user.organization_id,
         name=body.name,

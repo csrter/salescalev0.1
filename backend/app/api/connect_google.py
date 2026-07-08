@@ -9,7 +9,7 @@ from ..db import get_db
 from ..deps import require_admin
 from ..models.core import AdAccount, Client, PLATFORM_GOOGLE, User
 from ..security import create_state_token, decode_state_token
-from ..services import connections, google_ads_api
+from ..services import connections, google_ads_api, integration_creds
 
 router = APIRouter(prefix="/api/connect/google", tags=["connect"])
 
@@ -20,9 +20,16 @@ def start_google_oauth(
     user: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
+    # Client ownership first (404 for cross-tenant, before leaking config state).
     client = db.get(Client, client_id)
     if client is None or client.organization_id != user.organization_id:
         raise HTTPException(404, "Unknown client")
+    creds = integration_creds.resolve_google(db, user.organization_id)
+    if not creds.configured:
+        raise HTTPException(
+            503, "Google isn't connected — add your Google Ads credentials in Integrations"
+        )
+    integration_creds.bind(db, user.organization_id)
     state = create_state_token("google_oauth", user.organization_id, client_id)
     return {"url": google_ads_api.build_oauth_url(state)}
 
@@ -39,6 +46,7 @@ def google_oauth_callback(
     if client is None or client.organization_id != organization_id:
         raise HTTPException(400, "OAuth state does not match a known tenant")
 
+    integration_creds.bind(db, organization_id)  # use this org's app for exchange + calls
     tokens = google_ads_api.exchange_code_for_tokens(code)
     refresh_token = tokens.get("refresh_token")
     if not refresh_token:

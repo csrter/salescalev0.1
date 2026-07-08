@@ -35,6 +35,13 @@ CONN_ACTIVE = "active"
 CONN_DISCONNECTED = "disconnected"  # client revoked or token invalid
 CONN_ERROR = "error"
 
+# Organization lifecycle (managed by the platform super-admin).
+ORG_ACTIVE = "active"
+ORG_SUSPENDED = "suspended"  # blocks login for all of the org's users
+# Subscription plans. Informational for now — no payment processor is wired up
+# yet (Phase 8), so the super-admin sets these manually.
+ORG_PLANS = ("starter", "pro", "agency")
+
 
 class Organization(Base):
     """The root tenant entity. Every other tenant-owned table carries an
@@ -45,6 +52,20 @@ class Organization(Base):
 
     id: Mapped[str] = id_column()
     name: Mapped[str] = mapped_column(String(200), nullable=False)
+    # Platform-managed lifecycle + subscription (set by the super-admin).
+    status: Mapped[str] = mapped_column(
+        String(20), default=ORG_ACTIVE, nullable=False
+    )
+    plan: Mapped[str] = mapped_column(String(20), default="starter", nullable=False)
+    suspended_at: Mapped[Optional[dt.datetime]] = mapped_column(
+        DateTime(timezone=True)
+    )
+    # Phase 8 — Stripe subscription linkage. Populated by the billing webhook.
+    stripe_customer_id: Mapped[Optional[str]] = mapped_column(
+        String(64), unique=True, index=True
+    )
+    stripe_subscription_id: Mapped[Optional[str]] = mapped_column(String(64))
+    subscription_status: Mapped[Optional[str]] = mapped_column(String(32))
     # Phase 6: the Organization's own qualified-lead definition — a structured
     # checklist (list of {"key", "label"} dicts), not free text. None/empty
     # means the Organization uses a simple qualified yes/no with no checklist.
@@ -118,6 +139,9 @@ class User(Base):
     # Required when role == client; identifies the one client they can see.
     client_id: Mapped[Optional[str]] = mapped_column(ForeignKey("clients.id"))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    email_verified: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False
+    )
     created_at: Mapped[dt.datetime] = created_at_column()
 
 

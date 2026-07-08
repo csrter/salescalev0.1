@@ -531,7 +531,7 @@ def list_tasks(
         stmt = stmt.where(CrmTask.contact_id == contact_id)
     if open_only:
         stmt = stmt.where(CrmTask.completed_at.is_(None))
-    return db.execute(stmt).scalars().all()
+    return db.execute(stmt.limit(500)).scalars().all()
 
 
 @router.post("/tasks", status_code=201, response_model=CrmTaskOut)

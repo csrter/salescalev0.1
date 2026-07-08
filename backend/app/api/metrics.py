@@ -16,12 +16,14 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..db import get_db
-from ..deps import TenantScope, get_scope, require_team
+from ..deps import TenantScope, bind_integration_creds, get_scope, require_team
 from ..models.attribution import LandingEvent
 from ..models.core import Client, User
 from ..services import insights_sync, metrics, utm
 
-router = APIRouter(prefix="/api", tags=["metrics"])
+router = APIRouter(
+    prefix="/api", tags=["metrics"], dependencies=[Depends(bind_integration_creds)]
+)
 
 
 def _client_for(db: Session, scope: TenantScope, client_id: str) -> Client:

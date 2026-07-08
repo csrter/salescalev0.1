@@ -9,6 +9,23 @@ class LoginRequest(BaseModel):
     password: str
 
 
+class OkResponse(BaseModel):
+    ok: bool = True
+
+
+class VerifyEmailRequest(BaseModel):
+    token: str
+
+
+class ForgotPasswordRequest(BaseModel):
+    email: EmailStr
+
+
+class ResetPasswordRequest(BaseModel):
+    token: str
+    new_password: str = Field(min_length=8)
+
+
 class TokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
@@ -17,6 +34,10 @@ class TokenResponse(BaseModel):
     organization_name: str
     client_id: Optional[str] = None
     full_name: str
+    # Platform-operator flag (derived from the SUPERADMIN_EMAILS allowlist).
+    # Tells the frontend whether to surface the cross-tenant admin console.
+    is_superadmin: bool = False
+    email_verified: bool = False
 
 
 class OrgSignupRequest(BaseModel):
@@ -44,6 +65,13 @@ class TeamMemberCreate(BaseModel):
     role: str  # admin | member (owner is only created via signup)
 
 
+class TeamMemberUpdate(BaseModel):
+    """Owner-only edits to an existing team member."""
+
+    role: Optional[str] = None  # admin | member
+    is_active: Optional[bool] = None
+
+
 class UserOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -54,6 +82,72 @@ class UserOut(BaseModel):
     client_id: Optional[str] = None
     is_active: bool
     created_at: dt.datetime
+
+
+# --- Platform super-admin (cross-tenant) response models ---
+
+
+class AdminStats(BaseModel):
+    organizations: int
+    users: int
+    clients: int
+    active_connections: int
+    signups_last_30d: int
+
+
+class AdminOrgRow(BaseModel):
+    id: str
+    name: str
+    created_at: dt.datetime
+    status: str
+    plan: str
+    user_count: int
+    client_count: int
+    connection_count: int
+    contact_count: int
+
+
+class AdminOrgDetail(BaseModel):
+    id: str
+    name: str
+    created_at: dt.datetime
+    status: str
+    plan: str
+    users: List[UserOut]
+    clients: List[Dict[str, Any]]
+
+
+class AdminOrgUpdate(BaseModel):
+    status: Optional[str] = None  # active | suspended
+    plan: Optional[str] = None  # starter | pro | agency
+
+
+class PasswordResetResult(BaseModel):
+    user_id: str
+    email: str
+    temporary_password: str
+
+
+class AdminSignupPoint(BaseModel):
+    date: str  # YYYY-MM-DD
+    count: int
+
+
+# --- Billing (Stripe) ---
+
+
+class CheckoutRequest(BaseModel):
+    plan: str  # pro | agency
+
+
+class CheckoutSessionOut(BaseModel):
+    url: str
+
+
+class SubscriptionOut(BaseModel):
+    plan: str
+    status: Optional[str] = None
+    billing_enabled: bool
 
 
 class ClientCreate(BaseModel):

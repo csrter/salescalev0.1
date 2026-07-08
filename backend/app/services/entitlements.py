@@ -12,8 +12,58 @@ call sites. Until Phase 8 exists:
   applied to every Organization.
 """
 
+from fastapi import HTTPException, status
+from sqlalchemy import func, select
+from sqlalchemy.orm import Session
+
 from ..config import get_settings
-from ..models.core import Organization
+from ..models.core import TEAM_ROLES, Client, Organization, User
+
+# Subscription tier limits, enforced server-side (not just hidden in the UI).
+# `None` means unlimited. Kept generous on Starter deliberately; tune against
+# real cost once billing is live.
+TIER_LIMITS: dict[str, dict[str, int | None]] = {
+    "starter": {"clients": 5, "seats": 5},
+    "pro": {"clients": 25, "seats": 15},
+    "agency": {"clients": None, "seats": None},
+}
+
+
+def _limits(org: Organization) -> dict[str, int | None]:
+    return TIER_LIMITS.get(org.plan, TIER_LIMITS["starter"])
+
+
+def enforce_can_add_client(db: Session, org: Organization) -> None:
+    """402 when the org is at its plan's client limit."""
+    cap = _limits(org)["clients"]
+    if cap is None:
+        return
+    count = db.execute(
+        select(func.count()).select_from(Client).where(Client.organization_id == org.id)
+    ).scalar_one()
+    if count >= cap:
+        raise HTTPException(
+            status.HTTP_402_PAYMENT_REQUIRED,
+            f"Your {org.plan} plan allows {cap} clients. Upgrade to add more.",
+        )
+
+
+def enforce_can_add_seat(db: Session, org: Organization) -> None:
+    """402 when the org is at its plan's team-seat limit (client-role logins
+    don't count as seats)."""
+    cap = _limits(org)["seats"]
+    if cap is None:
+        return
+    count = db.execute(
+        select(func.count())
+        .select_from(User)
+        .where(User.organization_id == org.id, User.role.in_(TEAM_ROLES))
+    ).scalar_one()
+    if count >= cap:
+        raise HTTPException(
+            status.HTTP_402_PAYMENT_REQUIRED,
+            f"Your {org.plan} plan allows {cap} team seats. Upgrade to add more.",
+        )
 
 
 def can_use_white_labeling(org: Organization) -> bool:

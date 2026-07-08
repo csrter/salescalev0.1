@@ -1,10 +1,21 @@
+import logging
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s %(message)s",
+)
+# Quiet down noisy startup chatter from tooling.
+logging.getLogger("alembic.runtime.plugins").setLevel(logging.WARNING)
+
 from .api import (
+    admin,
     ai,
     attribution,
     auth,
+    billing,
     branding,
     browser,
     clients,
@@ -13,27 +24,59 @@ from .api import (
     conversions,
     crm,
     dashboard,
+    integrations,
     lead_webhooks,
     leads,
     manage,
     metrics,
     orgs,
+    social_auth,
 )
 from .config import get_settings
-from .db import Base, engine
+from .migrations import upgrade_to_head
+
+_settings = get_settings()
+
+# Error tracking — a no-op until a Sentry DSN is configured. Imported lazily so
+# sentry-sdk is only needed where it's actually turned on (the hosted deploy).
+if _settings.sentry_dsn:
+    import sentry_sdk
+
+    sentry_sdk.init(
+        dsn=_settings.sentry_dsn,
+        environment=_settings.sentry_environment,
+        traces_sample_rate=_settings.sentry_traces_sample_rate,
+    )
 
 app = FastAPI(title="Salescale")
 
+# Loud, actionable warning rather than a silent insecure default in prod.
+if _settings.jwt_secret == "dev-only-secret-change-me":
+    logging.getLogger("salescale").warning(
+        "JWT_SECRET is the built-in dev default — sessions are forgeable. "
+        "Set a strong JWT_SECRET before any non-local deployment."
+    )
+
+# Per-request access logging is provided by uvicorn's own access logger
+# (`GET /path -> 200`), so we don't add a duplicate middleware. Sentry (above)
+# captures exceptions with request context.
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[get_settings().frontend_origin],
-    allow_credentials=True,
+    allow_origins=["*"] if _settings.desktop_mode else _settings.frontend_origins(),
+    # Bearer-token auth carries no cookies, so wildcard origins are safe; the
+    # two flags are also mutually exclusive under the CORS spec.
+    allow_credentials=not _settings.desktop_mode,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 app.include_router(auth.router)
+app.include_router(social_auth.router)
 app.include_router(orgs.router)
+app.include_router(admin.router)
+app.include_router(billing.router)
+app.include_router(integrations.router)
 app.include_router(clients.router)
 app.include_router(connect_meta.router)
 app.include_router(connect_google.router)
@@ -56,6 +99,7 @@ def health():
 
 
 @app.on_event("startup")
-def _create_tables():
-    # Dev convenience; production schema changes go through Alembic.
-    Base.metadata.create_all(engine)
+def _migrate():
+    # Bring any database (fresh or existing) up to the current schema via
+    # Alembic — the single source of truth for schema, in dev and prod alike.
+    upgrade_to_head()

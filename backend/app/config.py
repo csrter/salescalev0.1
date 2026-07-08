@@ -28,7 +28,44 @@ class Settings(BaseSettings):
     google_login_customer_id: str = ""
     google_redirect_uri: str = "http://localhost:8000/api/connect/google/callback"
 
+    # Web frontend origin(s) allowed by CORS. Comma-separated for multiple
+    # (e.g. a production domain plus a preview/staging domain). Ignored when
+    # DESKTOP_MODE=1 (the Electron UI is file:// and uses a wildcard instead).
     frontend_origin: str = "http://localhost:5173"
+
+    def frontend_origins(self) -> list[str]:
+        return [o.strip() for o in self.frontend_origin.split(",") if o.strip()]
+
+    # Rate limiting on public endpoints (signup/login). Disabled in the test
+    # suite; keep on in every real environment.
+    rate_limit_enabled: bool = True
+
+    # When true, users must verify their email before they can log in. Off by
+    # default so a fresh deploy works before email delivery is wired up.
+    require_email_verification: bool = False
+
+    # Observability. Error tracking is off until a Sentry DSN is provided.
+    sentry_dsn: str = ""
+    sentry_environment: str = "production"
+    sentry_traces_sample_rate: float = 0.0
+
+    # Desktop (Electron) mode: the UI is served from file:// so its Origin is
+    # "null" rather than a fixed http origin. When true, CORS allows any origin
+    # (safe here because auth is Bearer-token only — no cookies to protect).
+    desktop_mode: bool = False
+
+    # Platform super-admins (Salescale operators). Comma-separated emails.
+    # Super-admin is derived from this allowlist, never granted via the API or
+    # signup — the only way to become one is to be listed here (env-controlled).
+    # These users can read across ALL organizations via /api/admin/*.
+    superadmin_emails: str = ""
+
+    def superadmin_email_set(self) -> set[str]:
+        return {
+            e.strip().lower()
+            for e in self.superadmin_emails.split(",")
+            if e.strip()
+        }
 
     # Phase 9 — AI insights (Claude API, server-side only; never expose the
     # key to the frontend).
@@ -47,6 +84,55 @@ class Settings(BaseSettings):
     smtp_port: int = 587
     smtp_username: str = ""
     smtp_password: str = ""
+
+    # Transactional email via Resend (preferred). When set, it's used instead
+    # of SMTP. The sender address (email_default_from_address, or a branded
+    # per-org address) must be on a domain you've verified in Resend.
+    resend_api_key: str = ""
+
+    # Phase 8 — Stripe subscription billing. Unset = billing disabled (the
+    # /api/billing endpoints return 503). Each plan maps to a Stripe Price.
+    stripe_secret_key: str = ""
+    stripe_webhook_secret: str = ""
+    stripe_price_pro: str = ""
+    stripe_price_agency: str = ""
+    # Public URL of the web app — Checkout success/cancel + portal return + the
+    # OAuth social-login return all land here.
+    app_base_url: str = "http://localhost:5173"
+
+    # Public URL of THIS backend — used to build OAuth redirect_uri values that
+    # must match what's registered with Google/Meta.
+    api_base_url: str = "http://localhost:8000"
+
+    # Social login. Reuses the ad OAuth apps by default; override per-provider
+    # if you register separate apps for sign-in.
+    google_login_client_id: str = ""
+    google_login_client_secret: str = ""
+    meta_login_app_id: str = ""
+    meta_login_app_secret: str = ""
+
+    def google_login_creds(self) -> tuple[str, str]:
+        return (
+            self.google_login_client_id or self.google_client_id,
+            self.google_login_client_secret or self.google_client_secret,
+        )
+
+    def meta_login_creds(self) -> tuple[str, str]:
+        return (
+            self.meta_login_app_id or self.meta_app_id,
+            self.meta_login_app_secret or self.meta_app_secret,
+        )
+
+    def stripe_price_for_plan(self, plan: str) -> str:
+        return {"pro": self.stripe_price_pro, "agency": self.stripe_price_agency}.get(
+            plan, ""
+        )
+
+    def plan_for_stripe_price(self, price_id: str) -> str | None:
+        for plan in ("pro", "agency"):
+            if price_id and self.stripe_price_for_plan(plan) == price_id:
+                return plan
+        return None
 
 
 @lru_cache

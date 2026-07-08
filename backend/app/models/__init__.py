@@ -18,8 +18,10 @@ from .conversions import ConversionConfig, ConversionDispatch, ConversionEvent
 from .dashboard import DashboardLayout
 from .ai import AiUsage
 from .email import EmailLog
+from .integrations import IntegrationCredential
 
 __all__ = [
+    "IntegrationCredential",
     "Organization",
     "User",
     "Client",

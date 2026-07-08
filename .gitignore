@@ -22,4 +22,8 @@ frontend/dist/
 .DS_Store
 .idea/
 .vscode/
-\n# Supabase credentials\n.env
+
+# Build artifacts
+backend/build/
+backend/dist/
+electron-app/dist/

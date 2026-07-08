@@ -11,6 +11,8 @@ export interface Session {
   organization_name: string;
   client_id: string | null;
   full_name: string;
+  is_superadmin?: boolean;
+  email_verified?: boolean;
 }
 
 export function getSession(): Session | null {
@@ -33,7 +35,10 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
       ...init?.headers,
     },
   });
-  if (resp.status === 401) {
+  // Only treat a 401 as an expired session when we actually sent one. A 401
+  // on an unauthenticated call (e.g. wrong login credentials) must surface as
+  // an error the form can show — not silently reload the page.
+  if (resp.status === 401 && session) {
     setSession(null);
     window.location.reload();
     throw new Error("Session expired");
@@ -50,6 +55,18 @@ export async function login(email: string, password: string): Promise<Session> {
     method: "POST",
     body: JSON.stringify({ email, password }),
   });
+  setSession(s);
+  return s;
+}
+
+export const oauthStart = (provider: "google" | "meta") =>
+  api<{ url: string }>(`/api/auth/oauth/${provider}/start`);
+
+/** After a social-login redirect (token in the URL fragment), fetch the full
+ * session for that token and persist it. */
+export async function sessionFromToken(token: string): Promise<Session> {
+  setSession({ access_token: token } as Session);
+  const s = await api<Session>("/api/auth/me");
   setSession(s);
   return s;
 }
@@ -79,6 +96,84 @@ export interface Client {
   status: string;
   internal_notes?: string | null;
 }
+
+export const createClient = (body: { name: string; internal_notes?: string }) =>
+  api<Client>("/api/clients", { method: "POST", body: JSON.stringify(body) });
+
+// --- Account recovery / verification (no auth required) ---
+
+export const verifyEmail = (token: string) =>
+  api<{ ok: boolean }>("/api/auth/verify-email", {
+    method: "POST",
+    body: JSON.stringify({ token }),
+  });
+
+export const resendVerification = () =>
+  api<{ ok: boolean }>("/api/auth/resend-verification", { method: "POST" });
+
+export const forgotPassword = (email: string) =>
+  api<{ ok: boolean }>("/api/auth/forgot-password", {
+    method: "POST",
+    body: JSON.stringify({ email }),
+  });
+
+export const resetPassword = (token: string, newPassword: string) =>
+  api<{ ok: boolean }>("/api/auth/reset-password", {
+    method: "POST",
+    body: JSON.stringify({ token, new_password: newPassword }),
+  });
+
+// --- Billing ---
+
+export interface Subscription {
+  plan: OrgPlan;
+  status: string | null;
+  billing_enabled: boolean;
+}
+
+export const getSubscription = () =>
+  api<Subscription>("/api/billing/subscription");
+
+export const startCheckout = (plan: OrgPlan) =>
+  api<{ url: string }>("/api/billing/checkout", {
+    method: "POST",
+    body: JSON.stringify({ plan }),
+  });
+
+export const openBillingPortal = () =>
+  api<{ url: string }>("/api/billing/portal", { method: "POST" });
+
+// --- Per-org platform API credentials (bring-your-own app) ---
+
+export interface IntegrationStatus {
+  provider: "meta" | "google";
+  configured: boolean;
+  source: "organization" | "global" | "none";
+  public_id: string | null;
+}
+
+export const listIntegrations = () =>
+  api<IntegrationStatus[]>("/api/integrations");
+
+export const setMetaCreds = (body: { app_id: string; app_secret: string }) =>
+  api<IntegrationStatus>("/api/integrations/meta", {
+    method: "PUT",
+    body: JSON.stringify(body),
+  });
+
+export const setGoogleCreds = (body: {
+  client_id: string;
+  client_secret: string;
+  developer_token: string;
+  login_customer_id?: string;
+}) =>
+  api<IntegrationStatus>("/api/integrations/google", {
+    method: "PUT",
+    body: JSON.stringify(body),
+  });
+
+export const deleteIntegration = (provider: "meta" | "google") =>
+  api<IntegrationStatus>(`/api/integrations/${provider}`, { method: "DELETE" });
 
 export interface Connection {
   id: string;
@@ -234,3 +329,103 @@ export interface CreativeRow {
   body?: string | null;
   thumbnail_url?: string | null;
 }
+
+// --- Org admin console: team members ---
+
+export interface TeamMember {
+  id: string;
+  email: string;
+  full_name: string;
+  role: Role;
+  client_id: string | null;
+  is_active: boolean;
+  created_at: string;
+}
+
+export const listMembers = () => api<TeamMember[]>("/api/orgs/me/members");
+
+export const addMember = (body: {
+  email: string;
+  password: string;
+  full_name: string;
+  role: "admin" | "member";
+}) =>
+  api<TeamMember>("/api/orgs/me/members", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+
+export const updateMember = (
+  id: string,
+  body: { role?: "admin" | "member"; is_active?: boolean }
+) =>
+  api<TeamMember>(`/api/orgs/me/members/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify(body),
+  });
+
+// --- Platform super-admin (cross-tenant) ---
+
+export interface AdminStats {
+  organizations: number;
+  users: number;
+  clients: number;
+  active_connections: number;
+  signups_last_30d: number;
+}
+
+export type OrgStatus = "active" | "suspended";
+export type OrgPlan = "starter" | "pro" | "agency";
+export const ORG_PLANS: OrgPlan[] = ["starter", "pro", "agency"];
+
+export interface AdminOrgRow {
+  id: string;
+  name: string;
+  created_at: string;
+  status: OrgStatus;
+  plan: OrgPlan;
+  user_count: number;
+  client_count: number;
+  connection_count: number;
+  contact_count: number;
+}
+
+export interface AdminOrgDetail {
+  id: string;
+  name: string;
+  created_at: string;
+  status: OrgStatus;
+  plan: OrgPlan;
+  users: TeamMember[];
+  clients: { id: string; name: string; status: string }[];
+}
+
+export interface AdminSignupPoint {
+  date: string;
+  count: number;
+}
+
+export interface PasswordResetResult {
+  user_id: string;
+  email: string;
+  temporary_password: string;
+}
+
+export const adminStats = () => api<AdminStats>("/api/admin/stats");
+export const adminOrgs = () => api<AdminOrgRow[]>("/api/admin/organizations");
+export const adminOrg = (id: string) =>
+  api<AdminOrgDetail>(`/api/admin/organizations/${id}`);
+export const adminSignups = (days = 30) =>
+  api<AdminSignupPoint[]>(`/api/admin/signups?days=${days}`);
+export const updateOrg = (
+  id: string,
+  body: { status?: OrgStatus; plan?: OrgPlan }
+) =>
+  api<AdminOrgDetail>(`/api/admin/organizations/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify(body),
+  });
+export const resetUserPassword = (userId: string) =>
+  api<PasswordResetResult>(`/api/admin/users/${userId}/reset-password`, {
+    method: "POST",
+  });

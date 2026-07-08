@@ -9,7 +9,7 @@ from ..db import get_db
 from ..deps import require_admin
 from ..models.core import AdAccount, Client, PLATFORM_META, User
 from ..security import create_state_token, decode_state_token
-from ..services import connections, meta_api
+from ..services import connections, integration_creds, meta_api
 
 router = APIRouter(prefix="/api/connect/meta", tags=["connect"])
 
@@ -23,9 +23,16 @@ def start_meta_oauth(
     """Admin-only: begin OAuth for one client in the caller's Organization.
     The signed state token binds the eventual callback to this organization
     AND client so tokens can't land on the wrong tenant at either level."""
+    # Client ownership first (404 for cross-tenant, before leaking config state).
     client = db.get(Client, client_id)
     if client is None or client.organization_id != user.organization_id:
         raise HTTPException(404, "Unknown client")
+    creds = integration_creds.resolve_meta(db, user.organization_id)
+    if not creds.configured:
+        raise HTTPException(
+            503, "Meta isn't connected — add your Meta app credentials in Integrations"
+        )
+    integration_creds.bind(db, user.organization_id)  # so build_oauth_url uses them
     state = create_state_token("meta_oauth", user.organization_id, client_id)
     return {"url": meta_api.build_oauth_url(state)}
 
@@ -44,6 +51,7 @@ def meta_oauth_callback(
     if client is None or client.organization_id != organization_id:
         raise HTTPException(400, "OAuth state does not match a known tenant")
 
+    integration_creds.bind(db, organization_id)  # use this org's app for exchange
     token_data = meta_api.exchange_code_for_token(code)
     long_lived = meta_api.exchange_for_long_lived_token(token_data["access_token"])
     access_token = long_lived["access_token"]

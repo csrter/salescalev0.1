@@ -11,6 +11,7 @@ from urllib.parse import urlencode
 import httpx
 
 from ..config import get_settings
+from . import integration_creds
 
 GOOGLE_ADS_SCOPE = "https://www.googleapis.com/auth/adwords"
 AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
@@ -27,8 +28,9 @@ class GoogleApiError(Exception):
 
 def build_oauth_url(state: str) -> str:
     settings = get_settings()
+    creds = integration_creds.current_google()  # org's own client, or fallback
     params = {
-        "client_id": settings.google_client_id,
+        "client_id": creds.client_id,
         "redirect_uri": settings.google_redirect_uri,
         "response_type": "code",
         "scope": GOOGLE_ADS_SCOPE,
@@ -41,11 +43,12 @@ def build_oauth_url(state: str) -> str:
 
 def exchange_code_for_tokens(code: str) -> Dict[str, Any]:
     settings = get_settings()
+    creds = integration_creds.current_google()
     resp = httpx.post(
         TOKEN_URL,
         data={
-            "client_id": settings.google_client_id,
-            "client_secret": settings.google_client_secret,
+            "client_id": creds.client_id,
+            "client_secret": creds.client_secret,
             "redirect_uri": settings.google_redirect_uri,
             "grant_type": "authorization_code",
             "code": code,
@@ -61,16 +64,16 @@ def exchange_code_for_tokens(code: str) -> Dict[str, Any]:
 def _client(refresh_token: str):
     from google.ads.googleads.client import GoogleAdsClient
 
-    settings = get_settings()
+    creds = integration_creds.current_google()  # org's own developer token + client
     config = {
-        "developer_token": settings.google_developer_token,
-        "client_id": settings.google_client_id,
-        "client_secret": settings.google_client_secret,
+        "developer_token": creds.developer_token,
+        "client_id": creds.client_id,
+        "client_secret": creds.client_secret,
         "refresh_token": refresh_token,
         "use_proto_plus": True,
     }
-    if settings.google_login_customer_id:
-        config["login_customer_id"] = settings.google_login_customer_id
+    if creds.login_customer_id:
+        config["login_customer_id"] = creds.login_customer_id
     return GoogleAdsClient.load_from_dict(config)
 
 

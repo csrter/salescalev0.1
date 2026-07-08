@@ -1,0 +1,124 @@
+"""Subscription tier enforcement + Stripe webhook sync.
+
+Tier limits are enforced server-side (not just hidden in the UI). Stripe
+itself isn't configured in tests, so the webhook *handler* is exercised
+directly and the money-path endpoints must fail closed (503).
+"""
+import pytest
+
+from app.api.billing import apply_subscription_event
+from app.db import SessionLocal
+from app.models.core import Organization
+
+PW = "billing-pass-123"
+
+
+def _signup(api, org, email):
+    r = api.post(
+        "/api/orgs/signup",
+        json={"organization_name": org, "email": email, "password": PW, "full_name": "B"},
+    )
+    assert r.status_code == 201, r.text
+    return r.json()
+
+
+@pytest.fixture(scope="module")
+def biz(api):
+    b = _signup(api, "Billing Co", "billing@billingco.com")
+    return {"org_id": b["organization_id"], "headers": {"Authorization": f"Bearer {b['access_token']}"}}
+
+
+def test_starter_client_limit_enforced(api, biz):
+    h = biz["headers"]  # starter allows 5 clients; org starts with 0
+    for i in range(5):
+        assert api.post("/api/clients", headers=h, json={"name": f"C{i}"}).status_code == 201
+    r = api.post("/api/clients", headers=h, json={"name": "C6"})
+    assert r.status_code == 402
+    assert "upgrade" in r.json()["detail"].lower()
+
+
+def test_starter_seat_limit_enforced(api):
+    h = {"Authorization": f"Bearer {_signup(api, 'Seat Co', 'seat@seatco.com')['access_token']}"}
+    # owner is seat #1; starter allows 5 → 4 more members, then blocked
+    for i in range(4):
+        assert api.post(
+            "/api/orgs/me/members",
+            headers=h,
+            json={"email": f"m{i}@seatco.com", "password": "member-pass-1", "full_name": f"M{i}", "role": "member"},
+        ).status_code == 201
+    r = api.post(
+        "/api/orgs/me/members",
+        headers=h,
+        json={"email": "m5@seatco.com", "password": "member-pass-1", "full_name": "M5", "role": "member"},
+    )
+    assert r.status_code == 402
+
+
+def test_billing_endpoints_fail_closed_without_stripe(api, biz):
+    # STRIPE_SECRET_KEY is unset in tests → money-path endpoints 503.
+    assert api.post("/api/billing/checkout", headers=biz["headers"], json={"plan": "pro"}).status_code == 503
+    assert api.post("/api/billing/portal", headers=biz["headers"]).status_code == 503
+    # read-only status still works and reports billing disabled
+    sub = api.get("/api/billing/subscription", headers=biz["headers"])
+    assert sub.status_code == 200 and sub.json()["billing_enabled"] is False
+
+
+def test_agency_plan_lifts_client_limit(api, biz):
+    db = SessionLocal()
+    db.get(Organization, biz["org_id"]).plan = "agency"
+    db.commit()
+    db.close()
+    # the previously-blocked 6th client now succeeds (unlimited)
+    assert api.post("/api/clients", headers=biz["headers"], json={"name": "C6-agency"}).status_code == 201
+
+
+def test_webhook_checkout_completed_activates_plan(api):
+    org_id = _signup(api, "Hook Co", "hook@hookco.com")["organization_id"]
+    db = SessionLocal()
+    apply_subscription_event(
+        db,
+        {
+            "type": "checkout.session.completed",
+            "data": {
+                "object": {
+                    "metadata": {"organization_id": org_id, "plan": "pro"},
+                    "customer": "cus_test123",
+                    "subscription": "sub_test123",
+                }
+            },
+        },
+    )
+    db.close()
+    db2 = SessionLocal()
+    org = db2.get(Organization, org_id)
+    assert org.plan == "pro"
+    assert org.subscription_status == "active"
+    assert org.stripe_customer_id == "cus_test123"
+    db2.close()
+
+
+def test_webhook_subscription_deleted_downgrades_to_starter(api):
+    org_id = _signup(api, "Cancel Co", "cancel@cancelco.com")["organization_id"]
+    db = SessionLocal()
+    org = db.get(Organization, org_id)
+    org.plan = "pro"
+    org.stripe_customer_id = "cus_cancel1"
+    org.subscription_status = "active"
+    db.commit()
+    db.close()
+
+    db = SessionLocal()
+    apply_subscription_event(
+        db,
+        {
+            "type": "customer.subscription.deleted",
+            "data": {"object": {"customer": "cus_cancel1", "status": "canceled"}},
+        },
+    )
+    db.close()
+
+    db2 = SessionLocal()
+    org = db2.get(Organization, org_id)
+    assert org.plan == "starter"
+    assert org.subscription_status == "canceled"
+    db2.close()

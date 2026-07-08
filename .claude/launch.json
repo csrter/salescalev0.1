@@ -2,6 +2,12 @@
   "version": "0.0.1",
   "configurations": [
     {
+      "name": "salescale-frontend-preview",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": ["-m", "http.server", "4173", "--directory", "frontend/dist"],
+      "port": 4173
+    },
+    {
       "name": "backend",
       "runtimeExecutable": "backend/.venv/bin/uvicorn",
       "runtimeArgs": ["app.main:app", "--port", "8000", "--app-dir", "backend"],

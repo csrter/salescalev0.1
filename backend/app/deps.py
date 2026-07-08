@@ -5,6 +5,7 @@ from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session
 
+from .config import get_settings
 from .db import get_db
 from .models.core import ADMIN_ROLES, ROLE_CLIENT, ROLE_OWNER, TEAM_ROLES, User
 from .security import decode_access_token
@@ -48,6 +49,22 @@ def require_owner(user: User = Depends(get_current_user)) -> User:
     """Owner-only gate: team role changes (and billing, from Phase 8)."""
     if user.role != ROLE_OWNER:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Owner role required")
+    return user
+
+
+def is_superadmin(user: User) -> bool:
+    """Platform super-admin — a Salescale operator, not a tenant role. Derived
+    solely from the SUPERADMIN_EMAILS allowlist; it cannot be set via signup or
+    any API, so no request can escalate into it."""
+    return user.email.lower() in get_settings().superadmin_email_set()
+
+
+def require_superadmin(user: User = Depends(get_current_user)) -> User:
+    """Gate for the cross-tenant /api/admin surface. This is the ONE place that
+    deliberately reads across Organizations — every endpoint behind it is
+    platform-operator tooling, never reachable by a tenant user."""
+    if not is_superadmin(user):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Super-admin required")
     return user
 
 
@@ -103,3 +120,15 @@ class TenantScope:
 
 def get_scope(user: User = Depends(get_current_user)) -> TenantScope:
     return TenantScope(user)
+
+
+def bind_integration_creds(
+    user: User = Depends(get_current_user), db: Session = Depends(get_db)
+) -> None:
+    """Resolve this Organization's platform API credentials (its own, or the
+    operator's global fallback) into the request context, so the platform-API
+    services use the right ones. Applied to every router that talks to Meta or
+    Google."""
+    from .services import integration_creds
+
+    integration_creds.bind(db, user.organization_id)
