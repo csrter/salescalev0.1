@@ -13,6 +13,8 @@ export interface Session {
   full_name: string;
   is_superadmin?: boolean;
   email_verified?: boolean;
+  // Org requires 2FA and this user hasn't set it up — gate to enrollment.
+  mfa_setup_required?: boolean;
 }
 
 export function getSession(): Session | null {
@@ -110,6 +112,42 @@ export const smsMfaEnable = (code: string) =>
   api<MfaEnabled>("/api/mfa/sms/enable", { method: "POST", body: JSON.stringify({ code }) });
 export const disableMfa = (password: string) =>
   api<{ ok: boolean }>("/api/mfa/disable", { method: "POST", body: JSON.stringify({ password }) });
+
+// --- Active sessions / devices ---
+
+export interface SessionInfo {
+  id: string;
+  user_agent: string | null;
+  ip: string | null;
+  created_at: string;
+  last_seen_at: string;
+  current: boolean;
+}
+export const getSessions = () => api<SessionInfo[]>("/api/auth/sessions");
+export const revokeSession = (id: string) =>
+  api<{ ok: boolean }>(`/api/auth/sessions/${id}`, { method: "DELETE" });
+export const logoutEverywhere = () =>
+  api<{ ok: boolean }>("/api/auth/logout-all", { method: "POST" });
+
+// --- Organization (security policy) ---
+
+export interface Org {
+  id: string;
+  name: string;
+  require_mfa: boolean;
+  created_at: string;
+}
+export const getMyOrg = () => api<Org>("/api/orgs/me");
+export const setRequireMfa = (require_mfa: boolean) =>
+  api<Org>("/api/orgs/me/require-mfa", { method: "PUT", body: JSON.stringify({ require_mfa }) });
+
+/** Refresh the persisted session from /me (e.g. after enrolling 2FA clears the
+ * mfa_setup_required gate). */
+export async function refreshSession(): Promise<Session> {
+  const s = await api<Session>("/api/auth/me");
+  setSession(s);
+  return s;
+}
 
 export const oauthStart = (provider: "google" | "meta") =>
   api<{ url: string }>(`/api/auth/oauth/${provider}/start`);

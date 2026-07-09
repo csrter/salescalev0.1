@@ -6,16 +6,24 @@ import {
   emailMfaEnable,
   emailMfaSetup,
   getMfaStatus,
+  getMyOrg,
+  getSessions,
+  logoutEverywhere,
+  revokeSession,
+  setRequireMfa,
+  setSession,
   smsMfaEnable,
   smsMfaSetup,
   totpEnable,
   totpSetup,
   type MfaStatus,
+  type Session,
+  type SessionInfo,
 } from "./api";
 
 type Flow = "idle" | "totp" | "email" | "sms";
 
-export function TwoFactorSettings() {
+export function TwoFactorSettings({ session }: { session: Session }) {
   const [status, setStatus] = useState<MfaStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [flow, setFlow] = useState<Flow>("idle");
@@ -186,6 +194,114 @@ export function TwoFactorSettings() {
           </button>
         </div>
       )}
+
+      <SessionsPanel />
+      <OrgPolicyPanel session={session} />
     </div>
+  );
+}
+
+function _device(ua: string | null): string {
+  if (!ua) return "Unknown device";
+  const os = /Mac/.test(ua) ? "macOS" : /Windows/.test(ua) ? "Windows"
+    : /Android/.test(ua) ? "Android" : /iPhone|iPad|iOS/.test(ua) ? "iOS"
+    : /Linux/.test(ua) ? "Linux" : "";
+  const br = /Edg/.test(ua) ? "Edge" : /Chrome/.test(ua) ? "Chrome"
+    : /Firefox/.test(ua) ? "Firefox" : /Safari/.test(ua) ? "Safari" : "Browser";
+  return [br, os].filter(Boolean).join(" · ");
+}
+
+function SessionsPanel() {
+  const [list, setList] = useState<SessionInfo[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const load = () => getSessions().then(setList).catch((e) => setError(e.message));
+  useEffect(() => {
+    load();
+  }, []);
+  const revoke = async (id: string) => {
+    setError(null);
+    try {
+      await revokeSession(id);
+      load();
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  };
+  const logoutAll = async () => {
+    try {
+      await logoutEverywhere();
+      // This session is now revoked too — drop it and return to login.
+      setSession(null);
+      window.location.reload();
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  };
+  return (
+    <section className="mfa-block">
+      <h2>Active sessions</h2>
+      <p className="muted">Devices currently signed in to your account.</p>
+      {error && <p className="error">{error}</p>}
+      <ul className="sessions">
+        {(list ?? []).map((s) => (
+          <li key={s.id} className="card session-row">
+            <div>
+              <strong>{_device(s.user_agent)}</strong>
+              {s.current && <span className="badge current">This device</span>}
+              <div className="muted">
+                {s.ip ?? "—"} · last active {new Date(s.last_seen_at).toLocaleString()}
+              </div>
+            </div>
+            {!s.current && (
+              <button className="link danger" onClick={() => revoke(s.id)}>
+                Revoke
+              </button>
+            )}
+          </li>
+        ))}
+      </ul>
+      <button className="danger" onClick={logoutAll}>
+        Log out everywhere
+      </button>
+    </section>
+  );
+}
+
+function OrgPolicyPanel({ session }: { session: Session }) {
+  const [required, setRequired] = useState<boolean | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const isOwner = session.role === "owner";
+  useEffect(() => {
+    getMyOrg()
+      .then((o) => setRequired(o.require_mfa))
+      .catch((e) => setError(e.message));
+  }, []);
+  if (!isOwner || required === null) return null;
+  const toggle = async () => {
+    setError(null);
+    try {
+      const o = await setRequireMfa(!required);
+      setRequired(o.require_mfa);
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  };
+  return (
+    <section className="mfa-block">
+      <h2>Organization policy</h2>
+      <div className="card policy-row">
+        <div>
+          <strong>Require two-factor for all team members</strong>
+          <div className="muted">
+            When on, team members without 2FA must set it up before they can use
+            the app.
+          </div>
+        </div>
+        <button className={required ? "danger" : "primary"} onClick={toggle}>
+          {required ? "Turn off" : "Turn on"}
+        </button>
+      </div>
+      {error && <p className="error">{error}</p>}
+    </section>
   );
 }

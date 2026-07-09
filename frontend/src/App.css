@@ -1997,3 +1997,21 @@ p.notice {
   font-size: 0.95rem;
   letter-spacing: 0.03em;
 }
+
+/* --- sessions + policy + 2FA gate --- */
+.mfa-block { margin-top: 2rem; }
+.mfa-block h2 { margin-bottom: 0.25rem; }
+.sessions { list-style: none; padding: 0; margin: 0.8rem 0; display: flex; flex-direction: column; gap: 0.6rem; }
+.session-row, .policy-row {
+  flex-direction: row; align-items: center; justify-content: space-between; gap: 1rem;
+}
+.session-row strong, .policy-row strong { display: inline-flex; align-items: center; gap: 0.5rem; }
+.badge.current {
+  font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.04em;
+  background: var(--ok-soft); color: var(--ok); padding: 0.1rem 0.45rem; border-radius: 999px;
+}
+button.link.danger { color: var(--danger); background: none; border: none; }
+.gate-actions { display: flex; align-items: center; gap: 1rem; margin-top: 1.5rem; }
+.mfa-gate { min-height: 100vh; display: flex; align-items: flex-start; justify-content: center; padding: 3rem 1.5rem; }
+.mfa-gate-inner { width: 100%; max-width: 720px; }
+.mfa-gate-inner > h1 { margin: 1.2rem 0 0.3rem; }

@@ -9,6 +9,7 @@ import {
   isMfaChallenge,
   login,
   loginMfa,
+  refreshSession,
   setSession,
   signup,
   type LoginChallenge,
@@ -157,6 +158,16 @@ export default function App() {
       });
   }, []);
 
+  // On load, refresh the session from /me so server-side changes (org 2FA
+  // policy, role) and token validity are reflected. A revoked/expired token
+  // 401s inside api(), which clears the session and reloads.
+  useEffect(() => {
+    if (!getSession() || window.location.hash.includes("access_token=")) return;
+    refreshSession()
+      .then(setSess)
+      .catch(() => {});
+  }, []);
+
   if (oauthBusy)
     return (
       <div className="auth-center">
@@ -190,6 +201,23 @@ export default function App() {
     );
 
   if (!session) return <Login onLogin={setSess} />;
+
+  // Org policy: this user must enable 2FA before using the app.
+  if (session.mfa_setup_required) {
+    return (
+      <MfaGate
+        session={session}
+        onContinue={async () => {
+          const s = await refreshSession();
+          setSess(s);
+        }}
+        onLogout={() => {
+          setSession(null);
+          setSess(null);
+        }}
+      />
+    );
+  }
   const isTeam = TEAM_ROLES.includes(session.role);
   const isAdmin = ADMIN_ROLES.includes(session.role);
   const isOwner = session.role === "owner";
@@ -266,7 +294,7 @@ export default function App() {
             {tab === "team" && isAdmin && <TeamAdmin session={session} />}
             {tab === "integrations" && isAdmin && <Integrations />}
             {tab === "billing" && isOwner && <Billing session={session} />}
-            {tab === "security" && <TwoFactorSettings />}
+            {tab === "security" && <TwoFactorSettings session={session} />}
             {tab === "admin" && session.is_superadmin && <SuperAdmin />}
           </div>
         </div>
@@ -294,6 +322,37 @@ function VerifyBanner() {
       >
         {sent ? "Sent ✓" : "Resend email"}
       </button>
+    </div>
+  );
+}
+
+function MfaGate({
+  session,
+  onContinue,
+  onLogout,
+}: {
+  session: Session;
+  onContinue: () => void;
+  onLogout: () => void;
+}) {
+  return (
+    <div className="mfa-gate">
+      <div className="mfa-gate-inner">
+        <Logo />
+        <h1>Two-factor authentication required</h1>
+        <p className="muted">
+          Your organization requires 2FA. Set it up below, then continue.
+        </p>
+        <TwoFactorSettings session={session} />
+        <div className="gate-actions">
+          <button className="primary" onClick={onContinue}>
+            I've set it up — continue
+          </button>
+          <button type="button" className="link" onClick={onLogout}>
+            Log out
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
