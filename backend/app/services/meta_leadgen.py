@@ -46,6 +46,10 @@ def verify_signature(app_secret: str, raw_body: bytes, header: Optional[str]) ->
 def fetch_lead(access_token: str, leadgen_id: str) -> Dict[str, Any]:
     """Pull the submitted answers for one lead. Monkeypatched in tests; in
     production this needs the connection's token to carry leads_retrieval."""
+    # leadgen_id comes from the (signature-verified) webhook body; require it to
+    # be numeric so it can't manipulate the Graph URL path/query.
+    if not str(leadgen_id).isdigit():
+        raise ValueError("Invalid leadgen_id")
     return _get(
         f"{_base()}/{leadgen_id}",
         {"access_token": access_token, "fields": LEAD_FIELDS},

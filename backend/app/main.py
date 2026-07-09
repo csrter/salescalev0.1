@@ -91,6 +91,20 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Reject oversized bodies up-front (defense-in-depth vs. huge-payload DoS on the
+# public capture endpoints + any JSON-dict field). Generous for this API.
+_MAX_BODY_BYTES = 512 * 1024
+
+
+@app.middleware("http")
+async def _limit_body_size(request, call_next):
+    from fastapi.responses import JSONResponse
+
+    cl = request.headers.get("content-length")
+    if cl and cl.isdigit() and int(cl) > _MAX_BODY_BYTES:
+        return JSONResponse({"detail": "Request body too large"}, status_code=413)
+    return await call_next(request)
+
 # Routers left OPEN so a 2FA-gated user can still authenticate, enroll, and
 # manage their session/policy: auth, social_auth, mfa, orgs, admin (super-admin
 # only), platforms (discovery), and the public ingest/branding routers.

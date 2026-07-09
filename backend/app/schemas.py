@@ -1,7 +1,14 @@
 import datetime as dt
 from typing import Annotated, Any, Dict, List, Optional
 
-from pydantic import AfterValidator, BaseModel, ConfigDict, EmailStr, Field
+from pydantic import (
+    AfterValidator,
+    BaseModel,
+    ConfigDict,
+    EmailStr,
+    Field,
+    field_validator,
+)
 
 from . import platforms as platform_registry
 
@@ -226,8 +233,8 @@ class SubscriptionOut(BaseModel):
 
 
 class ClientCreate(BaseModel):
-    name: str
-    internal_notes: Optional[str] = None
+    name: str = Field(min_length=1, max_length=200)
+    internal_notes: Optional[str] = Field(default=None, max_length=10000)
 
 
 # Two serializations of Client, chosen by caller role. ClientOutPublic is the
@@ -350,22 +357,31 @@ class GuaranteeConfigIn(BaseModel):
 
 
 class LandingEventIn(BaseModel):
-    client_id: str
-    session_key: str
-    landing_url: Optional[str] = None
-    utm_source: Optional[str] = None
-    utm_medium: Optional[str] = None
-    utm_campaign: Optional[str] = None
-    utm_content: Optional[str] = None
-    utm_term: Optional[str] = None
-    referrer: Optional[str] = None
-    fbclid: Optional[str] = None
-    fbp: Optional[str] = None
-    gclid: Optional[str] = None
+    # Public/unauthenticated capture — cap every field so a single request can't
+    # store an oversized row (the global body-size limit is the outer guard).
+    client_id: str = Field(max_length=64)
+    session_key: str = Field(max_length=128)
+    landing_url: Optional[str] = Field(default=None, max_length=2048)
+    utm_source: Optional[str] = Field(default=None, max_length=512)
+    utm_medium: Optional[str] = Field(default=None, max_length=512)
+    utm_campaign: Optional[str] = Field(default=None, max_length=512)
+    utm_content: Optional[str] = Field(default=None, max_length=512)
+    utm_term: Optional[str] = Field(default=None, max_length=512)
+    referrer: Optional[str] = Field(default=None, max_length=2048)
+    fbclid: Optional[str] = Field(default=None, max_length=512)
+    fbp: Optional[str] = Field(default=None, max_length=512)
+    gclid: Optional[str] = Field(default=None, max_length=512)
     # Additional platforms' click IDs keyed by URL param (msclkid, ttclid,
     # li_fat_id, sccid, rdt_cid, epik, …). fbclid/gclid keep dedicated fields.
     click_ids: Optional[Dict[str, str]] = None
-    user_agent: Optional[str] = None
+    user_agent: Optional[str] = Field(default=None, max_length=1024)
+
+    @field_validator("click_ids")
+    @classmethod
+    def _cap_click_ids(cls, v):
+        if v is not None and len(v) > 30:
+            raise ValueError("too many click_ids")
+        return v
 
 
 # --- Phase 2: managed writes, audit, creatives, Google surface ---
@@ -545,33 +561,33 @@ class LeadSubmissionIn(BaseModel):
     its _fbc/_fbp cookies and the pixel's eventID so server and browser
     events deduplicate."""
 
-    client_id: str
-    session_key: str
+    client_id: str = Field(max_length=64)
+    session_key: str = Field(max_length=128)
     email: Optional[EmailStr] = None
-    phone: Optional[str] = None
-    first_name: Optional[str] = None
-    last_name: Optional[str] = None
-    city: Optional[str] = None
-    state: Optional[str] = None
-    zip: Optional[str] = None
-    country: Optional[str] = None
+    phone: Optional[str] = Field(default=None, max_length=40)
+    first_name: Optional[str] = Field(default=None, max_length=200)
+    last_name: Optional[str] = Field(default=None, max_length=200)
+    city: Optional[str] = Field(default=None, max_length=120)
+    state: Optional[str] = Field(default=None, max_length=120)
+    zip: Optional[str] = Field(default=None, max_length=20)
+    country: Optional[str] = Field(default=None, max_length=80)
     # Dedup key shared with the browser pixel's eventID; generated
     # server-side when the page doesn't send one.
-    event_id: Optional[str] = None
-    event_name: str = "Lead"
-    event_source_url: Optional[str] = None
-    fbc: Optional[str] = None
-    fbp: Optional[str] = None
-    fbclid: Optional[str] = None
-    gclid: Optional[str] = None
-    utm_source: Optional[str] = None
-    utm_medium: Optional[str] = None
-    utm_campaign: Optional[str] = None
-    utm_content: Optional[str] = None
-    utm_term: Optional[str] = None
-    user_agent: Optional[str] = None
+    event_id: Optional[str] = Field(default=None, max_length=200)
+    event_name: str = Field(default="Lead", max_length=100)
+    event_source_url: Optional[str] = Field(default=None, max_length=2048)
+    fbc: Optional[str] = Field(default=None, max_length=512)
+    fbp: Optional[str] = Field(default=None, max_length=512)
+    fbclid: Optional[str] = Field(default=None, max_length=512)
+    gclid: Optional[str] = Field(default=None, max_length=512)
+    utm_source: Optional[str] = Field(default=None, max_length=512)
+    utm_medium: Optional[str] = Field(default=None, max_length=512)
+    utm_campaign: Optional[str] = Field(default=None, max_length=512)
+    utm_content: Optional[str] = Field(default=None, max_length=512)
+    utm_term: Optional[str] = Field(default=None, max_length=512)
+    user_agent: Optional[str] = Field(default=None, max_length=1024)
     value_cents: Optional[int] = None
-    currency: Optional[str] = None
+    currency: Optional[str] = Field(default=None, max_length=8)
 
 
 # --- Phase 6: Salescale CRM ---
@@ -678,7 +694,7 @@ class DealOut(BaseModel):
 class ActivityCreateIn(BaseModel):
     contact_id: str
     type: str  # note | call | email | sms | meeting
-    body: Optional[str] = None
+    body: Optional[str] = Field(default=None, max_length=20000)
     is_internal: bool = False
     occurred_at: Optional[dt.datetime] = None
 
@@ -819,6 +835,15 @@ class BrandingIn(BaseModel):
     email_from_name: Optional[str] = Field(default=None, max_length=200)
     email_from_address: Optional[EmailStr] = None
     apply_to_team: bool = False
+
+    @field_validator("logo_url", "favicon_url")
+    @classmethod
+    def _safe_url(cls, v):
+        # These land in client-side <img src>/<link href>; only allow http(s)
+        # so a javascript:/data: scheme can't be introduced when rendered.
+        if v and not (v.startswith("https://") or v.startswith("http://")):
+            raise ValueError("URL must start with http:// or https://")
+        return v
 
 
 class CustomDomainIn(BaseModel):
