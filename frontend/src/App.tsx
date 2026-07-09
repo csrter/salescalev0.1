@@ -37,6 +37,9 @@ import { SuperAdmin, TeamAdmin } from "./admin";
 import { Billing, ResetPassword, VerifyEmail } from "./account";
 import { Integrations } from "./integrations";
 import { TwoFactorSettings } from "./security";
+import { CommandPalette, type Command } from "./components/CommandPalette";
+import { ToastProvider } from "./components/Toast";
+import { setThemePref } from "./theme";
 import {
   forgotPassword,
   oauthStart,
@@ -57,7 +60,9 @@ type IconName =
   | "security"
   | "logout"
   | "plus"
-  | "chevron";
+  | "chevron"
+  | "search"
+  | "collapse";
 
 const ICON_PATHS: Record<IconName, string> = {
   clients:
@@ -73,6 +78,8 @@ const ICON_PATHS: Record<IconName, string> = {
   logout: "M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4 M16 17l5-5-5-5 M21 12H9",
   plus: "M12 5v14 M5 12h14",
   chevron: "M9 18l6-6-6-6",
+  search: "M11 19a8 8 0 1 0 0-16 8 8 0 0 0 0 16z M21 21l-4.35-4.35",
+  collapse: "M11 17l-5-5 5-5 M18 17l-5-5 5-5",
 };
 
 function Icon({ name }: { name: IconName }) {
@@ -131,6 +138,38 @@ function clearAuthQuery() {
 export default function App() {
   const [session, setSess] = useState<Session | null>(getSession());
   const [tab, setTab] = useState<Tab>("clients");
+  // Set by the command palette's "jump to client"; Clients consumes it.
+  const [openClientId, setOpenClientId] = useState<string | null>(null);
+  const [sideCollapsed, setSideCollapsed] = useState(
+    () => localStorage.getItem("sidebar-collapsed") === "1"
+  );
+  const [closedSections, setClosedSections] = useState<string[]>(() => {
+    try {
+      return JSON.parse(localStorage.getItem("sidebar-closed") ?? "[]");
+    } catch {
+      return [];
+    }
+  });
+
+  // Jump-to-client commands for the palette, fetched fresh each time it
+  // opens. The API returns only this org's clients (tenant-scoped
+  // server-side). Declared before the early returns — hooks rules.
+  const loadClientCommands = useCallback(
+    () =>
+      api<Client[]>("/api/clients").then((clients) =>
+        clients.map((c) => ({
+          id: `client:${c.id}`,
+          title: c.name,
+          section: "Clients",
+          keywords: "client account",
+          run: () => {
+            setTab("clients");
+            setOpenClientId(c.id);
+          },
+        }))
+      ),
+    []
+  );
   const [authRoute, setAuthRoute] = useState<{ kind: "verify" | "reset"; token: string } | null>(
     () => {
       const p = new URLSearchParams(window.location.search);
@@ -221,34 +260,136 @@ export default function App() {
   const isTeam = TEAM_ROLES.includes(session.role);
   const isAdmin = ADMIN_ROLES.includes(session.role);
   const isOwner = session.role === "owner";
-  const nav: { key: Tab; label: string; icon: IconName; show: boolean }[] = [
-    { key: "clients", label: "Clients", icon: "clients", show: true },
-    { key: "changes", label: "Pending changes", icon: "changes", show: isTeam },
-    { key: "audit", label: "Audit log", icon: "audit", show: true },
-    { key: "team", label: "Team", icon: "team", show: isAdmin },
-    { key: "integrations", label: "Integrations", icon: "integrations", show: isAdmin },
-    { key: "billing", label: "Billing", icon: "billing", show: isOwner },
-    { key: "security", label: "Security", icon: "security", show: true },
-    { key: "admin", label: "Admin", icon: "admin", show: !!session.is_superadmin },
+  // Role gating for what a user can reach lives HERE (and in the render
+  // guards below + the API itself) — the sidebar and the command palette
+  // both consume this same filtered list.
+  const nav: { key: Tab; label: string; icon: IconName; section: string; show: boolean }[] = [
+    { key: "clients", label: "Clients", icon: "clients", section: "Workspace", show: true },
+    { key: "changes", label: "Pending changes", icon: "changes", section: "Ads", show: isTeam },
+    { key: "audit", label: "Audit log", icon: "audit", section: "Ads", show: true },
+    { key: "team", label: "Team", icon: "team", section: "Settings", show: isAdmin },
+    { key: "integrations", label: "Integrations", icon: "integrations", section: "Settings", show: isAdmin },
+    { key: "billing", label: "Billing", icon: "billing", section: "Settings", show: isOwner },
+    { key: "security", label: "Security", icon: "security", section: "Settings", show: true },
+    { key: "admin", label: "Admin", icon: "admin", section: "Platform", show: !!session.is_superadmin },
   ];
+  const visibleNav = nav.filter((n) => n.show);
+  const sections = [...new Set(visibleNav.map((n) => n.section))];
+
+  const logout = () => {
+    setSession(null);
+    setSess(null);
+  };
+
+  const paletteCommands: Command[] = [
+    ...visibleNav.map((n) => ({
+      id: `nav:${n.key}`,
+      title: n.label,
+      section: "Go to",
+      keywords: n.section,
+      run: () => {
+        setOpenClientId(null);
+        setTab(n.key);
+      },
+    })),
+    {
+      id: "theme:light",
+      title: "Theme: light",
+      section: "Preferences",
+      keywords: "appearance mode",
+      run: () => setThemePref("light"),
+    },
+    {
+      id: "theme:dark",
+      title: "Theme: dark",
+      section: "Preferences",
+      keywords: "appearance mode",
+      run: () => setThemePref("dark"),
+    },
+    {
+      id: "theme:system",
+      title: "Theme: match system",
+      section: "Preferences",
+      keywords: "appearance mode auto",
+      run: () => setThemePref("system"),
+    },
+    {
+      id: "logout",
+      title: "Log out",
+      section: "Account",
+      keywords: "sign out",
+      run: logout,
+    },
+  ];
+
   return (
     <ManageProvider>
-      <div className="app">
+      <ToastProvider>
+      <div className={`app ${sideCollapsed ? "side-collapsed" : ""}`}>
         <aside className="sidebar">
-          <Logo />
+          <div className="side-top">
+            <Logo />
+            <button
+              className="side-collapse"
+              title={sideCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+              onClick={() =>
+                setSideCollapsed((v) => {
+                  localStorage.setItem("sidebar-collapsed", v ? "" : "1");
+                  return !v;
+                })
+              }
+            >
+              <Icon name="collapse" />
+            </button>
+          </div>
+          <button
+            className="side-search"
+            onClick={() => window.dispatchEvent(new Event("cmdk:open"))}
+          >
+            <Icon name="search" />
+            <span>Search</span>
+            <kbd>⌘K</kbd>
+          </button>
           <nav className="side-nav">
-            {nav
-              .filter((n) => n.show)
-              .map((n) => (
+            {sections.map((section) => (
+              <div key={section} className="side-section">
                 <button
-                  key={n.key}
-                  className={`nav-item ${tab === n.key ? "active" : ""}`}
-                  onClick={() => setTab(n.key)}
+                  className="side-section-head"
+                  onClick={() =>
+                    setClosedSections((cur) => {
+                      const next = cur.includes(section)
+                        ? cur.filter((s) => s !== section)
+                        : [...cur, section];
+                      localStorage.setItem("sidebar-closed", JSON.stringify(next));
+                      return next;
+                    })
+                  }
                 >
-                  <Icon name={n.icon} />
-                  <span>{n.label}</span>
+                  <span>{section}</span>
+                  <span
+                    className={`section-chevron ${
+                      closedSections.includes(section) ? "" : "open"
+                    }`}
+                  >
+                    <Icon name="chevron" />
+                  </span>
                 </button>
-              ))}
+                {!closedSections.includes(section) &&
+                  visibleNav
+                    .filter((n) => n.section === section)
+                    .map((n) => (
+                      <button
+                        key={n.key}
+                        className={`nav-item ${tab === n.key ? "active" : ""}`}
+                        title={n.label}
+                        onClick={() => setTab(n.key)}
+                      >
+                        <Icon name={n.icon} />
+                        <span>{n.label}</span>
+                      </button>
+                    ))}
+              </div>
+            ))}
           </nav>
           <div className="side-foot">
             <div className="user-chip">
@@ -261,13 +402,7 @@ export default function App() {
                 </span>
               </div>
             </div>
-            <button
-              className="logout"
-              onClick={() => {
-                setSession(null);
-                setSess(null);
-              }}
-            >
+            <button className="logout" onClick={logout}>
               <Icon name="logout" />
               <span>Log out</span>
             </button>
@@ -288,7 +423,13 @@ export default function App() {
           </header>
           <div className="content">
             {session.email_verified === false && <VerifyBanner />}
-            {tab === "clients" && <Clients session={session} />}
+            {tab === "clients" && (
+              <Clients
+                session={session}
+                openClientId={openClientId}
+                onOpenConsumed={() => setOpenClientId(null)}
+              />
+            )}
             {tab === "changes" && <PendingChangesPanel />}
             {tab === "audit" && <AuditLogView />}
             {tab === "team" && isAdmin && <TeamAdmin session={session} />}
@@ -298,7 +439,12 @@ export default function App() {
             {tab === "admin" && session.is_superadmin && <SuperAdmin />}
           </div>
         </div>
+        <CommandPalette
+          commands={paletteCommands}
+          loadDynamic={loadClientCommands}
+        />
       </div>
+      </ToastProvider>
     </ManageProvider>
   );
 }
@@ -591,7 +737,16 @@ function Login({ onLogin }: { onLogin: (s: Session) => void }) {
   );
 }
 
-function Clients({ session }: { session: Session }) {
+function Clients({
+  session,
+  openClientId,
+  onOpenConsumed,
+}: {
+  session: Session;
+  /** Command-palette jump target: auto-open this client once loaded. */
+  openClientId?: string | null;
+  onOpenConsumed?: () => void;
+}) {
   const [clients, setClients] = useState<Client[]>([]);
   const [selected, setSelected] = useState<Client | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -607,6 +762,15 @@ function Clients({ session }: { session: Session }) {
   useEffect(() => {
     load();
   }, []);
+
+  useEffect(() => {
+    if (!openClientId) return;
+    const target = clients.find((c) => c.id === openClientId);
+    if (target) {
+      setSelected(target);
+      onOpenConsumed?.();
+    }
+  }, [openClientId, clients, onOpenConsumed]);
 
   if (selected)
     return (

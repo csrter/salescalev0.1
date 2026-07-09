@@ -1,0 +1,300 @@
+/* Shared UI primitives (Phase 2 UI modernization). Everything here consumes
+   theme.css tokens only — no literal colors — so tenant branding and the
+   light/dark toggle apply automatically. */
+
+/* --- glass card --- */
+
+.glass-card {
+  background: var(--glass-bg);
+  -webkit-backdrop-filter: blur(var(--glass-blur));
+  backdrop-filter: blur(var(--glass-blur));
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-sm), var(--glass-highlight);
+}
+
+.glass-card.heavy {
+  background: var(--glass-bg-heavy);
+}
+
+/* --- skeleton loading --- */
+
+.skeleton {
+  position: relative;
+  overflow: hidden;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--ink) 7%, transparent);
+}
+
+.skeleton::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(
+    90deg,
+    transparent,
+    color-mix(in srgb, var(--card) 60%, transparent),
+    transparent
+  );
+  animation: skeleton-shimmer 1.4s var(--ease-out) infinite;
+}
+
+@keyframes skeleton-shimmer {
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .skeleton::after {
+    animation: none;
+  }
+}
+
+.skeleton-text {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.skeleton-text .skeleton {
+  height: 0.85em;
+}
+
+.skeleton-text .skeleton:last-child {
+  width: 60%;
+}
+
+/* --- data table --- */
+
+.data-table-wrap {
+  overflow-x: auto;
+}
+
+table.data-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--text-sm);
+}
+
+table.data-table th,
+table.data-table td {
+  text-align: left;
+  padding: 0.55rem 0.7rem;
+  border-bottom: 1px solid var(--border);
+}
+
+table.data-table th {
+  font-size: var(--text-xs);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-caps);
+  color: var(--ink-faint);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+table.data-table th.sortable {
+  cursor: pointer;
+  user-select: none;
+}
+
+table.data-table th.sortable:hover {
+  color: var(--ink-soft);
+}
+
+table.data-table th .sort-arrow {
+  display: inline-block;
+  margin-left: 0.3rem;
+  font-size: 0.6rem;
+  color: var(--accent);
+}
+
+table.data-table th.align-right,
+table.data-table td.align-right {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+table.data-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+table.data-table tr.clickable {
+  cursor: pointer;
+}
+
+table.data-table tr.clickable:hover td {
+  background: color-mix(in srgb, var(--accent) 5%, transparent);
+}
+
+table.data-table tr.selected td {
+  background: var(--accent-soft);
+}
+
+/* --- toasts --- */
+
+.toasts {
+  position: fixed;
+  bottom: var(--space-5);
+  right: var(--space-5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  z-index: 60;
+}
+
+.toast {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 240px;
+  max-width: 380px;
+  padding: 0.65rem 0.9rem;
+  border-radius: var(--radius-sm);
+  background: var(--glass-bg-heavy);
+  -webkit-backdrop-filter: blur(var(--glass-blur));
+  backdrop-filter: blur(var(--glass-blur));
+  border: 1px solid var(--glass-border);
+  box-shadow: var(--shadow-md);
+  color: var(--ink);
+  font-size: var(--text-sm);
+  animation: toast-in var(--dur-med) var(--ease-out);
+}
+
+.toast.ok {
+  border-left: 3px solid var(--ok);
+}
+
+.toast.error {
+  border-left: 3px solid var(--danger);
+}
+
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+}
+
+/* --- command palette (Cmd+K) --- */
+
+.cmdk-backdrop {
+  position: fixed;
+  inset: 0;
+  background: color-mix(in srgb, var(--navy-950) 45%, transparent);
+  -webkit-backdrop-filter: blur(3px);
+  backdrop-filter: blur(3px);
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding-top: clamp(60px, 16vh, 160px);
+  z-index: 50;
+}
+
+.cmdk {
+  width: min(560px, 92vw);
+  background: var(--glass-bg-heavy);
+  -webkit-backdrop-filter: blur(calc(var(--glass-blur) * 1.5));
+  backdrop-filter: blur(calc(var(--glass-blur) * 1.5));
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-lg), var(--glass-highlight);
+  overflow: hidden;
+  animation: cmdk-in var(--dur-fast) var(--ease-out);
+}
+
+@keyframes cmdk-in {
+  from {
+    opacity: 0;
+    transform: translateY(-6px) scale(0.99);
+  }
+}
+
+.cmdk input {
+  border: none;
+  background: transparent;
+  border-radius: 0;
+  border-bottom: 1px solid var(--border);
+  padding: 0.9rem 1.1rem;
+  font-size: var(--text-lg);
+}
+
+.cmdk input:focus {
+  outline: none;
+  border-color: var(--border);
+}
+
+.cmdk-list {
+  max-height: 320px;
+  overflow-y: auto;
+  padding: var(--space-2);
+}
+
+.cmdk-section {
+  font-size: var(--text-xs);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-caps);
+  color: var(--ink-faint);
+  font-weight: 650;
+  padding: var(--space-2) var(--space-3) var(--space-1);
+}
+
+.cmdk-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  width: 100%;
+  padding: 0.55rem 0.75rem;
+  border: none;
+  background: transparent;
+  border-radius: var(--radius-sm);
+  color: var(--ink);
+  font-size: var(--text-md);
+  text-align: left;
+  cursor: pointer;
+  box-shadow: none;
+}
+
+.cmdk-item .cmdk-hint {
+  margin-left: auto;
+  color: var(--ink-faint);
+  font-size: var(--text-xs);
+}
+
+.cmdk-item.active {
+  background: var(--accent-soft);
+  color: var(--ink);
+}
+
+.cmdk-item:hover {
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  border: none;
+  color: var(--ink);
+}
+
+.cmdk-empty {
+  padding: var(--space-6);
+  text-align: center;
+  color: var(--ink-faint);
+  font-size: var(--text-sm);
+}
+
+.cmdk-foot {
+  display: flex;
+  gap: var(--space-4);
+  padding: var(--space-2) var(--space-4);
+  border-top: 1px solid var(--border);
+  color: var(--ink-faint);
+  font-size: var(--text-xs);
+}
+
+.cmdk-foot kbd {
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+  background: color-mix(in srgb, var(--ink) 7%, transparent);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 0 0.35em;
+  margin-right: 0.35em;
+}

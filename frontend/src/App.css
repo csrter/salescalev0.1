@@ -70,11 +70,165 @@ h1, h2, h3, h4 {
   color: var(--brand-blue);
 }
 
+.side-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.side-top .brand {
+  padding-bottom: 0.4rem;
+}
+
+.side-collapse {
+  border: none;
+  background: transparent;
+  color: var(--sidebar-ink-faint);
+  padding: 0.35rem;
+  border-radius: 8px;
+  box-shadow: none;
+}
+
+.side-collapse:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.07);
+  color: #fff;
+  border: none;
+}
+
+.side-collapse .icon {
+  width: 16px;
+  height: 16px;
+  transition: transform var(--dur-fast) var(--ease-out);
+}
+
+.side-collapsed .side-collapse .icon {
+  transform: rotate(180deg);
+}
+
+.side-search {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  margin: 0.15rem 0 0.55rem;
+  padding: 0.5rem 0.7rem;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: 10px;
+  color: var(--sidebar-ink-faint);
+  font-size: var(--text-sm);
+  box-shadow: none;
+}
+
+.side-search:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.09);
+  border-color: rgba(255, 255, 255, 0.16);
+  color: var(--sidebar-ink);
+}
+
+.side-search .icon {
+  width: 15px;
+  height: 15px;
+}
+
+.side-search kbd {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  background: rgba(255, 255, 255, 0.07);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 5px;
+  padding: 0.05rem 0.35rem;
+}
+
 .side-nav {
   display: flex;
   flex-direction: column;
   gap: 0.15rem;
   flex: 1;
+  overflow-y: auto;
+}
+
+.side-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.side-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border: none;
+  background: transparent;
+  box-shadow: none;
+  padding: 0.65rem 0.7rem 0.25rem;
+  font-size: 0.66rem;
+  font-weight: 650;
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-caps);
+  color: var(--sidebar-ink-faint);
+}
+
+.side-section-head:hover:not(:disabled) {
+  border: none;
+  background: transparent;
+  color: var(--sidebar-ink);
+}
+
+.section-chevron .icon {
+  width: 12px;
+  height: 12px;
+  transition: transform var(--dur-fast) var(--ease-out);
+}
+
+.section-chevron.open .icon {
+  transform: rotate(90deg);
+}
+
+/* Collapsed rail: icons only. Section headers and labels disappear; the
+   nav items keep their title tooltips. */
+.side-collapsed {
+  grid-template-columns: 68px 1fr;
+}
+
+.side-collapsed .sidebar {
+  padding: 1.1rem 0.6rem;
+  align-items: center;
+}
+
+.side-collapsed .brand-name,
+.side-collapsed .side-search span,
+.side-collapsed .side-search kbd,
+.side-collapsed .side-section-head,
+.side-collapsed .nav-item span,
+.side-collapsed .user-meta,
+.side-collapsed .logout span {
+  display: none;
+}
+
+.side-collapsed .side-top {
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.side-collapsed .side-top .brand {
+  padding: 0.4rem 0 0;
+}
+
+.side-collapsed .side-search,
+.side-collapsed .nav-item,
+.side-collapsed .logout {
+  justify-content: center;
+  width: 44px;
+  padding: 0.6rem 0;
+}
+
+.side-collapsed .side-section {
+  align-items: center;
+}
+
+.side-collapsed .user-chip {
+  padding: 0.3rem 0;
 }
 
 .nav-item {
