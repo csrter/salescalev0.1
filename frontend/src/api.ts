@@ -175,10 +175,28 @@ export const setGoogleCreds = (body: {
 export const deleteIntegration = (provider: "meta" | "google") =>
   api<IntegrationStatus>(`/api/integrations/${provider}`, { method: "DELETE" });
 
+// --- Platform catalog (GET /api/platforms) ---
+// The set of ad platforms is served by the backend registry rather than
+// hardcoded here, so a newly-registered platform appears in the UI with no
+// frontend change.
+
+export interface Platform {
+  id: string;
+  name: string;
+  status: "live" | "scaffold" | "stub";
+  coming_soon: boolean;
+  connectable: boolean;
+  supports_conversions: boolean;
+  supports_lead_forms: boolean;
+  supports_byo_creds: boolean;
+}
+
+export const getPlatforms = () => api<Platform[]>("/api/platforms");
+
 export interface Connection {
   id: string;
   client_id: string;
-  platform: "meta" | "google";
+  platform: string;
   status: string;
   error_detail?: string | null;
   connected_at?: string | null;

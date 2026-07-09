@@ -17,7 +17,9 @@ import {
 } from "./api";
 import { useManage } from "./manage";
 
-export type PlatformFilter = "all" | "meta" | "google";
+// "all" (blended) or a specific platform id from the registry
+// (GET /api/platforms). Not a fixed union so new platforms need no edit here.
+export type PlatformFilter = string;
 
 export interface WidgetProps {
   clientId: string;

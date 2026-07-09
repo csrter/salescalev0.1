@@ -4,6 +4,7 @@ import {
   TEAM_ROLES,
   api,
   createClient,
+  getPlatforms,
   getSession,
   login,
   setSession,
@@ -14,6 +15,7 @@ import {
   type Campaign,
   type Client,
   type Connection,
+  type Platform,
   type Session,
 } from "./api";
 import { CreativesPanel } from "./creatives";
@@ -654,9 +656,8 @@ function ClientDetail({
   onBack: () => void;
 }) {
   const [connections, setConnections] = useState<Connection[]>([]);
-  const [platformFilter, setPlatformFilter] = useState<"all" | "meta" | "google">(
-    "all"
-  );
+  const [platforms, setPlatforms] = useState<Platform[]>([]);
+  const [platformFilter, setPlatformFilter] = useState<string>("all");
   const [view, setView] = useState<"dashboard" | "crm">("dashboard");
   const [error, setError] = useState<string | null>(null);
   // Connecting platforms is Admin/Owner surface — mirrors the API gate.
@@ -669,7 +670,12 @@ function ClientDetail({
       .catch((e) => setError(e.message));
   }, [client.id]);
 
-  const connect = async (platform: "meta" | "google") => {
+  // Platform catalog drives the connect list and filter — see /api/platforms.
+  useEffect(() => {
+    getPlatforms().then(setPlatforms).catch((e) => setError(e.message));
+  }, []);
+
+  const connect = async (platform: string) => {
     const { url } = await api<{ url: string }>(
       `/api/connect/${platform}/start?client_id=${client.id}`
     );
@@ -701,15 +707,23 @@ function ClientDetail({
             no reload, no separate views. */}
         {view === "dashboard" && (
           <nav className="toggle platform-toggle">
-            {(["all", "meta", "google"] as const).map((p) => (
-              <button
-                key={p}
-                className={platformFilter === p ? "active" : ""}
-                onClick={() => setPlatformFilter(p)}
-              >
-                {p === "all" ? "Blended" : p === "meta" ? "Meta only" : "Google only"}
-              </button>
-            ))}
+            <button
+              className={platformFilter === "all" ? "active" : ""}
+              onClick={() => setPlatformFilter("all")}
+            >
+              Blended
+            </button>
+            {platforms
+              .filter((p) => p.connectable)
+              .map((p) => (
+                <button
+                  key={p.id}
+                  className={platformFilter === p.id ? "active" : ""}
+                  onClick={() => setPlatformFilter(p.id)}
+                >
+                  {p.name} only
+                </button>
+              ))}
           </nav>
         )}
       </div>
@@ -725,12 +739,14 @@ function ClientDetail({
       {view === "dashboard" && (
       <section>
         <h3>Platform connections</h3>
-        {(["meta", "google"] as const).map((platform) => {
-          const conn = connections.find((c) => c.platform === platform);
+        {platforms.map((platform) => {
+          const conn = connections.find((c) => c.platform === platform.id);
           return (
-            <div key={platform} className="connection">
-              <strong>{platform === "meta" ? "Meta" : "Google Ads"}</strong>
-              {conn ? (
+            <div key={platform.id} className="connection">
+              <strong>{platform.name}</strong>
+              {platform.coming_soon ? (
+                <span className="badge none">coming soon</span>
+              ) : conn ? (
                 <span className={`badge ${conn.status}`}>
                   {conn.status}
                   {conn.error_detail ? ` — ${conn.error_detail}` : ""}
@@ -738,8 +754,8 @@ function ClientDetail({
               ) : (
                 <span className="badge none">not connected</span>
               )}
-              {isAdmin && (
-                <button onClick={() => connect(platform)}>
+              {isAdmin && platform.connectable && (
+                <button onClick={() => connect(platform.id)}>
                   {conn ? "Reconnect" : "Connect"}
                 </button>
               )}
@@ -768,7 +784,7 @@ function AccountTree({
   canManage,
 }: {
   clientId: string;
-  platformFilter: "all" | "meta" | "google";
+  platformFilter: string;
   canManage: boolean;
 }) {
   const [accounts, setAccounts] = useState<AdAccount[]>([]);
