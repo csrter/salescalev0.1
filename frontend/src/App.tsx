@@ -6,9 +6,12 @@ import {
   createClient,
   getPlatforms,
   getSession,
+  isMfaChallenge,
   login,
+  loginMfa,
   setSession,
   signup,
+  type LoginChallenge,
   type AdAccount,
   type AdGroup,
   type AdRow,
@@ -32,6 +35,7 @@ import { Logo } from "./logo";
 import { SuperAdmin, TeamAdmin } from "./admin";
 import { Billing, ResetPassword, VerifyEmail } from "./account";
 import { Integrations } from "./integrations";
+import { TwoFactorSettings } from "./security";
 import {
   forgotPassword,
   oauthStart,
@@ -49,6 +53,7 @@ type IconName =
   | "billing"
   | "integrations"
   | "admin"
+  | "security"
   | "logout"
   | "plus"
   | "chevron";
@@ -60,6 +65,8 @@ const ICON_PATHS: Record<IconName, string> = {
   audit: "M9 11l3 3L22 4 M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11",
   team: "M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2 M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8 M23 21v-2a4 4 0 0 0-3-3.87 M16 3.13a4 4 0 0 1 0 7.75",
   admin: "M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z",
+  security:
+    "M19 11H5a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7a2 2 0 0 0-2-2z M7 11V7a5 5 0 0 1 10 0v4",
   billing: "M2 7a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2z M2 10h20",
   integrations: "M10 13a5 5 0 0 0 7 0l3-3a5 5 0 0 0-7-7l-1 1 M14 11a5 5 0 0 0-7 0l-3 3a5 5 0 0 0 7 7l1-1",
   logout: "M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4 M16 17l5-5-5-5 M21 12H9",
@@ -102,6 +109,7 @@ type Tab =
   | "team"
   | "integrations"
   | "billing"
+  | "security"
   | "admin";
 
 const PAGE_TITLES: Record<Tab, string> = {
@@ -111,6 +119,7 @@ const PAGE_TITLES: Record<Tab, string> = {
   team: "Team",
   integrations: "Integrations",
   billing: "Billing",
+  security: "Security",
   admin: "Platform admin",
 };
 
@@ -191,6 +200,7 @@ export default function App() {
     { key: "team", label: "Team", icon: "team", show: isAdmin },
     { key: "integrations", label: "Integrations", icon: "integrations", show: isAdmin },
     { key: "billing", label: "Billing", icon: "billing", show: isOwner },
+    { key: "security", label: "Security", icon: "security", show: true },
     { key: "admin", label: "Admin", icon: "admin", show: !!session.is_superadmin },
   ];
   return (
@@ -256,6 +266,7 @@ export default function App() {
             {tab === "team" && isAdmin && <TeamAdmin session={session} />}
             {tab === "integrations" && isAdmin && <Integrations />}
             {tab === "billing" && isOwner && <Billing session={session} />}
+            {tab === "security" && <TwoFactorSettings />}
             {tab === "admin" && session.is_superadmin && <SuperAdmin />}
           </div>
         </div>
@@ -295,6 +306,8 @@ function Login({ onLogin }: { onLogin: (s: Session) => void }) {
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [resetSent, setResetSent] = useState(false);
+  const [challenge, setChallenge] = useState<LoginChallenge | null>(null);
+  const [code, setCode] = useState("");
   const oauth = async (provider: "google" | "meta") => {
     setError(null);
     try {
@@ -321,6 +334,56 @@ function Login({ onLogin }: { onLogin: (s: Session) => void }) {
           <li>Leads flow straight into the built-in CRM</li>
         </ul>
       </div>
+      {challenge ? (
+        <form
+          className="auth-card"
+          onSubmit={async (e) => {
+            e.preventDefault();
+            setError(null);
+            try {
+              onLogin(await loginMfa(challenge.challenge_token, code));
+            } catch (err) {
+              setError((err as Error).message);
+            }
+          }}
+        >
+          <h1>Two-step verification</h1>
+          <p className="auth-sub">
+            {challenge.method === "totp"
+              ? "Enter the 6-digit code from your authenticator app."
+              : challenge.method === "email"
+              ? "Enter the code we just emailed you."
+              : "Enter the code we just texted you."}
+          </p>
+          <label>
+            Verification code
+            <input
+              value={code}
+              onChange={(e) => setCode(e.target.value)}
+              inputMode="numeric"
+              autoComplete="one-time-code"
+              autoFocus
+              placeholder="123456"
+            />
+          </label>
+          <button type="submit" className="primary block">
+            Verify
+          </button>
+          {error && <p className="error">{error}</p>}
+          <p className="auth-sub">You can also enter one of your backup codes.</p>
+          <button
+            type="button"
+            className="link auth-toggle"
+            onClick={() => {
+              setChallenge(null);
+              setCode("");
+              setError(null);
+            }}
+          >
+            ← Back to login
+          </button>
+        </form>
+      ) : (
       <form
         className="auth-card"
         onSubmit={async (e) => {
@@ -330,12 +393,12 @@ function Login({ onLogin }: { onLogin: (s: Session) => void }) {
             if (mode === "forgot") {
               await forgotPassword(email);
               setResetSent(true);
+            } else if (mode === "login") {
+              const r = await login(email, password);
+              if (isMfaChallenge(r)) setChallenge(r);
+              else onLogin(r);
             } else {
-              onLogin(
-                mode === "login"
-                  ? await login(email, password)
-                  : await signup(orgName, email, password, fullName)
-              );
+              onLogin(await signup(orgName, email, password, fullName));
             }
           } catch (err) {
             setError((err as Error).message);
@@ -464,6 +527,7 @@ function Login({ onLogin }: { onLogin: (s: Session) => void }) {
           </>
         )}
       </form>
+      )}
     </div>
   );
 }

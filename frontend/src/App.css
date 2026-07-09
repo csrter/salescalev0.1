@@ -1970,3 +1970,30 @@ p.notice {
   border-radius: 6px;
   border: 1px solid var(--border);
 }
+
+/* --- Two-factor auth settings --- */
+.mfa-settings { max-width: 680px; }
+.mfa-settings h2 { margin-bottom: 0.25rem; }
+.mfa-methods {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 0.9rem;
+  margin-top: 1rem;
+}
+.mfa-methods .card h3 { margin: 0 0 0.35rem; font-size: 1rem; }
+.mfa-settings .card { display: flex; flex-direction: column; gap: 0.6rem; align-items: flex-start; }
+.mfa-settings .card img { border-radius: 8px; background: #fff; padding: 8px; }
+.mfa-settings label { display: flex; flex-direction: column; gap: 0.3rem; width: 100%; font-size: 0.85rem; }
+.backup-codes {
+  list-style: none;
+  padding: 0;
+  margin: 0.5rem 0 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  gap: 0.4rem;
+}
+.backup-codes code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.95rem;
+  letter-spacing: 0.03em;
+}

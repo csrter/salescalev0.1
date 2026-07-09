@@ -50,14 +50,66 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
   return (await resp.json()) as T;
 }
 
-export async function login(email: string, password: string): Promise<Session> {
-  const s = await api<Session>("/api/auth/login", {
+// When the account has 2FA, /login returns a challenge instead of a session.
+export interface LoginChallenge {
+  mfa_required: true;
+  method: "totp" | "email" | "sms";
+  challenge_token: string;
+}
+export type LoginResult = Session | LoginChallenge;
+
+export function isMfaChallenge(r: LoginResult): r is LoginChallenge {
+  return (r as LoginChallenge).mfa_required === true;
+}
+
+export async function login(email: string, password: string): Promise<LoginResult> {
+  const r = await api<LoginResult>("/api/auth/login", {
     method: "POST",
     body: JSON.stringify({ email, password }),
+  });
+  if (!isMfaChallenge(r)) setSession(r);
+  return r;
+}
+
+/** Second step of a 2FA login: exchange the challenge + code for a session. */
+export async function loginMfa(challenge_token: string, code: string): Promise<Session> {
+  const s = await api<Session>("/api/auth/login/mfa", {
+    method: "POST",
+    body: JSON.stringify({ challenge_token, code }),
   });
   setSession(s);
   return s;
 }
+
+// --- 2FA enrollment / management ---
+
+export interface MfaStatus {
+  method: "totp" | "email" | "sms" | null;
+  phone_hint: string | null;
+  backup_codes_remaining: number;
+}
+export interface TotpSetup {
+  secret: string;
+  otpauth_uri: string;
+}
+export interface MfaEnabled {
+  method: string;
+  backup_codes: string[];
+}
+
+export const getMfaStatus = () => api<MfaStatus>("/api/mfa");
+export const totpSetup = () => api<TotpSetup>("/api/mfa/totp/setup", { method: "POST" });
+export const totpEnable = (code: string) =>
+  api<MfaEnabled>("/api/mfa/totp/enable", { method: "POST", body: JSON.stringify({ code }) });
+export const emailMfaSetup = () => api<{ ok: boolean }>("/api/mfa/email/setup", { method: "POST" });
+export const emailMfaEnable = (code: string) =>
+  api<MfaEnabled>("/api/mfa/email/enable", { method: "POST", body: JSON.stringify({ code }) });
+export const smsMfaSetup = (phone: string) =>
+  api<{ ok: boolean }>("/api/mfa/sms/setup", { method: "POST", body: JSON.stringify({ phone }) });
+export const smsMfaEnable = (code: string) =>
+  api<MfaEnabled>("/api/mfa/sms/enable", { method: "POST", body: JSON.stringify({ code }) });
+export const disableMfa = (password: string) =>
+  api<{ ok: boolean }>("/api/mfa/disable", { method: "POST", body: JSON.stringify({ password }) });
 
 export const oauthStart = (provider: "google" | "meta") =>
   api<{ url: string }>(`/api/auth/oauth/${provider}/start`);
