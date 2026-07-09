@@ -67,45 +67,55 @@ def google_oauth_callback(
         scopes=google_ads_api.GOOGLE_ADS_SCOPE,
     )
 
+    # list_accessible_customers is the real auth check — if the token itself is
+    # bad, fail the whole connection here.
     try:
         customer_ids = google_ads_api.list_accessible_customers(refresh_token)
-        for cid in customer_ids:
-            details = google_ads_api.fetch_customer_details(refresh_token, cid)
-            if details.get("is_manager"):
-                continue  # MCCs aren't ad accounts; client links live under them
-            existing = db.execute(
-                select(AdAccount).where(
-                    AdAccount.platform == PLATFORM_GOOGLE,
-                    AdAccount.external_id == details["external_id"],
-                )
-            ).scalar_one_or_none()
-            if existing is None:
-                db.add(
-                    AdAccount(
-                        organization_id=organization_id,
-                        client_id=client_id,
-                        connection_id=conn.id,
-                        platform=PLATFORM_GOOGLE,
-                        external_id=details["external_id"],
-                        name=details["name"],
-                        currency=details.get("currency"),
-                        timezone=details.get("timezone"),
-                        status=details.get("status"),
-                    )
-                )
-            elif (
-                existing.client_id != client_id
-                or existing.organization_id != organization_id
-            ):
-                raise HTTPException(
-                    409,
-                    f"Google Ads account {details['external_id']} is already "
-                    "connected elsewhere",
-                )
-        db.commit()
     except google_ads_api.GoogleAuthError as e:
         connections.mark_disconnected(db, conn, f"Auth failed after OAuth: {e}")
         raise HTTPException(502, f"Google Ads auth failed: {e}")
+
+    # An agency login routinely sees accounts it can't actually query: a manager
+    # (MCC) account rather than an ad account, or one that's deactivated / not
+    # yet enabled. Skip those individually — one bad account must not abort the
+    # whole connection, which otherwise leaves every good account unconnected.
+    for cid in customer_ids:
+        try:
+            details = google_ads_api.fetch_customer_details(refresh_token, cid)
+        except (google_ads_api.GoogleAuthError, google_ads_api.GoogleApiError):
+            continue  # not-enabled / deactivated / inaccessible — skip
+        if details.get("is_manager"):
+            continue  # MCCs aren't ad accounts; client links live under them
+        existing = db.execute(
+            select(AdAccount).where(
+                AdAccount.platform == PLATFORM_GOOGLE,
+                AdAccount.external_id == details["external_id"],
+            )
+        ).scalar_one_or_none()
+        if existing is None:
+            db.add(
+                AdAccount(
+                    organization_id=organization_id,
+                    client_id=client_id,
+                    connection_id=conn.id,
+                    platform=PLATFORM_GOOGLE,
+                    external_id=details["external_id"],
+                    name=details["name"],
+                    currency=details.get("currency"),
+                    timezone=details.get("timezone"),
+                    status=details.get("status"),
+                )
+            )
+        elif (
+            existing.client_id != client_id
+            or existing.organization_id != organization_id
+        ):
+            raise HTTPException(
+                409,
+                f"Google Ads account {details['external_id']} is already "
+                "connected elsewhere",
+            )
+    db.commit()
 
     settings = get_settings()
     return RedirectResponse(

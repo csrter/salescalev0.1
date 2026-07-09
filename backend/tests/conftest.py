@@ -12,6 +12,19 @@ os.environ["TOKEN_ENCRYPTION_KEY"] = (
 # Phase 6 lead webhooks: signature/handshake secrets (test-only values).
 os.environ["META_APP_SECRET"] = "test-meta-app-secret"
 os.environ["META_WEBHOOK_VERIFY_TOKEN"] = "test-verify-token"
+# Keep the suite hermetic against a populated backend/.env: tests assert the
+# "no global app credentials configured" behavior, so pin every operator
+# platform credential empty regardless of what a real .env holds. (META_APP_ID
+# stays empty so Meta reads as unconfigured even though the secret is set for
+# the webhook tests above.)
+for _k in (
+    "META_APP_ID",
+    "GOOGLE_CLIENT_ID",
+    "GOOGLE_CLIENT_SECRET",
+    "GOOGLE_DEVELOPER_TOKEN",
+    "GOOGLE_LOGIN_CUSTOMER_ID",
+):
+    os.environ[_k] = ""
 # One dedicated platform super-admin for the /api/admin tests. No org-scoped
 # test uses this address, so it doesn't affect the isolation fixtures.
 os.environ["SUPERADMIN_EMAILS"] = "platform@salescale.com,pager@salescale.com"
