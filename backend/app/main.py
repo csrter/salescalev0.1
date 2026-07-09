@@ -51,7 +51,16 @@ if _settings.sentry_dsn:
         traces_sample_rate=_settings.sentry_traces_sample_rate,
     )
 
-app = FastAPI(title="Salescale")
+# Interactive docs (/docs, /redoc, /openapi.json) disclose the full API surface,
+# so serve them only in local/dev (sqlite) or the desktop app — never on a
+# hosted Postgres deployment.
+_docs_enabled = _settings.desktop_mode or _settings.database_url.startswith("sqlite")
+app = FastAPI(
+    title="Salescale",
+    docs_url="/docs" if _docs_enabled else None,
+    redoc_url="/redoc" if _docs_enabled else None,
+    openapi_url="/openapi.json" if _docs_enabled else None,
+)
 
 # A production deployment (real Postgres DB, not the desktop app) must not run
 # on the built-in dev JWT secret — sessions would be forgeable. Fail closed
