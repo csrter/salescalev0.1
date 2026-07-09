@@ -27,8 +27,11 @@ changes directly (no outbound push back), which is the echo-loop guard.
 
 import hashlib
 import hmac
+import ipaddress
 import json
+import socket
 from typing import Any, Dict, Optional
+from urllib.parse import urlparse
 
 import httpx
 from sqlalchemy import select
@@ -37,9 +40,57 @@ from sqlalchemy.orm import Session
 from ..models.base import utcnow
 from ..models.core import Client
 from ..models.crm import Contact, Deal, PipelineStage
+from ..security import decrypt_secret, encrypt_secret
 from . import lead_ingest
 
 OUTBOUND_TIMEOUT_S = 5
+
+
+def validate_external_url(url: str) -> None:
+    """SSRF guard: the sync target must be public https, not an internal /
+    loopback / link-local / metadata address. Raises ValueError otherwise.
+    Called both when an admin saves the config and again before each send (the
+    latter also blunts DNS rebinding, though IP-pinning would be stronger)."""
+    parsed = urlparse(url)
+    if parsed.scheme != "https":
+        raise ValueError("Sync URL must use https")
+    host = parsed.hostname
+    if not host:
+        raise ValueError("Sync URL has no host")
+    try:
+        infos = socket.getaddrinfo(host, parsed.port or 443, proto=socket.IPPROTO_TCP)
+    except socket.gaierror:
+        # A host that doesn't resolve is a dead target, not an SSRF vector —
+        # don't reject it (avoids failing on transient DNS / not-yet-live hosts).
+        return
+    for info in infos:
+        ip = ipaddress.ip_address(info[4][0])
+        if (
+            ip.is_private
+            or ip.is_loopback
+            or ip.is_link_local
+            or ip.is_reserved
+            or ip.is_multicast
+            or ip.is_unspecified
+        ):
+            raise ValueError("Sync URL resolves to a non-public address")
+
+
+def encrypt_config_secret(secret: str) -> str:
+    """Encrypt a sync shared-secret for storage (mirrors OAuth token handling)."""
+    return encrypt_secret(secret)
+
+
+def _stored_secret(config: Dict[str, Any]) -> str:
+    """The plaintext shared secret from a stored config. Secrets are encrypted
+    at rest; tolerate a legacy plaintext value so older configs still work."""
+    raw = str(config.get("secret") or "")
+    if not raw:
+        return ""
+    try:
+        return decrypt_secret(raw)
+    except Exception:
+        return raw  # legacy plaintext
 
 
 def get_config(client: Client) -> Optional[Dict[str, Any]]:
@@ -86,9 +137,10 @@ def push_contact_update(
     }
     raw = json.dumps(body, separators=(",", ":")).encode()
     signature = hmac.new(
-        str(config.get("secret") or "").encode(), raw, hashlib.sha256
+        _stored_secret(config).encode(), raw, hashlib.sha256
     ).hexdigest()
     try:
+        validate_external_url(config["url"])  # re-check egress at send time
         resp = httpx.post(
             config["url"],
             content=raw,
@@ -107,7 +159,7 @@ def verify_inbound_secret(client: Client, provided: Optional[str]) -> bool:
     config = get_config(client)
     if config is None or not config.get("secret"):
         return False
-    return hmac.compare_digest(str(config["secret"]), provided or "")
+    return hmac.compare_digest(_stored_secret(config), provided or "")
 
 
 def apply_inbound(db: Session, client: Client, payload: Dict[str, Any]) -> Dict[str, Any]:

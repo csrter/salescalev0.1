@@ -9,7 +9,7 @@ from ..deps import TenantScope, get_scope, require_admin
 from ..models.core import Client, Organization, PlatformConnection, User
 from ..models.crm import LeadFormConfig
 from ..pagination import Page, paginator
-from ..services import entitlements
+from ..services import entitlements, external_sync
 from ..schemas import (
     ClientCreate,
     ClientOutPublic,
@@ -244,9 +244,17 @@ def set_external_sync(
     client = db.get(Client, client_id)
     if client is None or client.organization_id != user.organization_id:
         raise HTTPException(404, "Not found")
+    # SSRF guard: only a public https target is allowed (no internal/metadata
+    # hosts), rejected at save time.
+    try:
+        external_sync.validate_external_url(body.url)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    data = body.model_dump()
+    data["secret"] = external_sync.encrypt_config_secret(data["secret"])  # at rest
     client.metric_settings = {
         **(client.metric_settings or {}),
-        "external_sync": body.model_dump(),
+        "external_sync": data,
     }
     db.commit()
     return {"configured": True, "enabled": body.enabled, "url": body.url}
