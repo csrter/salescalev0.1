@@ -5,7 +5,8 @@ from types import SimpleNamespace
 import pytest
 
 from app import platforms as reg
-from app.services import change_executor, insights_sync
+from app.models.attribution import LandingEvent
+from app.services import change_executor, insights_sync, metrics
 
 
 def test_registry_has_reference_and_scaffolded_platforms():
@@ -55,3 +56,20 @@ def test_change_executor_rejects_unregistered_platform():
     acct = SimpleNamespace(platform="tiktok")
     with pytest.raises(change_executor.UnsupportedChange):
         change_executor.execute(None, None, acct, None)
+
+
+def test_generic_click_id_attributes_a_new_platform():
+    # A new platform's click ID (in the generic click_ids map) and its utm
+    # alias both attribute without any edit to the attribution code.
+    assert LandingEvent(click_ids={"msclkid": "x"}).click_id("msclkid") == "x"
+    assert metrics._platform_from_landing(LandingEvent(click_ids={"msclkid": "x"})) == "msads"
+    assert metrics._platform_from_landing(LandingEvent(utm_source="bing")) == "msads"
+    assert metrics._platform_from_landing(LandingEvent(click_ids={"ttclid": "y"})) == "tiktok"
+
+
+def test_meta_before_google_attribution_precedence_preserved():
+    # fbclid wins over a google utm_source, exactly as the prior hardcoded
+    # fbclid-then-gclid order did.
+    assert metrics._platform_from_landing(LandingEvent(fbclid="fb", utm_source="google")) == "meta"
+    assert metrics._platform_from_landing(LandingEvent(gclid="g")) == "google"
+    assert metrics._platform_from_landing(LandingEvent(utm_source="organic")) is None

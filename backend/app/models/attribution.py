@@ -1,7 +1,7 @@
 import datetime as dt
 from typing import Optional
 
-from sqlalchemy import DateTime, ForeignKey, String
+from sqlalchemy import JSON, DateTime, ForeignKey, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from ..db import Base
@@ -47,6 +47,12 @@ class LandingEvent(Base):
     # fbclid at send time).
     fbp: Mapped[Optional[str]] = mapped_column(String(500))
     gclid: Mapped[Optional[str]] = mapped_column(String(500))
+    # Additional platforms' click IDs (msclkid, ttclid, li_fat_id, sccid,
+    # rdt_cid, epik, …) keyed by their URL param. fbclid/gclid keep dedicated
+    # columns because the CAPI / Enhanced Conversions senders read them
+    # directly; everything else lives here so a new platform needs no schema
+    # change to its own column — see app/platforms.py click_id_params.
+    click_ids: Mapped[Optional[dict]] = mapped_column(JSON)
     user_agent: Mapped[Optional[str]] = mapped_column(String(1000))
     occurred_at: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
@@ -55,3 +61,12 @@ class LandingEvent(Base):
         ForeignKey("contacts.id"), index=True
     )
     created_at: Mapped[dt.datetime] = created_at_column()
+
+    def click_id(self, param: str) -> Optional[str]:
+        """Value of a platform click-ID URL param, read from its dedicated
+        column (fbclid/gclid) or the generic click_ids map."""
+        if param == "fbclid":
+            return self.fbclid
+        if param == "gclid":
+            return self.gclid
+        return (self.click_ids or {}).get(param)

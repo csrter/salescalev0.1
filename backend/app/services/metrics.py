@@ -53,6 +53,33 @@ FORM_SOURCE_PLATFORM = platform_registry.form_source_map()
 # The canonical insight level per platform (see module docstring).
 _INSIGHT_LEVELS = platform_registry.insight_levels()
 
+# platform id -> click-ID params, in registry order (= attribution priority).
+_CLICK_ID_PARAMS = platform_registry.click_id_param_map()
+
+
+def _landing_has_tracking(e: LandingEvent) -> bool:
+    """Any paid-traffic evidence on the landing event — a utm_source or a
+    platform click ID (from a dedicated column or the generic click_ids map)."""
+    if e.utm_source:
+        return True
+    return any(e.click_id(p) for params in _CLICK_ID_PARAMS.values() for p in params)
+
+
+def _platform_from_landing(e: LandingEvent) -> Optional[str]:
+    """Attribute a landing event to a platform by its click-ID params or
+    utm_source aliases, in registry order (Meta before Google, preserving the
+    prior hardcoded fbclid-then-gclid precedence). None = unattributed.
+
+    Registry-driven so a newly-registered platform's click ID / utm alias is
+    recognized here with no edit to this function."""
+    source = (e.utm_source or "").lower()
+    for pid, params in _CLICK_ID_PARAMS.items():
+        if any(e.click_id(p) for p in params):
+            return pid
+        if source in PLATFORM_UTM_ALIASES.get(pid, frozenset()):
+            return pid
+    return None
+
 
 # --- shared aggregation helpers ---
 
@@ -152,13 +179,7 @@ def contact_platforms(
     out: Dict[str, Optional[str]] = {}
     for c in contacts:
         event = by_contact.get(c.id)
-        platform: Optional[str] = None
-        if event is not None:
-            source = (event.utm_source or "").lower()
-            if event.fbclid or source in PLATFORM_UTM_ALIASES["meta"]:
-                platform = "meta"
-            elif event.gclid or source in PLATFORM_UTM_ALIASES["google"]:
-                platform = "google"
+        platform = _platform_from_landing(event) if event is not None else None
         if platform is None:
             platform = FORM_SOURCE_PLATFORM.get(c.source or "")
         out[c.id] = platform
@@ -769,14 +790,12 @@ def reconciliation(
     no_utm_leads = 0
     for c in contacts:
         e = event_by_contact.get(c.id)
-        if e is None or (not e.utm_source and not e.fbclid and not e.gclid):
+        if e is None or not _landing_has_tracking(e):
             no_utm_leads += 1
             continue
-        source = (e.utm_source or "").lower()
-        if e.fbclid or source in PLATFORM_UTM_ALIASES["meta"]:
-            utm_confirmed["meta"] += 1
-        elif e.gclid or source in PLATFORM_UTM_ALIASES["google"]:
-            utm_confirmed["google"] += 1
+        pid = _platform_from_landing(e)
+        if pid is not None:
+            utm_confirmed[pid] += 1
 
     flags: List[Dict[str, Any]] = []
     per_platform = {}

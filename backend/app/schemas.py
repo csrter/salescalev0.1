@@ -289,6 +289,9 @@ class LandingEventIn(BaseModel):
     fbclid: Optional[str] = None
     fbp: Optional[str] = None
     gclid: Optional[str] = None
+    # Additional platforms' click IDs keyed by URL param (msclkid, ttclid,
+    # li_fat_id, sccid, rdt_cid, epik, …). fbclid/gclid keep dedicated fields.
+    click_ids: Optional[Dict[str, str]] = None
     user_agent: Optional[str] = None
 
 
@@ -434,6 +437,7 @@ class LandingEventOut(BaseModel):
     fbclid: Optional[str] = None
     fbp: Optional[str] = None
     gclid: Optional[str] = None
+    click_ids: Optional[Dict[str, str]] = None
     occurred_at: dt.datetime
     contact_id: Optional[str] = None
 
