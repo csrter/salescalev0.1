@@ -218,8 +218,21 @@ actually built vs. what's still planned.)_
 - [ ] Phase 4 — Customizable UI
 - [ ] Phase 5 — Server-side conversion tracking (CAPI + Google)
 - [ ] Phase 6 — Salescale CRM
-- [ ] Phase 7 — Additional platform adapters (Snapchat, Reddit, LinkedIn,
-      Microsoft Advertising, Nextdoor)
+- [~] Phase 7 — Additional platform adapters (Microsoft, LinkedIn,
+      Snapchat, Reddit, TikTok, Pinterest, Nextdoor)
+      - [x] 7a — Adapter interface generalized before adding platforms
+        (the phase's own prerequisite): canonical registry in
+        `backend/app/platforms.py` is the single source of truth; insights,
+        change-execution, and conversion seams are all registry-driven (no
+        `if platform ==` branching; fixed the Google `else` misroute);
+        attribution + click-ID capture are generic (LandingEvent.click_ids
+        JSON map); `GET /api/platforms` + the frontend render the catalog
+        dynamically. All 7 platforms registered as STUBs ("coming soon");
+        backend 157→165 tests green (run with `TZ=UTC`).
+      - [ ] 7b — Per-platform adapter internals (OAuth connect, campaign
+        CRUD, insights, conversion sender) built + doc-verified, one commit
+        each. Gated on the operator's per-platform developer accounts /
+        API-access approvals for live validation.
 - [ ] Phase 8 — Billing & self-serve onboarding (Stripe, subscription
       tiers, Organization signup)
 - [ ] Phase 9 — White-labeling & AI insights
