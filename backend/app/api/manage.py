@@ -485,11 +485,14 @@ def list_creatives(
     stmt = (
         select(Creative)
         .where(
-            Creative.client_id == account.client_id,
             Creative.platform == account.platform,
+            Creative.client_id == account.client_id,
         )
         .order_by(Creative.created_at.desc())
     )
+    # Belt-and-suspenders: keep every tenant query scoped by organization_id,
+    # per the #1 rule, even though `account` was already tenant-checked.
+    stmt = scope.filter(stmt, Creative)
     return db.execute(stmt).scalars().all()
 
 

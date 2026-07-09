@@ -69,6 +69,28 @@ def test_password_reset_flow(api):
     assert api.post("/api/auth/login", json={"email": "rf@resetflow.com", "password": new_pw}).status_code == 200
 
 
+def test_reset_token_is_single_use(api):
+    # A reset link is bound to the password hash it was issued for, so once
+    # used it can't be replayed (even within its 30-min TTL).
+    _signup(api, "Single Use Co", "su@singleuse.com")
+    assert api.post("/api/auth/forgot-password", json={"email": "su@singleuse.com"}).status_code == 200
+    token = _token(_last_email("su@singleuse.com").body)
+    assert api.post(
+        "/api/auth/reset-password", json={"token": token, "new_password": "first-new-pass-1"}
+    ).status_code == 200
+    # replaying the same link is rejected — fingerprint no longer matches
+    assert api.post(
+        "/api/auth/reset-password", json={"token": token, "new_password": "attacker-pass-2"}
+    ).status_code == 400
+    # and the attacker's password never took effect
+    assert api.post(
+        "/api/auth/login", json={"email": "su@singleuse.com", "password": "attacker-pass-2"}
+    ).status_code == 401
+    assert api.post(
+        "/api/auth/login", json={"email": "su@singleuse.com", "password": "first-new-pass-1"}
+    ).status_code == 200
+
+
 def test_forgot_password_unknown_email_is_silent(api):
     # returns ok without sending anything (no enumeration, no email row)
     assert api.post("/api/auth/forgot-password", json={"email": "nobody@nowhere-xyz.com"}).status_code == 200

@@ -1,4 +1,5 @@
 import datetime as dt
+import hashlib
 from typing import Any, Dict, Optional
 
 import bcrypt
@@ -6,6 +7,14 @@ import jwt
 from cryptography.fernet import Fernet
 
 from .config import get_settings
+
+
+def password_fingerprint(password_hash: str) -> str:
+    """A short, non-reversible digest of a stored password hash. Embedded in
+    password-reset tokens so the token dies the instant the password changes —
+    making a reset link effectively single-use and invalidating any older
+    outstanding reset links once one is used."""
+    return hashlib.sha256(password_hash.encode()).hexdigest()[:16]
 
 
 def hash_password(password: str) -> str:
@@ -61,25 +70,39 @@ def decode_state_token(token: str, purpose: str) -> tuple[str, str]:
     return payload["organization_id"], payload["client_id"]
 
 
-def create_action_token(purpose: str, user_id: str, minutes: int) -> str:
+def create_action_token(
+    purpose: str,
+    user_id: str,
+    minutes: int,
+    extra: Optional[Dict[str, Any]] = None,
+) -> str:
     """Short-lived signed token for a one-off account action (email
     verification, password reset). Bound to a purpose so a verify link can't
-    be replayed as a reset, and vice versa."""
+    be replayed as a reset, and vice versa. `extra` adds claims (e.g. a
+    password-hash fingerprint that makes a reset token single-use)."""
     settings = get_settings()
     payload = {
         "purpose": purpose,
         "sub": user_id,
         "exp": dt.datetime.now(dt.timezone.utc) + dt.timedelta(minutes=minutes),
     }
+    if extra:
+        payload.update(extra)
     return jwt.encode(payload, settings.jwt_secret, algorithm="HS256")
 
 
 def decode_action_token(token: str, purpose: str) -> str:
     """Return the user_id from a valid action token, or raise jwt errors."""
+    return decode_action_payload(token, purpose)["sub"]
+
+
+def decode_action_payload(token: str, purpose: str) -> Dict[str, Any]:
+    """Return the full validated claims of an action token (used when the
+    action needs a claim beyond `sub`, e.g. the reset fingerprint)."""
     payload = jwt.decode(token, get_settings().jwt_secret, algorithms=["HS256"])
     if payload.get("purpose") != purpose:
         raise jwt.InvalidTokenError("action token purpose mismatch")
-    return payload["sub"]
+    return payload
 
 
 def _fernet() -> Fernet:

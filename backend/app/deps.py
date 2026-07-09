@@ -7,7 +7,15 @@ from sqlalchemy.orm import Session
 
 from .config import get_settings
 from .db import get_db
-from .models.core import ADMIN_ROLES, ROLE_CLIENT, ROLE_OWNER, TEAM_ROLES, User
+from .models.core import (
+    ADMIN_ROLES,
+    ORG_SUSPENDED,
+    ROLE_CLIENT,
+    ROLE_OWNER,
+    TEAM_ROLES,
+    Organization,
+    User,
+)
 from .security import decode_access_token
 
 _bearer = HTTPBearer(auto_error=False)
@@ -26,6 +34,13 @@ def get_current_user(
     user = db.get(User, payload["sub"])
     if user is None or not user.is_active:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "User not found or inactive")
+    # Enforce org suspension on every request, not just at login — otherwise a
+    # suspended org's existing tokens keep working until they expire (up to
+    # jwt_expire_minutes). Super-admins (operators) are exempt.
+    if not is_superadmin(user):
+        org = db.get(Organization, user.organization_id)
+        if org is None or org.status == ORG_SUSPENDED:
+            raise HTTPException(status.HTTP_403_FORBIDDEN, "Organization suspended")
     return user
 
 

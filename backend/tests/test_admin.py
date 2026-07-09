@@ -108,6 +108,23 @@ def test_suspend_blocks_login_then_reactivate(api, super_headers):
     ).status_code == 200
 
 
+def test_suspend_blocks_existing_session(api, super_headers):
+    # Suspension takes effect mid-session, not just at the next login: a token
+    # issued before suspension stops working immediately.
+    sess = _signup(api, "Live Session Co", "live@session-co.com")
+    headers = {"Authorization": f"Bearer {sess['access_token']}"}
+    assert api.get("/api/auth/me", headers=headers).status_code == 200
+    r = api.patch(
+        f"/api/admin/organizations/{sess['organization_id']}",
+        headers=super_headers,
+        json={"status": "suspended"},
+    )
+    assert r.status_code == 200
+    # the same still-unexpired token is now rejected on every endpoint
+    assert api.get("/api/auth/me", headers=headers).status_code == 403
+    assert api.get("/api/clients", headers=headers).status_code == 403
+
+
 def test_reset_password(api, super_headers):
     body = _signup(api, "Reset Target", "reset@target-co.com")
     detail = api.get(

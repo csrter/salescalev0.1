@@ -51,12 +51,20 @@ if _settings.sentry_dsn:
 
 app = FastAPI(title="Salescale")
 
-# Loud, actionable warning rather than a silent insecure default in prod.
+# A production deployment (real Postgres DB, not the desktop app) must not run
+# on the built-in dev JWT secret — sessions would be forgeable. Fail closed
+# there; only warn for local sqlite / desktop dev.
 if _settings.jwt_secret == "dev-only-secret-change-me":
-    logging.getLogger("salescale").warning(
-        "JWT_SECRET is the built-in dev default — sessions are forgeable. "
-        "Set a strong JWT_SECRET before any non-local deployment."
+    _prod_like = not _settings.desktop_mode and not _settings.database_url.startswith(
+        "sqlite"
     )
+    _secret_msg = (
+        "JWT_SECRET is the built-in dev default — sessions are forgeable. "
+        'Generate one: python3 -c "import secrets; print(secrets.token_urlsafe(48))"'
+    )
+    if _prod_like:
+        raise RuntimeError(_secret_msg)
+    logging.getLogger("salescale").warning(_secret_msg)
 
 # Per-request access logging is provided by uvicorn's own access logger
 # (`GET /path -> 200`), so we don't add a duplicate middleware. Sentry (above)

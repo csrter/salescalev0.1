@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 
 from ..config import get_settings
 from ..models.core import Organization, User
-from ..security import create_action_token
+from ..security import create_action_token, password_fingerprint
 from . import branding
 from . import email as email_service
 
@@ -59,7 +59,15 @@ def send_verification_email(db: Session, org: Organization, user: User) -> None:
 
 
 def send_reset_email(db: Session, org: Organization, user: User) -> None:
-    token = create_action_token(RESET_PURPOSE, user.id, minutes=30)
+    # Fingerprint the current password hash into the token so it stops working
+    # the moment the password changes — effectively single-use, and it also
+    # invalidates any older outstanding reset links.
+    token = create_action_token(
+        RESET_PURPOSE,
+        user.id,
+        minutes=30,
+        extra={"pw": password_fingerprint(user.hashed_password)},
+    )
     link = f"{get_settings().app_base_url}/?reset={token}"
     product = branding.merged(org).get("product_name", "Salescale")
     email_service.send_email(

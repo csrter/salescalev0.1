@@ -18,13 +18,19 @@ from ..schemas import (
 )
 from ..security import (
     create_access_token,
+    decode_action_payload,
     decode_action_token,
     hash_password,
+    password_fingerprint,
     verify_password,
 )
 from ..services import auth_email
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
+
+# A valid bcrypt hash (cost 12) to verify against when the email isn't
+# registered, so login timing doesn't reveal whether an account exists.
+_DUMMY_PASSWORD_HASH = "$2b$12$CrQk5LRFFPgo3j2mGp9yU.QLPIsNhSbEaBqnCCRFVGon50EBLwGm2"
 
 # Brute-force brake: 20 login attempts per 5 minutes per IP.
 _login_limit = rate_limit("login", limit=20, window_seconds=300)
@@ -37,9 +43,12 @@ def login(body: LoginRequest, db: Session = Depends(get_db), _: None = _login_li
     user = db.execute(
         select(User).where(User.email == body.email.lower())
     ).scalar_one_or_none()
-    if user is None or not user.is_active or not verify_password(
-        body.password, user.hashed_password
-    ):
+    # Always run one bcrypt comparison — against a fixed dummy hash when the
+    # email isn't registered — so a missing account can't be told apart from a
+    # wrong password by response timing (user enumeration).
+    hashed = user.hashed_password if user is not None else _DUMMY_PASSWORD_HASH
+    password_ok = verify_password(body.password, hashed)
+    if user is None or not user.is_active or not password_ok:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid credentials")
     org = db.get(Organization, user.organization_id)
     # A suspended Organization can't be logged into by any of its users. The
@@ -86,7 +95,11 @@ def me(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
 
 
 @router.post("/verify-email", response_model=OkResponse)
-def verify_email(body: VerifyEmailRequest, db: Session = Depends(get_db)):
+def verify_email(
+    body: VerifyEmailRequest,
+    db: Session = Depends(get_db),
+    _: None = _recover_limit,
+):
     try:
         user_id = decode_action_token(body.token, auth_email.VERIFY_PURPOSE)
     except pyjwt.PyJWTError:
@@ -136,11 +149,13 @@ def reset_password(
     _: None = _recover_limit,
 ):
     try:
-        user_id = decode_action_token(body.token, auth_email.RESET_PURPOSE)
+        payload = decode_action_payload(body.token, auth_email.RESET_PURPOSE)
     except pyjwt.PyJWTError:
         raise HTTPException(400, "Invalid or expired reset link")
-    user = db.get(User, user_id)
-    if user is None:
+    user = db.get(User, payload["sub"])
+    # The fingerprint pins the token to the password hash it was issued for, so
+    # a used (or superseded) link no longer resets anything.
+    if user is None or payload.get("pw") != password_fingerprint(user.hashed_password):
         raise HTTPException(400, "Invalid or expired reset link")
     user.hashed_password = hash_password(body.new_password)
     db.commit()
