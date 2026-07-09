@@ -8,6 +8,8 @@
 import { useCallback, useEffect, useState } from "react";
 import { api, type AssetGroup, type Keyword, type SearchTerm } from "./api";
 import { useManage } from "./manage";
+import { DataTable } from "./components/DataTable";
+import { SkeletonText } from "./components/ui";
 
 const MATCH_TYPES = ["EXACT", "PHRASE", "BROAD"] as const;
 
@@ -60,7 +62,12 @@ export function KeywordsPanel({
     ).catch((e) => setError((e as Error).message));
 
   if (error) return <p className="error">{error}</p>;
-  if (keywords === null) return <p className="muted">Loading keywords…</p>;
+  if (keywords === null)
+    return (
+      <div className="subpanel">
+        <SkeletonText lines={3} />
+      </div>
+    );
   return (
     <div className="subpanel">
       <table className="compact">
@@ -147,7 +154,6 @@ export function SearchTermsPanel({
     }).catch((e) => setError((e as Error).message));
 
   if (error) return <p className="error">{error}</p>;
-  if (terms === null) return <p className="muted">Loading search terms…</p>;
   return (
     <div className="subpanel">
       <div className="toggle">
@@ -161,35 +167,58 @@ export function SearchTermsPanel({
           </button>
         ))}
       </div>
-      <table className="compact">
-        <thead>
-          <tr>
-            <th>Search term</th>
-            <th>Impr.</th>
-            <th>Clicks</th>
-            <th>Cost</th>
-            <th>Conv.</th>
-            <th></th>
-          </tr>
-        </thead>
-        <tbody>
-          {terms.map((t) => (
-            <tr key={`${t.ad_group_external_id}-${t.search_term}`}>
-              <td>{t.search_term}</td>
-              <td>{t.impressions}</td>
-              <td>{t.clicks}</td>
-              <td>${(t.cost_micros / 1_000_000).toFixed(2)}</td>
-              <td>{t.conversions}</td>
-              <td>
-                <button className="link" onClick={() => addNegative(t.search_term)}>
-                  Add as negative
-                </button>
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-      {terms.length === 0 && <p className="muted">No search terms in range.</p>}
+      <DataTable<SearchTerm>
+        loading={terms === null}
+        rows={terms ?? []}
+        rowKey={(t) => `${t.ad_group_external_id}-${t.search_term}`}
+        emptyMessage="No search terms in range."
+        initialSort="-cost"
+        columns={[
+          {
+            key: "term",
+            header: "Search term",
+            render: (t) => t.search_term,
+            sortValue: (t) => t.search_term,
+          },
+          {
+            key: "impressions",
+            header: "Impr.",
+            align: "right",
+            render: (t) => t.impressions,
+            sortValue: (t) => t.impressions,
+          },
+          {
+            key: "clicks",
+            header: "Clicks",
+            align: "right",
+            render: (t) => t.clicks,
+            sortValue: (t) => t.clicks,
+          },
+          {
+            key: "cost",
+            header: "Cost",
+            align: "right",
+            render: (t) => `$${(t.cost_micros / 1_000_000).toFixed(2)}`,
+            sortValue: (t) => t.cost_micros,
+          },
+          {
+            key: "conversions",
+            header: "Conv.",
+            align: "right",
+            render: (t) => t.conversions,
+            sortValue: (t) => t.conversions,
+          },
+          {
+            key: "actions",
+            header: "",
+            render: (t) => (
+              <button className="link" onClick={() => addNegative(t.search_term)}>
+                Add as negative
+              </button>
+            ),
+          },
+        ]}
+      />
     </div>
   );
 }
@@ -225,7 +254,12 @@ export function AssetGroupsPanel({
     ).catch((e) => setError((e as Error).message));
 
   if (error) return <p className="error">{error}</p>;
-  if (groups === null) return <p className="muted">Loading asset groups…</p>;
+  if (groups === null)
+    return (
+      <div className="subpanel">
+        <SkeletonText lines={3} />
+      </div>
+    );
   return (
     <div className="subpanel">
       {groups.length === 0 && (

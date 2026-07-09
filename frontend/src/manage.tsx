@@ -24,6 +24,8 @@ import {
   type PendingChange,
   type StageChangeBody,
 } from "./api";
+import { DataTable } from "./components/DataTable";
+import { Badge, EmptyState } from "./components/ui";
 
 interface ManageContextValue {
   stage: (
@@ -194,8 +196,21 @@ export function PendingChangesPanel() {
   if (error) return <p className="error">{error}</p>;
   return (
     <div>
-      <h2>Pending changes</h2>
-      {changes.length === 0 && <p className="muted">Nothing staged.</p>}
+      <div className="page-head">
+        <div>
+          <h2>Pending changes</h2>
+          <p className="page-sub">
+            Staged writes awaiting confirmation — nothing touches a live ad
+            account until it's reviewed here.
+          </p>
+        </div>
+      </div>
+      {changes.length === 0 && (
+        <EmptyState title="Nothing staged">
+          Changes staged anywhere in the app — budgets, pauses, new campaigns —
+          queue here for review before they touch a live ad account.
+        </EmptyState>
+      )}
       <ul className="cards">
         {changes.map((c) => (
           <li key={c.id}>
@@ -226,18 +241,31 @@ export function AuditLogView() {
   const [entries, setEntries] = useState<AuditEntry[]>([]);
   const [platform, setPlatform] = useState("");
   const [status, setStatus] = useState("");
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     const params: Record<string, string> = {};
     if (platform) params.platform = platform;
     if (status) params.status = status;
-    listAudit(params).then(setEntries).catch((e) => setError(e.message));
+    setLoading(true);
+    listAudit(params)
+      .then(setEntries)
+      .catch((e) => setError(e.message))
+      .finally(() => setLoading(false));
   }, [platform, status]);
 
   return (
     <div>
-      <h2>Audit log</h2>
+      <div className="page-head">
+        <div>
+          <h2>Audit log</h2>
+          <p className="page-sub">
+            Every executed or failed write to a live ad account, who staged it,
+            and the exact diff applied.
+          </p>
+        </div>
+      </div>
       <div className="toggle">
         <select value={platform} onChange={(e) => setPlatform(e.target.value)}>
           <option value="">All platforms</option>
@@ -251,45 +279,68 @@ export function AuditLogView() {
         </select>
       </div>
       {error && <p className="error">{error}</p>}
-      {entries.length === 0 && <p className="muted">No entries.</p>}
-      <table className="audit">
-        <thead>
-          <tr>
-            <th>When</th>
-            <th>Who</th>
-            <th>Platform</th>
-            <th>Entity</th>
-            <th>Action</th>
-            <th>Change</th>
-            <th>Outcome</th>
-          </tr>
-        </thead>
-        <tbody>
-          {entries.map((e) => (
-            <tr key={e.id}>
-              <td>{new Date(e.created_at).toLocaleString()}</td>
-              <td title={e.user_email}>{e.user_name}</td>
-              <td>{e.platform}</td>
-              <td>
-                {e.entity_type}
-                {e.entity_name ? ` — ${e.entity_name}` : ""}
-              </td>
-              <td>{e.action}</td>
-              <td>
-                {e.diff
-                  .map((d) => `${d.field}: ${fmtValue(d.before)} → ${fmtValue(d.after)}`)
-                  .join("; ")}
-              </td>
-              <td>
-                <span className={`badge ${e.status}`}>{e.status}</span>
+      <DataTable<AuditEntry>
+        loading={loading}
+        rows={entries}
+        rowKey={(e) => e.id}
+        emptyMessage="No entries."
+        initialSort="-when"
+        columns={[
+          {
+            key: "when",
+            header: "When",
+            render: (e) => new Date(e.created_at).toLocaleString(),
+            sortValue: (e) => e.created_at,
+          },
+          {
+            key: "who",
+            header: "Who",
+            render: (e) => <span title={e.user_email}>{e.user_name}</span>,
+            sortValue: (e) => e.user_name,
+          },
+          {
+            key: "platform",
+            header: "Platform",
+            render: (e) => e.platform,
+            sortValue: (e) => e.platform,
+          },
+          {
+            key: "entity",
+            header: "Entity",
+            render: (e) =>
+              `${e.entity_type}${e.entity_name ? ` — ${e.entity_name}` : ""}`,
+          },
+          {
+            key: "action",
+            header: "Action",
+            render: (e) => e.action,
+            sortValue: (e) => e.action,
+          },
+          {
+            key: "change",
+            header: "Change",
+            render: (e) =>
+              e.diff
+                .map(
+                  (d) => `${d.field}: ${fmtValue(d.before)} → ${fmtValue(d.after)}`
+                )
+                .join("; "),
+          },
+          {
+            key: "outcome",
+            header: "Outcome",
+            render: (e) => (
+              <>
+                <Badge tone={e.status}>{e.status}</Badge>
                 {e.error_detail ? (
                   <span className="muted"> {e.error_detail}</span>
                 ) : null}
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+              </>
+            ),
+            sortValue: (e) => e.status,
+          },
+        ]}
+      />
     </div>
   );
 }

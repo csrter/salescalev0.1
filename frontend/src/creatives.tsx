@@ -8,6 +8,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { api, type CreativeRow } from "./api";
+import { SkeletonText } from "./components/ui";
 
 interface Page {
   id: string;
@@ -212,7 +213,7 @@ function PreviewModal({
           ))}
         </div>
         {error && <p className="error">{error}</p>}
-        {!html && !error && <p className="muted">Rendering via Meta…</p>}
+        {!html && !error && <SkeletonText lines={4} />}
         {html && (
           // Meta returns its own sandboxed iframe snippet for the placement.
           <div className="preview-frame" dangerouslySetInnerHTML={{ __html: html }} />
