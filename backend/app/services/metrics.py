@@ -34,23 +34,24 @@ from ..models.ads import Campaign, InsightDaily, QualitySnapshot
 from ..models.attribution import LandingEvent
 from ..models.core import Client
 from ..models.crm import Contact, Deal
+from .. import platforms as platform_registry
 from . import lead_quality
 
+# Attribution/insight metadata derives from the canonical platform registry
+# (app/platforms.py) so a newly-registered platform is recognized here with no
+# edit to this file — the Phase 7 adapter-pattern requirement.
+#
 # utm_source values that count as each platform when reconciling attribution.
 PLATFORM_UTM_ALIASES: Dict[str, Set[str]] = {
-    "meta": {"facebook", "fb", "meta", "instagram", "ig"},
-    "google": {"google", "googleads", "adwords", "google-ads"},
+    pid: set(aliases) for pid, aliases in platform_registry.utm_alias_map().items()
 }
 
 # Contact.source values that imply a platform when no landing event exists
 # (native lead forms never touch the client's landing page).
-FORM_SOURCE_PLATFORM = {
-    "meta_instant_form": "meta",
-    "google_lead_form": "google",
-}
+FORM_SOURCE_PLATFORM = platform_registry.form_source_map()
 
 # The canonical insight level per platform (see module docstring).
-_INSIGHT_LEVELS = {"meta": "ad", "google": "ad_group"}
+_INSIGHT_LEVELS = platform_registry.insight_levels()
 
 
 # --- shared aggregation helpers ---

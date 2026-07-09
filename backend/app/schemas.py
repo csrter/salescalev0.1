@@ -3,6 +3,8 @@ from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
+from . import platforms as platform_registry
+
 
 class LoginRequest(BaseModel):
     email: EmailStr
@@ -438,7 +440,7 @@ class LandingEventOut(BaseModel):
 
 # --- Phase 5: server-side conversion tracking ---
 
-CONVERSION_PLATFORMS = {"meta", "google"}
+CONVERSION_PLATFORMS = platform_registry.conversion_platform_ids()
 CONSENT_STATUSES = {"GRANTED", "DENIED", "UNSPECIFIED"}
 
 

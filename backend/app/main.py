@@ -30,6 +30,7 @@ from .api import (
     manage,
     metrics,
     orgs,
+    platforms,
     social_auth,
 )
 from .config import get_settings
@@ -77,6 +78,7 @@ app.include_router(orgs.router)
 app.include_router(admin.router)
 app.include_router(billing.router)
 app.include_router(integrations.router)
+app.include_router(platforms.router)
 app.include_router(clients.router)
 app.include_router(connect_meta.router)
 app.include_router(connect_google.router)

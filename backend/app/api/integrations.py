@@ -12,6 +12,7 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from .. import platforms as platform_registry
 from ..db import get_db
 from ..deps import require_admin
 from ..models.base import utcnow
@@ -81,7 +82,10 @@ def _upsert(db: Session, org_id: str, provider: str, **fields) -> None:
 
 @router.get("", response_model=List[IntegrationStatusOut])
 def list_integrations(user: User = Depends(require_admin), db: Session = Depends(get_db)):
-    return [_status(db, user.organization_id, p) for p in ("meta", "google")]
+    return [
+        _status(db, user.organization_id, p)
+        for p in platform_registry.byo_creds_platform_ids()
+    ]
 
 
 @router.put("/meta", response_model=IntegrationStatusOut)

@@ -249,9 +249,11 @@ def test_blended_platform_filter_narrows_every_total(
     assert meta["won_deals_from_paid"] == 0
     assert meta["blended_roas"] is None
 
+    # An unregistered platform id is rejected. (tiktok et al. are now
+    # registered as stubs, so they'd validate to an empty result, not 400.)
     assert (
         api.get(
-            f"/api/metrics/blended?client_id={cid}&platforms=tiktok",
+            f"/api/metrics/blended?client_id={cid}&platforms=notaplatform",
             headers=team_headers,
         ).status_code
         == 400

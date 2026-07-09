@@ -15,6 +15,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from .. import platforms as platform_registry
 from ..db import get_db
 from ..deps import TenantScope, bind_integration_creds, get_scope, require_team
 from ..models.attribution import LandingEvent
@@ -51,7 +52,7 @@ def _platform_set(platforms: Optional[str]) -> Optional[set[str]]:
     if not platforms or platforms == "all":
         return None
     parsed = {p.strip().lower() for p in platforms.split(",") if p.strip()}
-    unknown = parsed - {"meta", "google"}
+    unknown = parsed - platform_registry.all_ids()
     if unknown:
         raise HTTPException(400, f"Unknown platform(s): {', '.join(sorted(unknown))}")
     return parsed or None
