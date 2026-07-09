@@ -15,6 +15,7 @@ Trust model (these are public, unauthenticated-by-JWT endpoints):
   duplicates (services/lead_ingest.py).
 """
 
+import hmac
 import json
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
@@ -28,10 +29,17 @@ from ..models.base import utcnow
 from ..models.core import CONN_ACTIVE, Client, PlatformConnection
 from ..models.crm import LeadFormConfig
 from ..services import connections as conn_svc
+from ..ratelimit import rate_limit
 from ..services import integration_creds, lead_ingest, meta_leadgen
 from ..services.external_sync import push_contact_update
 
 router = APIRouter(prefix="/api/webhooks", tags=["lead-webhooks"])
+
+# Public, signature/key-authenticated inbound — generous per-IP cap (real lead
+# volume) that still bounds DoS/amplification.
+_webhook_limit = rate_limit("lead_webhook", limit=120, window_seconds=60)
+# Max page_ids an unsigned caller can make us resolve in the BYO-secret fallback.
+_MAX_FALLBACK_PAGE_IDS = 20
 
 
 # --- Meta Instant Forms ---
@@ -72,16 +80,22 @@ def _verify_meta_signature(db: Session, raw: bytes, signature) -> bool:
         for change in (entry.get("changes") or [])
     }
     page_ids.discard("")
-    tried: set[str] = set()
-    for page_id in page_ids:
-        config = db.execute(
+    if not page_ids:
+        return False
+    # Bound the work an unsigned caller can force: consider only a capped number
+    # of page_ids, resolved in a single query instead of one-per-id.
+    configs = (
+        db.execute(
             select(LeadFormConfig).where(
                 LeadFormConfig.platform == "meta",
-                LeadFormConfig.external_key == page_id,
+                LeadFormConfig.external_key.in_(list(page_ids)[:_MAX_FALLBACK_PAGE_IDS]),
             )
-        ).scalar_one_or_none()
-        if config is None:
-            continue
+        )
+        .scalars()
+        .all()
+    )
+    tried: set[str] = set()
+    for config in configs:
         client = db.get(Client, config.client_id)
         if client is None:
             continue
@@ -94,7 +108,9 @@ def _verify_meta_signature(db: Session, raw: bytes, signature) -> bool:
 
 
 @router.post("/meta/leadgen")
-async def meta_leadgen_webhook(request: Request, db: Session = Depends(get_db)):
+async def meta_leadgen_webhook(
+    request: Request, db: Session = Depends(get_db), _: None = _webhook_limit
+):
     raw = await request.body()
     if not _verify_meta_signature(db, raw, request.headers.get("X-Hub-Signature-256")):
         raise HTTPException(403, "Invalid signature")
@@ -198,6 +214,7 @@ def google_lead_form_webhook(
     client_id: str,
     body: dict,
     db: Session = Depends(get_db),
+    _: None = _webhook_limit,
 ):
     client = db.get(Client, client_id)
     config = (
@@ -213,7 +230,9 @@ def google_lead_form_webhook(
     )
     # One failure shape for unknown client / not configured / wrong key —
     # a public endpoint shouldn't teach a prober which part was wrong.
-    if config is None or body.get("google_key") != config.external_key:
+    if config is None or not hmac.compare_digest(
+        str(body.get("google_key") or ""), config.external_key
+    ):
         raise HTTPException(403, "Invalid key")
 
     lead_id = str(body.get("lead_id") or "")

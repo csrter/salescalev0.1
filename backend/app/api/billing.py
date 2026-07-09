@@ -17,10 +17,14 @@ from ..config import get_settings
 from ..db import get_db
 from ..deps import require_owner, require_team
 from ..models.core import Organization, User
+from ..ratelimit import rate_limit
 from ..schemas import CheckoutRequest, CheckoutSessionOut, SubscriptionOut
 
 router = APIRouter(prefix="/api/billing", tags=["billing"])
 log = logging.getLogger("salescale.billing")
+
+# Signature-protected, but still cap it per IP (DoS).
+_webhook_limit = rate_limit("stripe_webhook", limit=120, window_seconds=60)
 
 
 def _stripe():
@@ -139,7 +143,9 @@ def apply_subscription_event(db: Session, event: dict) -> None:
 
 
 @router.post("/webhook")
-async def webhook(request: Request, db: Session = Depends(get_db)):
+async def webhook(
+    request: Request, db: Session = Depends(get_db), _: None = _webhook_limit
+):
     settings = get_settings()
     stripe = _stripe()
     payload = await request.body()

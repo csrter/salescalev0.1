@@ -44,11 +44,16 @@ from ..schemas import (
     StageOut,
     StagesUpdateIn,
 )
+from ..ratelimit import rate_limit
 from ..services import crm as crm_svc
 from ..services import external_sync, metrics
 from ..models.base import utcnow
 
 router = APIRouter(prefix="/api/crm", tags=["crm"])
+
+# Public, secret-authenticated inbound sync — tight per-IP cap so the per-client
+# secret can't be brute-forced online (and to blunt DoS).
+_sync_limit = rate_limit("external_sync", limit=30, window_seconds=60)
 
 
 def _client_for(db: Session, scope: TenantScope, client_id: str) -> Client:
@@ -605,6 +610,7 @@ def external_sync_inbound(
     payload: dict,
     x_salescale_secret: Optional[str] = Header(default=None),
     db: Session = Depends(get_db),
+    _: None = _sync_limit,
 ):
     """The external CRM pushes status changes here. Auth = the per-client
     shared secret; one 403 shape for unknown client / sync-not-enabled /

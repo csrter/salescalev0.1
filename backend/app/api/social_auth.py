@@ -22,11 +22,16 @@ from sqlalchemy.orm import Session
 from ..config import get_settings
 from ..db import get_db
 from ..models.core import ROLE_OWNER, Organization, User
+from ..ratelimit import rate_limit
 from ..security import create_access_token, create_action_token, decode_action_token, hash_password
 from ..services import sessions
 
 router = APIRouter(prefix="/api/auth/oauth", tags=["auth"])
 log = logging.getLogger("salescale.social")
+
+# start/callback are public; the callback fires an outbound token-exchange, so
+# cap it to prevent unauthenticated outbound-request amplification.
+_oauth_limit = rate_limit("social_oauth", limit=30, window_seconds=60)
 
 PROVIDERS = ("google", "meta")
 
@@ -167,7 +172,7 @@ def find_or_create_social_user(
 
 
 @router.get("/{provider}/start")
-def start(provider: str):
+def start(provider: str, _: None = _oauth_limit):
     if provider not in PROVIDERS:
         raise HTTPException(404, "Unknown provider")
     _require_configured(provider)
@@ -182,6 +187,7 @@ def callback(
     code: str = "",
     state: str = "",
     db: Session = Depends(get_db),
+    _: None = _oauth_limit,
 ):
     if provider not in PROVIDERS:
         raise HTTPException(404, "Unknown provider")
