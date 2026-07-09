@@ -14,6 +14,8 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { ADMIN_ROLES, TEAM_ROLES, api, type Session } from "./api";
+import { DataTable } from "./components/DataTable";
+import { Skeleton, SkeletonText } from "./components/ui";
 
 interface Stage {
   id: string;
@@ -133,7 +135,22 @@ export function CrmView({
   const canDrag = isTeam && board != null && !board.read_only;
 
   if (error) return <p className="error">{error}</p>;
-  if (!board) return <p className="muted">Loading CRM…</p>;
+  if (!board)
+    return (
+      <section className="crm">
+        <div className="crm-board">
+          {Array.from({ length: 4 }, (_, i) => (
+            <div key={i} className="crm-col">
+              <Skeleton height="1em" width="60%" />
+              <div style={{ height: 10 }} />
+              <Skeleton height="3.4em" />
+              <div style={{ height: 8 }} />
+              <Skeleton height="3.4em" />
+            </div>
+          ))}
+        </div>
+      </section>
+    );
 
   return (
     <section className="crm">
@@ -398,48 +415,61 @@ function LeadList({
           }}
         />
       )}
-      <table className="compact">
-        <thead>
-          <tr>
-            <th>Lead</th>
-            <th>Contact info</th>
-            <th>Source</th>
-            <th>Attribution</th>
-            <th>Status</th>
-          </tr>
-        </thead>
-        <tbody>
-          {contacts.map((c) => (
-            <tr
-              key={c.id}
-              className={`clickable ${selectedId === c.id ? "selected" : ""}`}
-              onClick={() => onSelect(c.id)}
-            >
-              <td>
-                <strong>{contactName(c)}</strong>
-              </td>
-              <td className="muted">
+      <DataTable<ContactRow>
+        rows={contacts}
+        rowKey={(c) => c.id}
+        onRowClick={(c) => onSelect(c.id)}
+        selectedKey={selectedId}
+        initialSort="-created"
+        emptyMessage="No leads yet — they arrive here automatically from Instant Forms, Lead Form ads, and landing pages."
+        columns={[
+          {
+            key: "lead",
+            header: "Lead",
+            render: (c) => <strong>{contactName(c)}</strong>,
+            sortValue: (c) => contactName(c),
+          },
+          {
+            key: "contact",
+            header: "Contact info",
+            render: (c) => (
+              <span className="muted">
                 {[c.email, c.phone].filter(Boolean).join(" · ") || "—"}
-              </td>
-              <td className="muted">{c.source?.replace(/_/g, " ") ?? "—"}</td>
-              <td>
-                <AttributionChips contact={c} />
-              </td>
-              <td>
-                <QualifiedBadge contact={c} />
-              </td>
-            </tr>
-          ))}
-          {contacts.length === 0 && (
-            <tr>
-              <td colSpan={5} className="muted">
-                No leads yet — they arrive here automatically from Instant
-                Forms, Lead Form ads, and landing pages.
-              </td>
-            </tr>
-          )}
-        </tbody>
-      </table>
+              </span>
+            ),
+          },
+          {
+            key: "source",
+            header: "Source",
+            render: (c) => (
+              <span className="muted">{c.source?.replace(/_/g, " ") ?? "—"}</span>
+            ),
+            sortValue: (c) => c.source ?? "",
+          },
+          {
+            key: "attribution",
+            header: "Attribution",
+            render: (c) => <AttributionChips contact={c} />,
+            sortValue: (c) => c.attribution?.platform ?? "",
+          },
+          {
+            key: "status",
+            header: "Status",
+            render: (c) => <QualifiedBadge contact={c} />,
+            sortValue: (c) => (c.qualified_at ? 1 : 0),
+          },
+          {
+            key: "created",
+            header: "Created",
+            render: (c) => (
+              <span className="muted">
+                {new Date(c.created_at).toLocaleDateString()}
+              </span>
+            ),
+            sortValue: (c) => c.created_at,
+          },
+        ]}
+      />
     </div>
   );
 }
@@ -542,7 +572,12 @@ function ContactDrawer({
   }, [contactId, bump, isTeam]);
 
   if (error) return <p className="error">{error}</p>;
-  if (!detail) return <p className="muted">Loading contact…</p>;
+  if (!detail)
+    return (
+      <div className="crm-drawer">
+        <SkeletonText lines={5} />
+      </div>
+    );
 
   const openDeal = detail.deals.find((d) => d.status === "open");
 
