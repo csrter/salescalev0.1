@@ -61,7 +61,7 @@ def exchange_code_for_tokens(code: str) -> Dict[str, Any]:
     return data
 
 
-def _client(refresh_token: str):
+def _client(refresh_token: str, login_customer_id: Optional[str] = None):
     from google.ads.googleads.client import GoogleAdsClient
 
     creds = integration_creds.current_google()  # org's own developer token + client
@@ -72,8 +72,11 @@ def _client(refresh_token: str):
         "refresh_token": refresh_token,
         "use_proto_plus": True,
     }
-    if creds.login_customer_id:
-        config["login_customer_id"] = creds.login_customer_id
+    # login_customer_id scopes the request under a manager; callers expanding a
+    # specific MCC pass that MCC, otherwise fall back to the configured one.
+    lcid = login_customer_id or creds.login_customer_id
+    if lcid:
+        config["login_customer_id"] = lcid
     return GoogleAdsClient.load_from_dict(config)
 
 
@@ -103,9 +106,14 @@ def list_accessible_customers(refresh_token: str) -> List[str]:
     return _wrap_auth_errors(run)
 
 
-def _search(refresh_token: str, customer_id: str, query: str) -> List[Any]:
+def _search(
+    refresh_token: str,
+    customer_id: str,
+    query: str,
+    login_customer_id: Optional[str] = None,
+) -> List[Any]:
     def run():
-        client = _client(refresh_token)
+        client = _client(refresh_token, login_customer_id)
         svc = client.get_service("GoogleAdsService")
         return list(svc.search(customer_id=customer_id, query=query))
 
@@ -130,6 +138,42 @@ def fetch_customer_details(refresh_token: str, customer_id: str) -> Dict[str, An
         "status": c.status.name if c.status else None,
         "is_manager": bool(c.manager),
     }
+
+
+def list_manager_child_accounts(
+    refresh_token: str, manager_id: str
+) -> List[Dict[str, Any]]:
+    """Every enabled, non-manager ad account in the hierarchy under a manager
+    (MCC). `customer_client` returns descendants at all levels, so one query on
+    the top manager surfaces the whole client roster; login_customer_id is the
+    manager itself so the query is authorized under that MCC. Sub-managers are
+    filtered out — only real ad accounts are returned, shaped like
+    fetch_customer_details for a uniform connect path."""
+    rows = _search(
+        refresh_token,
+        manager_id,
+        "SELECT customer_client.id, customer_client.descriptive_name, "
+        "customer_client.currency_code, customer_client.time_zone, "
+        "customer_client.manager, customer_client.status "
+        "FROM customer_client WHERE customer_client.status = 'ENABLED'",
+        login_customer_id=manager_id,
+    )
+    out: List[Dict[str, Any]] = []
+    for row in rows:
+        cc = row.customer_client
+        if cc.manager:
+            continue  # sub-managers aren't ad accounts
+        out.append(
+            {
+                "external_id": str(cc.id),
+                "name": cc.descriptive_name or str(cc.id),
+                "currency": cc.currency_code,
+                "timezone": cc.time_zone,
+                "status": cc.status.name if cc.status else None,
+                "is_manager": False,
+            }
+        )
+    return out
 
 
 def fetch_campaigns(refresh_token: str, customer_id: str) -> List[Dict[str, Any]]:

@@ -79,17 +79,36 @@ def google_oauth_callback(
     # (MCC) account rather than an ad account, or one that's deactivated / not
     # yet enabled. Skip those individually — one bad account must not abort the
     # whole connection, which otherwise leaves every good account unconnected.
+    # Collect the ad accounts to attach: accounts shared directly with this
+    # login, plus — for any manager (MCC) — the enabled ad accounts under it
+    # (the agency model: a whole client roster onboards from one connect). One
+    # inaccessible account never aborts the rest.
+    discovered: list[dict] = []
     for cid in customer_ids:
         try:
             details = google_ads_api.fetch_customer_details(refresh_token, cid)
         except (google_ads_api.GoogleAuthError, google_ads_api.GoogleApiError):
             continue  # not-enabled / deactivated / inaccessible — skip
         if details.get("is_manager"):
-            continue  # MCCs aren't ad accounts; client links live under them
+            try:
+                discovered.extend(
+                    google_ads_api.list_manager_child_accounts(refresh_token, cid)
+                )
+            except (google_ads_api.GoogleAuthError, google_ads_api.GoogleApiError):
+                continue  # can't read under this manager — skip it
+        else:
+            discovered.append(details)  # a directly-shared single ad account
+
+    seen: set[str] = set()
+    for details in discovered:
+        ext = details["external_id"]
+        if ext in seen:
+            continue  # reachable both directly and under its manager
+        seen.add(ext)
         existing = db.execute(
             select(AdAccount).where(
                 AdAccount.platform == PLATFORM_GOOGLE,
-                AdAccount.external_id == details["external_id"],
+                AdAccount.external_id == ext,
             )
         ).scalar_one_or_none()
         if existing is None:
@@ -99,7 +118,7 @@ def google_oauth_callback(
                     client_id=client_id,
                     connection_id=conn.id,
                     platform=PLATFORM_GOOGLE,
-                    external_id=details["external_id"],
+                    external_id=ext,
                     name=details["name"],
                     currency=details.get("currency"),
                     timezone=details.get("timezone"),
@@ -112,8 +131,7 @@ def google_oauth_callback(
         ):
             raise HTTPException(
                 409,
-                f"Google Ads account {details['external_id']} is already "
-                "connected elsewhere",
+                f"Google Ads account {ext} is already connected elsewhere",
             )
     db.commit()
 
