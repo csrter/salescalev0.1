@@ -28,6 +28,7 @@ import {
 } from "./manage";
 import { Dashboard } from "./dashboard";
 import { CrmView } from "./crm";
+import { Logo } from "./logo";
 import { SuperAdmin, TeamAdmin } from "./admin";
 import { Billing, ResetPassword, VerifyEmail } from "./account";
 import { Integrations } from "./integrations";
@@ -150,10 +151,7 @@ export default function App() {
     return (
       <div className="auth-center">
         <div className="auth-card">
-          <div className="brand auth-brand">
-            <span className="brand-mark">◈</span>
-            <span className="brand-name">Salescale</span>
-          </div>
+          <Logo auth />
           <p className="auth-sub">Signing you in…</p>
         </div>
       </div>
@@ -198,10 +196,7 @@ export default function App() {
     <ManageProvider>
       <div className="app">
         <aside className="sidebar">
-          <div className="brand">
-            <span className="brand-mark">◈</span>
-            <span className="brand-name">Salescale</span>
-          </div>
+          <Logo />
           <nav className="side-nav">
             {nav
               .filter((n) => n.show)
@@ -311,10 +306,7 @@ function Login({ onLogin }: { onLogin: (s: Session) => void }) {
   return (
     <div className="auth-shell">
       <div className="auth-aside">
-        <div className="brand auth-brand">
-          <span className="brand-mark">◈</span>
-          <span className="brand-name">Salescale</span>
-        </div>
+        <Logo auth />
         <h2 className="auth-headline">
           Every client's ads &amp; CRM, in one place.
         </h2>

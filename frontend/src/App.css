@@ -25,6 +25,10 @@
   --cobalt-soft: var(--accent-soft);
   --amber: #d97706;
 
+  /* Salescale brand (logo) colors. */
+  --brand-blue: #2b62e0;
+  --brand-navy: #0f2147;
+
   --bg: #f5f6fb;
   --bg-grad-1: #ecedfb;
   --bg-grad-2: #f7f4fb;
@@ -129,8 +133,12 @@ h1, h2, h3, h4 {
 }
 
 .brand-mark {
-  color: #8b8bff;
-  font-size: 1.25rem;
+  flex: none;
+  color: currentColor; /* bars inherit the brand text color (white on dark) */
+}
+
+.brand-name-accent {
+  color: var(--brand-blue);
 }
 
 .side-nav {

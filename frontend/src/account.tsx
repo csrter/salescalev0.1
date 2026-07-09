@@ -10,14 +10,10 @@ import {
   type Session,
   type Subscription,
 } from "./api";
+import { Logo } from "./logo";
 
 function Brand() {
-  return (
-    <div className="brand auth-brand">
-      <span className="brand-mark">◈</span>
-      <span className="brand-name">Salescale</span>
-    </div>
-  );
+  return <Logo auth />;
 }
 
 /* ---- pre-auth: email verification (opened from the emailed link) ---- */
