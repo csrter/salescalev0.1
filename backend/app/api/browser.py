@@ -233,7 +233,7 @@ def _refresh_ad_groups(db: Session, campaign: Campaign) -> None:
             }
             for r in rows
         ]
-    else:
+    elif campaign.platform == PLATFORM_GOOGLE:
         refresh_token = conn_svc.get_refresh_token(conn)
         try:
             rows = google_ads_api.fetch_ad_groups(
@@ -242,6 +242,8 @@ def _refresh_ad_groups(db: Session, campaign: Campaign) -> None:
         except google_ads_api.GoogleAuthError as e:
             raise _auth_failed(db, conn, e)
         items = [{**r, "raw": None} for r in rows]
+    else:
+        raise HTTPException(400, f"Unknown platform {campaign.platform}")
     _upsert(db, AdGroup, base, items)
 
 
@@ -270,7 +272,7 @@ def _refresh_ads(db: Session, ad_group: AdGroup) -> None:
             }
             for r in rows
         ]
-    else:
+    elif ad_group.platform == PLATFORM_GOOGLE:
         refresh_token = conn_svc.get_refresh_token(conn)
         try:
             rows = google_ads_api.fetch_ads(
@@ -279,4 +281,6 @@ def _refresh_ads(db: Session, ad_group: AdGroup) -> None:
         except google_ads_api.GoogleAuthError as e:
             raise _auth_failed(db, conn, e)
         items = [{**r, "raw": None} for r in rows]
+    else:
+        raise HTTPException(400, f"Unknown platform {ad_group.platform}")
     _upsert(db, Ad, base, items)

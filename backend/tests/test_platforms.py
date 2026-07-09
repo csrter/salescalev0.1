@@ -1,6 +1,11 @@
 """Platform registry + GET /api/platforms discovery endpoint."""
 
+from types import SimpleNamespace
+
+import pytest
+
 from app import platforms as reg
+from app.services import change_executor, insights_sync
 
 
 def test_registry_has_reference_and_scaffolded_platforms():
@@ -35,3 +40,18 @@ def test_platforms_endpoint_lists_registry(api, team_headers):
 
 def test_platforms_endpoint_requires_auth(api):
     assert api.get("/api/platforms").status_code == 401
+
+
+def test_dispatch_seams_are_registry_driven():
+    # The insights + change-execution seams are registries keyed by platform,
+    # covering exactly the live reference implementations.
+    assert set(change_executor.CHANGE_EXECUTORS) == {"meta", "google"}
+    assert set(insights_sync.INSIGHTS_FETCHERS) == {"meta", "google"}
+
+
+def test_change_executor_rejects_unregistered_platform():
+    # A platform with no executor must raise, not silently route to Google's
+    # (the pre-refactor `else` fallthrough hazard).
+    acct = SimpleNamespace(platform="tiktok")
+    with pytest.raises(change_executor.UnsupportedChange):
+        change_executor.execute(None, None, acct, None)

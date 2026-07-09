@@ -13,14 +13,14 @@ Unified conventions at this boundary:
   caller can insert the local cache row.
 """
 
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, Optional
 
 from sqlalchemy.orm import Session
 
 from ..models.ads import Ad, AdGroup, Campaign, Creative
 from ..models.audit import PendingChange
 from ..models.base import utcnow
-from ..models.core import PLATFORM_META, AdAccount, PlatformConnection
+from ..models.core import PLATFORM_GOOGLE, PLATFORM_META, AdAccount, PlatformConnection
 from . import connections as conn_svc
 from . import google_ads_api, meta_api
 
@@ -58,10 +58,17 @@ def execute(
     conn: PlatformConnection,
 ) -> Dict[str, Any]:
     """Perform the platform write. Raises Meta/Google Api/Auth errors upward;
-    the router owns audit logging and state transitions."""
-    if account.platform == PLATFORM_META:
-        return _execute_meta(db, change, account, conn)
-    return _execute_google(db, change, account, conn)
+    the router owns audit logging and state transitions.
+
+    Dispatch is registry-driven (CHANGE_EXECUTORS): an unregistered platform
+    raises UnsupportedChange instead of silently falling through to one
+    platform's executor."""
+    executor = CHANGE_EXECUTORS.get(account.platform)
+    if executor is None:
+        raise UnsupportedChange(
+            f"No change executor registered for platform {account.platform!r}"
+        )
+    return executor(db, change, account, conn)
 
 
 # --- Meta ---
@@ -376,3 +383,14 @@ def _cache_update(
                 setattr(row, key, value)
         row.synced_at = utcnow()
     return {"external_id": change.entity_external_id}
+
+
+# Adapter seam: a new platform registers its executor here (a callable with the
+# same (db, change, account, conn) -> result-dict signature). execute() looks
+# it up by platform id — no branching to edit.
+CHANGE_EXECUTORS: Dict[
+    str, Callable[[Session, PendingChange, AdAccount, PlatformConnection], Dict[str, Any]]
+] = {
+    PLATFORM_META: _execute_meta,
+    PLATFORM_GOOGLE: _execute_google,
+}

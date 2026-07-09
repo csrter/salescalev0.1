@@ -12,7 +12,7 @@ polling lands (tracked for a later phase).
 """
 
 import datetime as dt
-from typing import Any, Dict, List
+from typing import Any, Callable, Dict, List, Tuple, Type
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -102,37 +102,68 @@ def _upsert_snapshot(
         existing.value_label = row.get("value_label")
 
 
+def _sync_meta(
+    db: Session, account: AdAccount, conn: PlatformConnection, since: dt.date, until: dt.date
+) -> int:
+    token = conn_svc.get_access_token(conn)
+    rows = meta_api.fetch_insights(
+        token, account.external_id, since.isoformat(), until.isoformat()
+    )
+    count = 0
+    for row in rows:
+        _upsert_insight(db, account, row)
+        count += 1
+    return count
+
+
+def _sync_google(
+    db: Session, account: AdAccount, conn: PlatformConnection, since: dt.date, until: dt.date
+) -> int:
+    refresh_token = conn_svc.get_refresh_token(conn)
+    rows = google_ads_api.fetch_insights(
+        refresh_token, account.external_id, since.isoformat(), until.isoformat()
+    )
+    count = 0
+    for row in rows:
+        _upsert_insight(db, account, row)
+        count += 1
+    # Point-in-time quality signals, snapshotted under today's date.
+    for row in google_ads_api.fetch_keyword_quality_scores(
+        refresh_token, account.external_id
+    ):
+        _upsert_snapshot(db, account, row, "quality_score", until)
+        count += 1
+    for row in google_ads_api.fetch_ad_strength(refresh_token, account.external_id):
+        _upsert_snapshot(db, account, row, "ad_strength", until)
+        count += 1
+    return count
+
+
+# Adapter seam: a new platform registers its insights fetcher here (same
+# (db, account, conn, since, until) -> count signature). Accounts for a
+# platform with no fetcher are simply skipped (returns 0).
+InsightsFetcher = Callable[[Session, AdAccount, PlatformConnection, dt.date, dt.date], int]
+INSIGHTS_FETCHERS: Dict[str, InsightsFetcher] = {
+    PLATFORM_META: _sync_meta,
+    PLATFORM_GOOGLE: _sync_google,
+}
+
+# Auth-error classes that mean "the connection was revoked/expired" — caught so
+# the connection flips to disconnected instead of surfacing as a generic error.
+# A new adapter adds its own *AuthError class here.
+PLATFORM_AUTH_ERRORS: Tuple[Type[Exception], ...] = (
+    meta_api.MetaAuthError,
+    google_ads_api.GoogleAuthError,
+)
+
+
 def _sync_account(db: Session, account: AdAccount, conn: PlatformConnection, days: int) -> int:
     until = dt.date.today()
     since = until - dt.timedelta(days=days)
-    count = 0
-    if account.platform == PLATFORM_META:
-        token = conn_svc.get_access_token(conn)
-        rows = meta_api.fetch_insights(
-            token, account.external_id, since.isoformat(), until.isoformat()
-        )
-        for row in rows:
-            _upsert_insight(db, account, row)
-            count += 1
-    elif account.platform == PLATFORM_GOOGLE:
-        refresh_token = conn_svc.get_refresh_token(conn)
-        rows = google_ads_api.fetch_insights(
-            refresh_token, account.external_id, since.isoformat(), until.isoformat()
-        )
-        for row in rows:
-            _upsert_insight(db, account, row)
-            count += 1
-        # Point-in-time quality signals, snapshotted under today's date.
-        for row in google_ads_api.fetch_keyword_quality_scores(
-            refresh_token, account.external_id
-        ):
-            _upsert_snapshot(db, account, row, "quality_score", until)
-            count += 1
-        for row in google_ads_api.fetch_ad_strength(
-            refresh_token, account.external_id
-        ):
-            _upsert_snapshot(db, account, row, "ad_strength", until)
-            count += 1
+    fetcher = INSIGHTS_FETCHERS.get(account.platform)
+    if fetcher is None:
+        return 0  # no insights adapter for this platform's accounts yet
+    count = fetcher(db, account, conn, since, until)
     db.commit()
     return count
 
@@ -170,7 +201,7 @@ def sync_client(db: Session, client: Client, days: int = 30) -> List[Dict[str, A
                     "rows": rows,
                 }
             )
-        except (meta_api.MetaAuthError, google_ads_api.GoogleAuthError) as e:
+        except PLATFORM_AUTH_ERRORS as e:
             db.rollback()
             conn_svc.mark_disconnected(db, conn, str(e))
             results.append(
