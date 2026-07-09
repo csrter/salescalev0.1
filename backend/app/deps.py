@@ -1,7 +1,7 @@
 from typing import Optional
 
 import jwt as pyjwt
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session
 
@@ -22,6 +22,7 @@ _bearer = HTTPBearer(auto_error=False)
 
 
 def get_current_user(
+    request: Request,
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(_bearer),
     db: Session = Depends(get_db),
 ) -> User:
@@ -41,6 +42,18 @@ def get_current_user(
         raise HTTPException(
             status.HTTP_401_UNAUTHORIZED, "Session expired — please log in again"
         )
+    # Per-device session: reject a token whose session was individually revoked
+    # (session viewing / revoke). Legacy tokens carry no sid and skip this.
+    sid = payload.get("sid")
+    if sid is not None:
+        from .services import sessions
+
+        sess = sessions.get_active(db, sid, user.id)
+        if sess is None:
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, "This session was ended")
+        if sessions.touch(db, sess):
+            db.commit()
+    request.state.session_id = sid
     # Enforce org suspension on every request, not just at login — otherwise a
     # suspended org's existing tokens keep working until they expire (up to
     # jwt_expire_minutes). Super-admins (operators) are exempt.

@@ -34,6 +34,7 @@ def create_access_token(
     organization_id: str,
     client_id: Optional[str],
     token_version: int = 0,
+    session_id: Optional[str] = None,
 ) -> str:
     settings = get_settings()
     payload = {
@@ -44,6 +45,8 @@ def create_access_token(
         # Session-revocation counter; get_current_user rejects a token whose tv
         # is behind the user's current token_version.
         "tv": token_version,
+        # Login-session (device) id — enables per-device viewing/revocation.
+        "sid": session_id,
         "exp": dt.datetime.now(dt.timezone.utc)
         + dt.timedelta(minutes=settings.jwt_expire_minutes),
     }

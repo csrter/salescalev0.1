@@ -10,6 +10,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -60,6 +61,11 @@ class Organization(Base):
     plan: Mapped[str] = mapped_column(String(20), default="starter", nullable=False)
     suspended_at: Mapped[Optional[dt.datetime]] = mapped_column(
         DateTime(timezone=True)
+    )
+    # Org policy: when true, team members must have 2FA enabled — they're gated
+    # to enrollment until they do (see api/auth mfa_setup_required).
+    require_mfa: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=text("false"), nullable=False
     )
     # Phase 8 — Stripe subscription linkage. Populated by the billing webhook.
     stripe_customer_id: Mapped[Optional[str]] = mapped_column(
@@ -169,6 +175,28 @@ class User(Base):
     mfa_otp_hash: Mapped[Optional[str]] = mapped_column(String(200))
     mfa_otp_expires_at: Mapped[Optional[dt.datetime]] = mapped_column(
         DateTime(timezone=True)
+    )
+    created_at: Mapped[dt.datetime] = created_at_column()
+
+
+class UserSession(Base):
+    """One active login session (device). The access token carries this row's
+    id as `sid`; get_current_user rejects a token whose session is missing or
+    revoked, which powers session viewing and per-device / everywhere logout."""
+
+    __tablename__ = "user_sessions"
+
+    id: Mapped[str] = id_column()
+    user_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id"), nullable=False, index=True
+    )
+    user_agent: Mapped[Optional[str]] = mapped_column(String(400))
+    ip: Mapped[Optional[str]] = mapped_column(String(64))
+    last_seen_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    revoked: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=text("false"), nullable=False
     )
     created_at: Mapped[dt.datetime] = created_at_column()
 

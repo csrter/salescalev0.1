@@ -96,6 +96,18 @@ class TokenResponse(BaseModel):
     # Tells the frontend whether to surface the cross-tenant admin console.
     is_superadmin: bool = False
     email_verified: bool = False
+    # True when the org requires 2FA of team members and this user hasn't set it
+    # up — the frontend gates them to enrollment.
+    mfa_setup_required: bool = False
+
+
+class SessionOut(BaseModel):
+    id: str
+    user_agent: Optional[str] = None
+    ip: Optional[str] = None
+    created_at: dt.datetime
+    last_seen_at: dt.datetime
+    current: bool = False
 
 
 class OrgSignupRequest(BaseModel):
@@ -113,7 +125,12 @@ class OrganizationOut(BaseModel):
 
     id: str
     name: str
+    require_mfa: bool = False
     created_at: dt.datetime
+
+
+class OrgSecurityIn(BaseModel):
+    require_mfa: bool
 
 
 class TeamMemberCreate(BaseModel):

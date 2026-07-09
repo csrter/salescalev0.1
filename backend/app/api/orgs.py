@@ -13,14 +13,14 @@ Admins may add members; only the Owner may add admins.
 
 from typing import List
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..db import get_db
 from ..deps import is_superadmin, require_admin, require_owner, require_team
 from ..ratelimit import rate_limit
-from ..services import auth_email, entitlements
+from ..services import auth_email, entitlements, sessions
 from ..models.core import (
     ROLE_ADMIN,
     ROLE_MEMBER,
@@ -30,6 +30,7 @@ from ..models.core import (
 )
 from ..schemas import (
     OrganizationOut,
+    OrgSecurityIn,
     OrgSignupRequest,
     QualifiedLeadCriteriaIn,
     TeamMemberCreate,
@@ -46,7 +47,12 @@ _signup_limit = rate_limit("signup", limit=10, window_seconds=3600)
 
 
 @router.post("/signup", response_model=TokenResponse, status_code=201)
-def signup(body: OrgSignupRequest, db: Session = Depends(get_db), _: None = _signup_limit):
+def signup(
+    body: OrgSignupRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    _: None = _signup_limit,
+):
     """Public: create an Organization and its first user (the Owner), and
     log them in. This inserts only into the new tenant — it can neither read
     nor touch any other Organization's rows."""
@@ -75,7 +81,11 @@ def signup(body: OrgSignupRequest, db: Session = Depends(get_db), _: None = _sig
     auth_email.send_verification_email(db, org, owner)
     db.commit()
 
-    token = create_access_token(owner.id, owner.role, org.id, None)
+    sid = sessions.create(db, owner, request)
+    db.commit()
+    token = create_access_token(
+        owner.id, owner.role, org.id, None, owner.token_version, sid
+    )
     return TokenResponse(
         access_token=token,
         role=owner.role,
@@ -119,6 +129,21 @@ def set_qualified_lead_criteria(
     org.qualified_lead_criteria = [c.model_dump() for c in body.criteria]
     db.commit()
     return {"criteria": org.qualified_lead_criteria}
+
+
+@router.put("/me/require-mfa", response_model=OrganizationOut)
+def set_require_mfa(
+    body: OrgSecurityIn,
+    user: User = Depends(require_owner),
+    db: Session = Depends(get_db),
+):
+    """Owner policy: require every team member to have 2FA. When turned on,
+    members without it are gated to enrollment (mfa_setup_required) on their
+    next request; it doesn't retroactively invalidate their sessions."""
+    org = db.get(Organization, user.organization_id)
+    org.require_mfa = body.require_mfa
+    db.commit()
+    return org
 
 
 @router.get("/me/members", response_model=List[UserOut])

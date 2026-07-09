@@ -14,7 +14,7 @@ from urllib.parse import urlencode
 
 import httpx
 import jwt as pyjwt
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import RedirectResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -23,6 +23,7 @@ from ..config import get_settings
 from ..db import get_db
 from ..models.core import ROLE_OWNER, Organization, User
 from ..security import create_access_token, create_action_token, decode_action_token, hash_password
+from ..services import sessions
 
 router = APIRouter(prefix="/api/auth/oauth", tags=["auth"])
 log = logging.getLogger("salescale.social")
@@ -175,7 +176,13 @@ def start(provider: str):
 
 
 @router.get("/{provider}/callback")
-def callback(provider: str, code: str = "", state: str = "", db: Session = Depends(get_db)):
+def callback(
+    provider: str,
+    request: Request,
+    code: str = "",
+    state: str = "",
+    db: Session = Depends(get_db),
+):
     if provider not in PROVIDERS:
         raise HTTPException(404, "Unknown provider")
     _require_configured(provider)
@@ -186,8 +193,10 @@ def callback(provider: str, code: str = "", state: str = "", db: Session = Depen
 
     email, full_name, email_verified = _exchange_and_fetch(provider, code)
     user = find_or_create_social_user(db, email, full_name, provider, email_verified)
+    sid = sessions.create(db, user, request)
+    db.commit()
     token = create_access_token(
-        user.id, user.role, user.organization_id, user.client_id, user.token_version
+        user.id, user.role, user.organization_id, user.client_id, user.token_version, sid
     )
     # Hand the session token back to the web app via the URL fragment (not the
     # query string, so it isn't logged by servers/proxies). The app reads it,

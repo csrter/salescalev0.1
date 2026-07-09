@@ -1,12 +1,14 @@
+from typing import List
+
 import jwt as pyjwt
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..config import get_settings
 from ..db import get_db
 from ..deps import get_current_user, is_superadmin
-from ..models.core import ORG_SUSPENDED, Organization, User
+from ..models.core import ORG_SUSPENDED, TEAM_ROLES, Organization, User
 from ..ratelimit import rate_limit
 from ..schemas import (
     ForgotPasswordRequest,
@@ -15,6 +17,7 @@ from ..schemas import (
     MfaLoginIn,
     OkResponse,
     ResetPasswordRequest,
+    SessionOut,
     TokenResponse,
     VerifyEmailRequest,
 )
@@ -29,7 +32,7 @@ from ..security import (
 )
 from ..services import auth_email
 from ..services import email as email_service
-from ..services import mfa, sms
+from ..services import mfa, sessions, sms
 
 _MFA_CHALLENGE_PURPOSE = "mfa_login"
 
@@ -45,9 +48,20 @@ _login_limit = rate_limit("login", limit=20, window_seconds=300)
 _recover_limit = rate_limit("recover", limit=5, window_seconds=900)
 
 
-def _token_response(user: User, org: Organization) -> TokenResponse:
+def _mfa_setup_required(org: Organization, user: User) -> bool:
+    """True when the org requires 2FA of its team members and this one hasn't
+    set it up yet — the frontend gates them to enrollment until they do."""
+    return bool(org.require_mfa and user.role in TEAM_ROLES and not user.mfa_method)
+
+
+def _token_response(user: User, org: Organization, session_id: str | None) -> TokenResponse:
     token = create_access_token(
-        user.id, user.role, user.organization_id, user.client_id, user.token_version
+        user.id,
+        user.role,
+        user.organization_id,
+        user.client_id,
+        user.token_version,
+        session_id,
     )
     return TokenResponse(
         access_token=token,
@@ -58,6 +72,7 @@ def _token_response(user: User, org: Organization) -> TokenResponse:
         full_name=user.full_name,
         is_superadmin=is_superadmin(user),
         email_verified=user.email_verified,
+        mfa_setup_required=_mfa_setup_required(org, user),
     )
 
 
@@ -82,7 +97,12 @@ def _dispatch_login_code(db: Session, user: User) -> None:
 
 
 @router.post("/login", response_model=None)
-def login(body: LoginRequest, db: Session = Depends(get_db), _: None = _login_limit):
+def login(
+    body: LoginRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    _: None = _login_limit,
+):
     user = db.execute(
         select(User).where(User.email == body.email.lower())
     ).scalar_one_or_none()
@@ -120,11 +140,19 @@ def login(body: LoginRequest, db: Session = Depends(get_db), _: None = _login_li
             _dispatch_login_code(db, user)
             db.commit()
         return LoginChallenge(method=user.mfa_method, challenge_token=challenge)
-    return _token_response(user, org)
+    sid = sessions.create(db, user, request)
+    resp = _token_response(user, org, sid)
+    db.commit()
+    return resp
 
 
 @router.post("/login/mfa", response_model=TokenResponse)
-def login_mfa(body: MfaLoginIn, db: Session = Depends(get_db), _: None = _login_limit):
+def login_mfa(
+    body: MfaLoginIn,
+    request: Request,
+    db: Session = Depends(get_db),
+    _: None = _login_limit,
+):
     """Second step of a 2FA login: exchange the challenge + a valid code (TOTP,
     the emailed/texted code, or a backup code) for a session."""
     try:
@@ -144,8 +172,9 @@ def login_mfa(body: MfaLoginIn, db: Session = Depends(get_db), _: None = _login_
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Organization suspended")
     if not _verify_mfa_code(user, body.code):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid code")
-    db.commit()  # persist a consumed one-time / backup code
-    return _token_response(user, org)
+    sid = sessions.create(db, user, request)
+    db.commit()  # persist a consumed one-time / backup code + the new session
+    return _token_response(user, org, sid)
 
 
 def _verify_mfa_code(user: User, code: str) -> bool:
@@ -161,11 +190,49 @@ def _verify_mfa_code(user: User, code: str) -> bool:
 
 
 @router.get("/me", response_model=TokenResponse)
-def me(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+def me(
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     """The session for the current token — used by the frontend after a social
-    login redirect to fill in role/org details."""
+    login redirect to fill in role/org details. Reuses the caller's session id
+    so re-issuing the token doesn't spawn a new device session."""
     org = db.get(Organization, user.organization_id)
-    return _token_response(user, org)
+    return _token_response(user, org, getattr(request.state, "session_id", None))
+
+
+@router.get("/sessions", response_model=List[SessionOut])
+def list_sessions(
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    current = getattr(request.state, "session_id", None)
+    return [
+        SessionOut(
+            id=s.id,
+            user_agent=s.user_agent,
+            ip=s.ip,
+            created_at=s.created_at,
+            last_seen_at=s.last_seen_at,
+            current=s.id == current,
+        )
+        for s in sessions.list_for_user(db, user.id)
+    ]
+
+
+@router.delete("/sessions/{session_id}", response_model=OkResponse)
+def revoke_session(
+    session_id: str,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Sign a specific device out. Its next request 401s."""
+    if not sessions.revoke_one(db, session_id, user.id):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Not found")
+    db.commit()
+    return OkResponse()
 
 
 @router.post("/verify-email", response_model=OkResponse)
@@ -241,8 +308,10 @@ def reset_password(
 
 @router.post("/logout-all", response_model=OkResponse)
 def logout_all(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    """Revoke every outstanding session for the caller (all devices). The
-    current token stops working on its next request too."""
+    """Sign out everywhere (all devices), including the caller. Bumps
+    token_version (so every existing JWT fails) and marks all sessions revoked
+    (so the device list reflects it)."""
     user.token_version += 1
+    sessions.revoke_all(db, user.id)
     db.commit()
     return OkResponse()
