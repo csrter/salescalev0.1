@@ -35,6 +35,7 @@ import { Integrations } from "./integrations";
 import {
   forgotPassword,
   oauthStart,
+  openAuthUrl,
   resendVerification,
   sessionFromToken,
 } from "./api";
@@ -298,7 +299,7 @@ function Login({ onLogin }: { onLogin: (s: Session) => void }) {
     setError(null);
     try {
       const { url } = await oauthStart(provider);
-      window.location.href = url;
+      openAuthUrl(url);
     } catch (e) {
       setError((e as Error).message);
     }
@@ -671,7 +672,7 @@ function ClientDetail({
     const { url } = await api<{ url: string }>(
       `/api/connect/${platform}/start?client_id=${client.id}`
     );
-    window.location.href = url;
+    openAuthUrl(url);
   };
 
   return (

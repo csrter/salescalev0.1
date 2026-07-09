@@ -62,6 +62,29 @@ export async function login(email: string, password: string): Promise<Session> {
 export const oauthStart = (provider: "google" | "meta") =>
   api<{ url: string }>(`/api/auth/oauth/${provider}/start`);
 
+// The desktop (Electron) app injects this bridge via preload; on web it's
+// undefined. See electron-app/preload.js.
+declare global {
+  interface Window {
+    salescale?: {
+      isDesktop?: boolean;
+      openExternal?: (url: string) => void;
+    };
+  }
+}
+
+/** Send the user to an OAuth authorize URL. In the desktop app the UI is
+ * served from file://, so navigating the window to an external URL would
+ * hijack the app — open it in the system browser instead (the OAuth callback
+ * returns to the local backend on 127.0.0.1:8000). On web, navigate normally. */
+export function openAuthUrl(url: string): void {
+  if (window.salescale?.isDesktop && window.salescale.openExternal) {
+    window.salescale.openExternal(url);
+  } else {
+    window.location.href = url;
+  }
+}
+
 /** After a social-login redirect (token in the URL fragment), fetch the full
  * session for that token and persist it. */
 export async function sessionFromToken(token: string): Promise<Session> {

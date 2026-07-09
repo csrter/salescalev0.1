@@ -1,9 +1,19 @@
-const { app, BrowserWindow } = require('electron');
+const { app, BrowserWindow, shell, ipcMain } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { spawn } = require('child_process');
 
 let backendProcess = null;
+
+// Open an OAuth authorize URL in the user's default browser (see preload.js).
+// Restricted to http(s) so the renderer can never coerce the main process into
+// opening arbitrary schemes (file://, custom protocols, etc.).
+ipcMain.handle('open-external', (_event, url) => {
+    if (typeof url === 'string' && /^https?:\/\//i.test(url)) {
+        return shell.openExternal(url);
+    }
+    return undefined;
+});
 
 function createWindow() {
     const mainWindow = new BrowserWindow({
@@ -74,6 +84,15 @@ function startBackend() {
             ...passthrough('RESEND_API_KEY', 'resendApiKey'),
             ...passthrough('EMAIL_DEFAULT_FROM_ADDRESS', 'emailFromAddress'),
             ...passthrough('APP_BASE_URL', 'appBaseUrl'),
+            // Operator ad-platform app credentials, so the desktop app can run
+            // the Meta/Google connect (OAuth opens in the system browser and
+            // the callback returns to this local backend on 127.0.0.1:8000).
+            ...passthrough('META_APP_ID', 'metaAppId'),
+            ...passthrough('META_APP_SECRET', 'metaAppSecret'),
+            ...passthrough('GOOGLE_CLIENT_ID', 'googleClientId'),
+            ...passthrough('GOOGLE_CLIENT_SECRET', 'googleClientSecret'),
+            ...passthrough('GOOGLE_DEVELOPER_TOKEN', 'googleDeveloperToken'),
+            ...passthrough('GOOGLE_LOGIN_CUSTOMER_ID', 'googleLoginCustomerId'),
         },
     });
 
