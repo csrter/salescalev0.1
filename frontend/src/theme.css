@@ -1,0 +1,126 @@
+/* Salescale design foundation — the single token source for every screen.
+   Light + dark are defined together via light-dark(); the user toggle works
+   by narrowing color-scheme on :root (see theme.ts). Tenant white-label
+   branding overrides a small set of these at runtime (theme.ts applyBranding)
+   so nothing below may hardcode a brand color outside a token. */
+
+:root {
+  color-scheme: light dark;
+
+  /* --- typography --- */
+  --font-sans: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+  --text-xs: 0.72rem;
+  --text-sm: 0.82rem;
+  --text-md: 0.9rem;
+  --text-base: 15px;
+  --text-lg: 1.05rem;
+  --text-xl: 1.35rem;
+  --text-2xl: 1.7rem;
+  --text-3xl: 2.2rem;
+  --tracking-tight: -0.02em;
+  --tracking-caps: 0.06em;
+
+  /* --- spacing scale (4px base) --- */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+
+  /* --- motion --- */
+  --dur-fast: 0.14s;
+  --dur-med: 0.25s;
+  --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
+
+  /* --- fixed brand palette (navy scale is mode-invariant) --- */
+  --navy-950: #0a1022;
+  --navy-900: #0e1a3c;
+  --navy-800: #142457;
+  --navy-700: #1c3178;
+
+  /* Salescale brand (logo) colors; tenant branding may override at runtime. */
+  --brand-blue: #2b62e0;
+  --brand-navy: #0f2147;
+
+  /* --- accent (tenant-brandable: "primary" keys) --- */
+  --accent: light-dark(#4f46e5, #7c78f0);
+  --accent-strong: light-dark(#4338ca, #938ff5);
+  --accent-soft: light-dark(#e7e8fb, #262d55);
+  /* legacy aliases still referenced across components */
+  --cobalt: var(--accent);
+  --cobalt-strong: var(--accent-strong);
+  --cobalt-soft: var(--accent-soft);
+  --amber: #d97706;
+
+  /* --- surfaces --- */
+  --bg: light-dark(#f5f6fb, #0a0d18);
+  --bg-grad-1: light-dark(#ecedfb, #0c1024);
+  --bg-grad-2: light-dark(#f7f4fb, #0a0d18);
+  --card: light-dark(#ffffff, #151a2e);
+  --surface: light-dark(#fafbfe, #11162a);
+  --border: light-dark(#e7e9f2, #262d47);
+  --border-strong: light-dark(#d6d9e6, #343c5c);
+
+  /* glass surfaces — always pair --glass-bg with backdrop-filter blur and
+     --glass-border; text on glass must use --ink/--ink-soft (AA on both
+     modes against the blurred app background). */
+  --glass-bg: light-dark(rgba(255, 255, 255, 0.66), rgba(21, 26, 46, 0.58));
+  --glass-bg-heavy: light-dark(rgba(255, 255, 255, 0.82), rgba(21, 26, 46, 0.78));
+  --glass-border: light-dark(rgba(255, 255, 255, 0.6), rgba(255, 255, 255, 0.08));
+  --glass-blur: 14px;
+  --glass-highlight: inset 0 1px 0 light-dark(rgba(255, 255, 255, 0.7), rgba(255, 255, 255, 0.06));
+
+  /* --- ink (AA-checked against --bg / --card / glass in both modes) --- */
+  --ink: light-dark(#111530, #e9ecfa);
+  --ink-soft: light-dark(#5b6280, #a2abca);
+  --ink-faint: light-dark(#98a0b8, #6d769a);
+  --ink-on-accent: #ffffff;
+
+  /* --- status --- */
+  --ok: #0e7a55;
+  --ok-soft: light-dark(#d8f3e8, #113729);
+  --warn: #b45309;
+  --warn-soft: light-dark(#fdeed7, #3a2b12);
+  --danger: #bf2334;
+  --danger-soft: light-dark(#fbe1e4, #3a1720);
+
+  /* --- chrome (tenant-brandable: header_start / header_end) --- */
+  --header-start: light-dark(#10152e, #0a0e1e);
+  --header-end: light-dark(#0b0f21, #070a14);
+  --sidebar-bg: linear-gradient(180deg, var(--header-start), var(--header-end));
+  --sidebar-ink: #c8cee6;
+  --sidebar-ink-faint: #838db1;
+
+  /* --- radii & elevation ramp --- */
+  --radius: 16px;
+  --radius-sm: 11px;
+  --shadow-xs: 0 1px 2px light-dark(rgba(16, 21, 48, 0.05), rgba(0, 0, 0, 0.3));
+  --shadow-sm: 0 1px 2px light-dark(rgba(16, 21, 48, 0.06), rgba(0, 0, 0, 0.4)),
+    0 1px 3px light-dark(rgba(16, 21, 48, 0.07), rgba(0, 0, 0, 0.4));
+  --shadow-md: 0 8px 26px light-dark(rgba(16, 21, 48, 0.09), rgba(0, 0, 0, 0.45));
+  --shadow-lg: 0 24px 64px light-dark(rgba(16, 21, 48, 0.18), rgba(0, 0, 0, 0.55));
+
+  /* --- focus ring --- */
+  --ring: 3px solid var(--accent-soft);
+}
+
+/* User toggle (theme.ts persists the choice): narrowing color-scheme flips
+   every light-dark() token at once. No data-theme attr = follow the OS. */
+:root[data-theme="light"] {
+  color-scheme: light;
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --dur-fast: 0s;
+    --dur-med: 0s;
+  }
+}

@@ -1,5 +1,8 @@
-/* Salescale visual identity (Phase 4): navy/cobalt, clean fintech SaaS.
-   One token set drives every screen — team and client-role views alike. */
+/* Salescale visual identity: navy/cobalt, glass/typography-first SaaS.
+   Tokens live in theme.css (light+dark via light-dark(), tenant-brandable);
+   this file is component styles only. */
+
+@import "./theme.css";
 
 *,
 *::before,
@@ -8,81 +11,7 @@
 }
 
 :root {
-  color-scheme: light;
-  font-family: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
-
-  --navy-950: #0a1022;
-  --navy-900: #0e1a3c;
-  --navy-800: #142457;
-  --navy-700: #1c3178;
-
-  --accent: #4f46e5;
-  --accent-strong: #4338ca;
-  --accent-soft: #e7e8fb;
-  /* legacy aliases still referenced across components */
-  --cobalt: var(--accent);
-  --cobalt-strong: var(--accent-strong);
-  --cobalt-soft: var(--accent-soft);
-  --amber: #d97706;
-
-  /* Salescale brand (logo) colors. */
-  --brand-blue: #2b62e0;
-  --brand-navy: #0f2147;
-
-  --bg: #f5f6fb;
-  --bg-grad-1: #ecedfb;
-  --bg-grad-2: #f7f4fb;
-  --card: #ffffff;
-  --surface: #fafbfe;
-  --border: #e7e9f2;
-  --border-strong: #d6d9e6;
-
-  --ink: #111530;
-  --ink-soft: #5b6280;
-  --ink-faint: #98a0b8;
-
-  --ok: #0e7a55;
-  --ok-soft: #d8f3e8;
-  --warn: #b45309;
-  --warn-soft: #fdeed7;
-  --danger: #bf2334;
-  --danger-soft: #fbe1e4;
-
-  --sidebar-bg: linear-gradient(180deg, #10152e, #0b0f21);
-  --sidebar-ink: #c8cee6;
-  --sidebar-ink-faint: #838db1;
-
-  --radius: 16px;
-  --radius-sm: 11px;
-  --shadow-sm: 0 1px 2px rgba(16, 21, 48, 0.06), 0 1px 3px rgba(16, 21, 48, 0.07);
-  --shadow-md: 0 8px 26px rgba(16, 21, 48, 0.09);
-  --shadow-lg: 0 24px 64px rgba(16, 21, 48, 0.18);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    color-scheme: dark;
-    --accent: #7c78f0;
-    --accent-strong: #938ff5;
-    --accent-soft: #262d55;
-    --bg: #0a0d18;
-    --bg-grad-1: #0c1024;
-    --bg-grad-2: #0a0d18;
-    --card: #151a2e;
-    --surface: #11162a;
-    --border: #262d47;
-    --border-strong: #343c5c;
-    --ink: #e9ecfa;
-    --ink-soft: #a2abca;
-    --ink-faint: #6d769a;
-    --ok-soft: #113729;
-    --warn-soft: #3a2b12;
-    --danger-soft: #3a1720;
-    --sidebar-bg: linear-gradient(180deg, #0a0e1e, #070a14);
-    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
-    --shadow-md: 0 8px 26px rgba(0, 0, 0, 0.45);
-    --shadow-lg: 0 24px 64px rgba(0, 0, 0, 0.55);
-  }
+  font-family: var(--font-sans);
 }
 
 body {
