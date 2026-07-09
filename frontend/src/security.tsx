@@ -20,6 +20,7 @@ import {
   type Session,
   type SessionInfo,
 } from "./api";
+import { SkeletonText } from "./components/ui";
 
 type Flow = "idle" | "totp" | "email" | "sms";
 
@@ -90,7 +91,12 @@ export function TwoFactorSettings({ session }: { session: Session }) {
     refresh();
   });
 
-  if (!status) return <p className="muted">Loading…</p>;
+  if (!status)
+    return (
+      <div className="settings mfa-settings">
+        <SkeletonText lines={4} />
+      </div>
+    );
 
   return (
     <div className="settings mfa-settings">

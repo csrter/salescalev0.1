@@ -19,6 +19,7 @@ import {
   type Session,
   type TeamMember,
 } from "./api";
+import { DataTable } from "./components/DataTable";
 
 /* ---------------- Platform super-admin (cross-tenant) ---------------- */
 
@@ -72,47 +73,71 @@ export function SuperAdmin() {
       <SignupChart points={signups} />
 
       <h3>Organizations</h3>
-      <table className="admin-table">
-        <thead>
-          <tr>
-            <th>Organization</th>
-            <th>Plan</th>
-            <th>Status</th>
-            <th>Users</th>
-            <th>Clients</th>
-            <th>Conns</th>
-            <th>Contacts</th>
-            <th>Created</th>
-          </tr>
-        </thead>
-        <tbody>
-          {orgs.map((o) => (
-            <tr key={o.id} className="clickable" onClick={() => setSelected(o)}>
-              <td>{o.name}</td>
-              <td>
-                <span className="badge">{o.plan}</span>
-              </td>
-              <td>
-                <span className={`badge ${o.status === "active" ? "active" : "failed"}`}>
-                  {o.status}
-                </span>
-              </td>
-              <td>{o.user_count}</td>
-              <td>{o.client_count}</td>
-              <td>{o.connection_count}</td>
-              <td>{o.contact_count}</td>
-              <td>{new Date(o.created_at).toLocaleDateString()}</td>
-            </tr>
-          ))}
-          {orgs.length === 0 && (
-            <tr>
-              <td colSpan={8} className="muted">
-                No organizations yet.
-              </td>
-            </tr>
-          )}
-        </tbody>
-      </table>
+      <DataTable<AdminOrgRow>
+        rows={orgs}
+        rowKey={(o) => o.id}
+        onRowClick={(o) => setSelected(o)}
+        initialSort="-created"
+        emptyMessage="No organizations yet."
+        columns={[
+          {
+            key: "name",
+            header: "Organization",
+            render: (o) => o.name,
+            sortValue: (o) => o.name,
+          },
+          {
+            key: "plan",
+            header: "Plan",
+            render: (o) => <span className="badge">{o.plan}</span>,
+            sortValue: (o) => o.plan,
+          },
+          {
+            key: "status",
+            header: "Status",
+            render: (o) => (
+              <span className={`badge ${o.status === "active" ? "active" : "failed"}`}>
+                {o.status}
+              </span>
+            ),
+            sortValue: (o) => o.status,
+          },
+          {
+            key: "users",
+            header: "Users",
+            align: "right",
+            render: (o) => o.user_count,
+            sortValue: (o) => o.user_count,
+          },
+          {
+            key: "clients",
+            header: "Clients",
+            align: "right",
+            render: (o) => o.client_count,
+            sortValue: (o) => o.client_count,
+          },
+          {
+            key: "conns",
+            header: "Conns",
+            align: "right",
+            render: (o) => o.connection_count,
+            sortValue: (o) => o.connection_count,
+          },
+          {
+            key: "contacts",
+            header: "Contacts",
+            align: "right",
+            render: (o) => o.contact_count,
+            sortValue: (o) => o.contact_count,
+          },
+          {
+            key: "created",
+            header: "Created",
+            render: (o) => new Date(o.created_at).toLocaleDateString(),
+            sortValue: (o) => o.created_at,
+          },
+        ]}
+      />
     </div>
   );
 }
