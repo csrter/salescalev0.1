@@ -4,7 +4,7 @@ Orientation for a fresh Claude Code session (or a new engineer). Read this
 first, then `RELEASE_CHECKLIST.md` for the granular release status and
 `CLAUDE.md` for the product vision/phase plan.
 
-_Last updated: 2026-07-09._
+_Last updated: 2026-07-09 (Phase 2 UI modernization session)._
 
 ---
 
@@ -153,15 +153,30 @@ Detailed in `RELEASE_CHECKLIST.md`. The short version:
 
 ## In flight / next up
 
-- **Phase 2 (UI modernization):** a component-level plan was delivered
-  (glassmorphic/typography-first, Cmd+K palette, skeletons, tenant-theme-aware,
-  DataTable) but **not implemented** — awaiting go-live decision on scope. Note:
-  the brief's "DM inbox (LinkedIn/Instagram)" and a white-label **branding
-  settings UI** don't exist yet (branding backend exists; no frontend). Start at
-  the design foundation (`theme.css`/`theme.ts`) + primitives.
-- **Security×UI overlaps to watch when restyling:** `App.tsx` (auth gates,
-  `MfaGate`), `creatives.tsx` (sandboxed `dangerouslySetInnerHTML` preview),
-  branding logo rendering (keep the http(s) scheme guard).
+- **Phase 2 (UI modernization): IMPLEMENTED** (7 `ui:` commits, Stages 0–9).
+  What landed: `theme.css` (all tokens via CSS `light-dark()`, glass/type/
+  spacing/motion scales, tenant-brandable vars) + `theme.ts` (persisted
+  light/dark/system toggle, runtime branding → CSS vars); `src/components/`
+  (Button/GlassCard/Badge/Field/Skeleton/EmptyState, sortable **DataTable**,
+  Toast, **Cmd+K CommandPalette**); collapsible sidebar sections + icon-rail
+  collapse; glass topbar/auth/widgets/CRM drawer; skeletons everywhere;
+  audit log, Google search terms, CRM lead list, and superadmin org list all
+  on DataTable; new **Branding settings page** (`branding.tsx`, Settings →
+  Branding, admin-gated) covering white-label name/logo/colors/email + the
+  custom-domain claim→TXT→verify flow, live-rethemes via `refreshBranding()`.
+  Branding API round-trip was verified against a live backend on throwaway
+  SQLite. The brief's "DM inbox (LinkedIn/Instagram)" remains out of scope
+  (new feature, not a restyle).
+- **Not visually verified in a browser** — the Claude-in-Chrome extension was
+  disconnected all session, so verification was `tsc`+`vite build`+oxlint+
+  dev-server transforms only. Worth a quick human pass over: login page,
+  sidebar collapse, Cmd+K palette, dark-mode toggle, dashboard widgets, CRM.
+- **Security×UI overlaps (honored, re-verify in review):** `App.tsx` auth
+  gates/`MfaGate`/role nav filters restyled but logically untouched; the
+  palette builds commands from the same role-filtered nav list; `creatives.tsx`
+  sandboxed `dangerouslySetInnerHTML` preview untouched; branding logo/favicon
+  URLs re-guarded client-side (`safeBrandUrl`, http(s) only) on top of the
+  backend validator.
 
 ## Doc map
 
