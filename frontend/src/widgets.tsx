@@ -16,6 +16,7 @@ import {
   type Session,
 } from "./api";
 import { useManage } from "./manage";
+import { SkeletonText } from "./components/ui";
 
 // "all" (blended) or a specific platform id from the registry
 // (GET /api/platforms). Not a fixed union so new platforms need no edit here.
@@ -73,7 +74,7 @@ function WidgetBody({
   children: React.ReactNode;
 }) {
   if (error) return <p className="error">{error}</p>;
-  if (loading) return <p className="muted">Loading…</p>;
+  if (loading) return <SkeletonText lines={3} />;
   if (empty) return <p className="muted">{empty}</p>;
   return <>{children}</>;
 }

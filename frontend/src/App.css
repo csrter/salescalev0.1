@@ -939,7 +939,7 @@ nav.toggle {
 }
 
 .node:hover {
-  background: #eef2fb;
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
 }
 
 .muted {
@@ -1086,18 +1086,25 @@ tr.negative td {
 .metric-card {
   flex: 1 1 140px;
   min-width: 140px;
-  background: linear-gradient(160deg, #f7f9ff, #eef2fb);
+  /* was a hardcoded light gradient — broken in dark mode */
+  background: linear-gradient(
+    160deg,
+    color-mix(in srgb, var(--accent) 4%, var(--card)),
+    color-mix(in srgb, var(--accent) 9%, var(--card))
+  );
   border: 1px solid var(--border);
   border-radius: 10px;
-  padding: 0.6rem 0.9rem;
+  padding: 0.65rem 0.9rem;
   display: flex;
   flex-direction: column;
   gap: 0.12rem;
 }
 
 .metric-card strong {
-  font-size: 1.35rem;
-  color: var(--navy-900);
+  font-size: 1.5rem;
+  font-weight: 700;
+  letter-spacing: var(--tracking-tight);
+  color: var(--ink);
   font-variant-numeric: tabular-nums;
 }
 
@@ -1214,11 +1221,19 @@ tr.negative td {
   position: relative;
   display: flex;
   flex-direction: column;
-  background: var(--card);
-  border: 1px solid var(--border);
+  background: var(--glass-bg);
+  -webkit-backdrop-filter: blur(var(--glass-blur));
+  backdrop-filter: blur(var(--glass-blur));
+  border: 1px solid var(--glass-border);
   border-radius: 12px;
+  box-shadow: var(--shadow-xs), var(--glass-highlight);
   overflow: hidden;
   min-width: 0;
+  transition: box-shadow var(--dur-fast) var(--ease-out);
+}
+
+.widget-card:hover {
+  box-shadow: var(--shadow-sm), var(--glass-highlight);
 }
 
 .widget-card.dragging {
@@ -1232,7 +1247,8 @@ tr.negative td {
   gap: 0.45rem;
   padding: 0.45rem 0.75rem;
   border-bottom: 1px solid var(--border);
-  background: linear-gradient(180deg, #fbfcff, #f3f6fd);
+  /* was a hardcoded light gradient — broken in dark mode */
+  background: color-mix(in srgb, var(--surface) 55%, transparent);
   cursor: grab;
   user-select: none;
 }
@@ -1243,9 +1259,11 @@ tr.negative td {
 
 .widget-head h4 {
   margin: 0;
-  font-size: 0.82rem;
+  font-size: var(--text-xs);
   font-weight: 650;
-  color: var(--navy-800);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-caps);
+  color: var(--ink-soft);
   flex: 1;
   white-space: nowrap;
   overflow: hidden;
@@ -1397,7 +1415,7 @@ tr.negative td {
   position: relative;
   height: 14px;
   border-radius: 999px;
-  background: #e8ecf6;
+  background: color-mix(in srgb, var(--ink) 9%, transparent);
   overflow: hidden;
 }
 

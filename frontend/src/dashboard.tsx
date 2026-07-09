@@ -13,6 +13,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, TEAM_ROLES, type Session } from "./api";
+import { EmptyState, Skeleton } from "./components/ui";
 import {
   BenchmarkWidget,
   CampaignTableWidget,
@@ -237,7 +238,26 @@ export function Dashboard({
     }
   };
 
-  if (widgets === null) return <p className="muted">Loading dashboard…</p>;
+  if (widgets === null)
+    return (
+      <section className="dashboard">
+        <div className="widget-grid">
+          {[12, 5, 7, 7, 5].map((w, i) => (
+            <div
+              key={i}
+              className="widget-card"
+              style={{ gridColumn: `span ${w}`, gridRow: "span 2" }}
+            >
+              <div className="widget-body">
+                <Skeleton height="0.8em" width="40%" />
+                <div style={{ height: 12 }} />
+                <Skeleton height="2.2em" />
+              </div>
+            </div>
+          ))}
+        </div>
+      </section>
+    );
 
   const present = new Set(widgets.map((w) => w.type));
   const addable = allowed.filter(([type]) => !present.has(type));
@@ -314,9 +334,10 @@ export function Dashboard({
         })}
       </div>
       {widgets.length === 0 && (
-        <p className="muted">
-          Empty dashboard — use “Add widget” to build your view.
-        </p>
+        <EmptyState title="An empty canvas">
+          Use “Add widget” above to build this view — every widget is
+          drag-to-rearrange and resizable, and the layout saves per user.
+        </EmptyState>
       )}
     </section>
   );
