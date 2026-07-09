@@ -1,15 +1,14 @@
 import jwt as pyjwt
 from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import RedirectResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from ..config import get_settings
 from ..db import get_db
 from ..deps import require_admin
 from ..models.core import AdAccount, Client, PLATFORM_GOOGLE, User
 from ..security import create_state_token, decode_state_token
 from ..services import connections, google_ads_api, integration_creds
+from .connect_common import post_connect_response
 
 router = APIRouter(prefix="/api/connect/google", tags=["connect"])
 
@@ -135,7 +134,4 @@ def google_oauth_callback(
             )
     db.commit()
 
-    settings = get_settings()
-    return RedirectResponse(
-        f"{settings.frontend_origin}/clients/{client_id}?connected=google"
-    )
+    return post_connect_response(client_id, "google")

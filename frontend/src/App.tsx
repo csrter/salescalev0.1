@@ -657,11 +657,23 @@ function ClientDetail({
   const isAdmin = ADMIN_ROLES.includes(session.role);
   const isTeam = TEAM_ROLES.includes(session.role);
 
-  useEffect(() => {
+  const loadConnections = useCallback(() => {
     api<Connection[]>(`/api/clients/${client.id}/connections`)
       .then(setConnections)
       .catch((e) => setError(e.message));
   }, [client.id]);
+
+  useEffect(() => {
+    loadConnections();
+  }, [loadConnections]);
+
+  // Desktop OAuth completes in the system browser; refresh connections when
+  // the app window regains focus so a just-connected platform shows up without
+  // a manual reload. (Harmless on web.)
+  useEffect(() => {
+    window.addEventListener("focus", loadConnections);
+    return () => window.removeEventListener("focus", loadConnections);
+  }, [loadConnections]);
 
   // Platform catalog drives the connect list and filter — see /api/platforms.
   useEffect(() => {

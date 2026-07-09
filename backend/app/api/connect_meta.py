@@ -1,15 +1,14 @@
 import jwt as pyjwt
 from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import RedirectResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from ..config import get_settings
 from ..db import get_db
 from ..deps import require_admin
 from ..models.core import AdAccount, Client, PLATFORM_META, User
 from ..security import create_state_token, decode_state_token
 from ..services import connections, integration_creds, meta_api
+from .connect_common import post_connect_response
 
 router = APIRouter(prefix="/api/connect/meta", tags=["connect"])
 
@@ -105,7 +104,4 @@ def meta_oauth_callback(
             )
     db.commit()
 
-    settings = get_settings()
-    return RedirectResponse(
-        f"{settings.frontend_origin}/clients/{client_id}?connected=meta"
-    )
+    return post_connect_response(client_id, "meta")
