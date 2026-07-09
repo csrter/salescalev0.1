@@ -49,6 +49,7 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
     const body = await resp.json().catch(() => ({}));
     throw new Error(body.detail ?? `HTTP ${resp.status}`);
   }
+  if (resp.status === 204) return undefined as T;
   return (await resp.json()) as T;
 }
 
@@ -255,6 +256,63 @@ export const startCheckout = (plan: OrgPlan) =>
 
 export const openBillingPortal = () =>
   api<{ url: string }>("/api/billing/portal", { method: "POST" });
+
+// --- White-label branding (Owner/Admin settings surface) ---
+
+export interface OrgBranding {
+  product_name: string;
+  logo_url: string | null;
+  favicon_url: string | null;
+  colors: Record<string, string>;
+  email_from_name: string | null;
+  email_from_address: string | null;
+  apply_to_team: boolean;
+}
+
+export interface CustomDomainState {
+  domain: string | null;
+  verified: boolean;
+  verification_token: string | null;
+  txt_record_name: string | null;
+}
+
+export interface BrandingConfig {
+  branding: OrgBranding;
+  custom_domain: CustomDomainState;
+  white_labeling_available: boolean;
+}
+
+export const getOrgBranding = () => api<BrandingConfig>("/api/orgs/me/branding");
+
+export const setOrgBranding = (body: Partial<OrgBranding>) =>
+  api<{ branding: OrgBranding }>("/api/orgs/me/branding", {
+    method: "PUT",
+    body: JSON.stringify(body),
+  });
+
+export const clearOrgBranding = () =>
+  api<void>("/api/orgs/me/branding", { method: "DELETE" });
+
+export const setCustomDomain = (domain: string) =>
+  api<{
+    domain: string;
+    verified: boolean;
+    verification_token: string;
+    txt_record_name: string;
+    instructions: string;
+  }>("/api/orgs/me/custom-domain", {
+    method: "PUT",
+    body: JSON.stringify({ domain }),
+  });
+
+export const verifyCustomDomain = () =>
+  api<{ domain: string; verified: boolean; detail?: string }>(
+    "/api/orgs/me/custom-domain/verify",
+    { method: "POST" }
+  );
+
+export const clearCustomDomain = () =>
+  api<void>("/api/orgs/me/custom-domain", { method: "DELETE" });
 
 // --- Per-org platform API credentials (bring-your-own app) ---
 

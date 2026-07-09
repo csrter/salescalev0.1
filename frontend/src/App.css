@@ -2139,6 +2139,46 @@ p.notice {
   border: 1px solid var(--border);
 }
 
+/* --- Branding settings --- */
+
+.branding-form {
+  max-width: 460px;
+}
+
+.branding-preview {
+  align-self: flex-start;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 6px 10px;
+}
+
+.branding-colors {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 0.6rem;
+}
+
+.branding-color {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  font-size: var(--text-sm);
+}
+
+.branding-color input[type="color"] {
+  width: 38px;
+  height: 28px;
+  padding: 2px;
+  border-radius: 8px;
+  cursor: pointer;
+  flex: none;
+}
+
+.branding-color span:first-of-type {
+  min-width: 0;
+}
+
 /* --- Two-factor auth settings --- */
 .mfa-settings { max-width: 680px; }
 .mfa-settings h2 { margin-bottom: 0.25rem; }

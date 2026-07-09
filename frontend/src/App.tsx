@@ -37,6 +37,7 @@ import { SuperAdmin, TeamAdmin } from "./admin";
 import { Billing, ResetPassword, VerifyEmail } from "./account";
 import { Integrations } from "./integrations";
 import { TwoFactorSettings } from "./security";
+import { BrandingSettings } from "./branding";
 import { CommandPalette, type Command } from "./components/CommandPalette";
 import { ToastProvider } from "./components/Toast";
 import { setThemePref, useBranding, useTheme } from "./theme";
@@ -64,7 +65,8 @@ type IconName =
   | "search"
   | "collapse"
   | "sun"
-  | "moon";
+  | "moon"
+  | "branding";
 
 const ICON_PATHS: Record<IconName, string> = {
   clients:
@@ -84,6 +86,8 @@ const ICON_PATHS: Record<IconName, string> = {
   collapse: "M11 17l-5-5 5-5 M18 17l-5-5 5-5",
   sun: "M12 17a5 5 0 1 0 0-10 5 5 0 0 0 0 10z M12 1v2 M12 21v2 M4.22 4.22l1.42 1.42 M18.36 18.36l1.42 1.42 M1 12h2 M21 12h2 M4.22 19.78l1.42-1.42 M18.36 5.64l1.42-1.42",
   moon: "M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z",
+  branding:
+    "M12 2.7l5.66 5.63a8 8 0 1 1-11.31 0z M12 16a3 3 0 0 0 3-3",
 };
 
 function Icon({ name }: { name: IconName }) {
@@ -121,6 +125,7 @@ type Tab =
   | "team"
   | "integrations"
   | "billing"
+  | "branding"
   | "security"
   | "admin";
 
@@ -131,6 +136,7 @@ const PAGE_TITLES: Record<Tab, string> = {
   team: "Team",
   integrations: "Integrations",
   billing: "Billing",
+  branding: "Branding",
   security: "Security",
   admin: "Platform admin",
 };
@@ -274,6 +280,7 @@ export default function App() {
     { key: "team", label: "Team", icon: "team", section: "Settings", show: isAdmin },
     { key: "integrations", label: "Integrations", icon: "integrations", section: "Settings", show: isAdmin },
     { key: "billing", label: "Billing", icon: "billing", section: "Settings", show: isOwner },
+    { key: "branding", label: "Branding", icon: "branding", section: "Settings", show: isAdmin },
     { key: "security", label: "Security", icon: "security", section: "Settings", show: true },
     { key: "admin", label: "Admin", icon: "admin", section: "Platform", show: !!session.is_superadmin },
   ];
@@ -440,6 +447,7 @@ export default function App() {
             {tab === "team" && isAdmin && <TeamAdmin session={session} />}
             {tab === "integrations" && isAdmin && <Integrations />}
             {tab === "billing" && isOwner && <Billing session={session} />}
+            {tab === "branding" && isAdmin && <BrandingSettings />}
             {tab === "security" && <TwoFactorSettings session={session} />}
             {tab === "admin" && session.is_superadmin && <SuperAdmin />}
           </div>
