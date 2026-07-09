@@ -97,6 +97,54 @@ def test_webhook_checkout_completed_activates_plan(api):
     db2.close()
 
 
+def _sub_event(eid, created, status):
+    return {
+        "id": eid,
+        "created": created,
+        "type": "customer.subscription.updated",
+        "data": {"object": {"customer": "cus_idem1", "status": status}},
+    }
+
+
+def test_webhook_is_idempotent_and_ordered(api):
+    org_id = _signup(api, "Idem Co", "idem@idemco.com")["organization_id"]
+    db = SessionLocal()
+    org = db.get(Organization, org_id)
+    org.stripe_customer_id = "cus_idem1"
+    org.plan = "pro"
+    org.subscription_status = "active"
+    db.commit()
+    db.close()
+
+    # newer event (t=200) cancels -> starter
+    db = SessionLocal()
+    apply_subscription_event(db, _sub_event("evt_2", 200, "canceled"))
+    db.close()
+    db = SessionLocal()
+    assert db.get(Organization, org_id).plan == "starter"
+    db.close()
+
+    # a STALE event (t=100) arriving late must NOT regress the plan
+    db = SessionLocal()
+    apply_subscription_event(db, _sub_event("evt_1", 100, "active"))
+    db.close()
+    db = SessionLocal()
+    assert db.get(Organization, org_id).subscription_status == "canceled"
+    db.close()
+
+    # replaying evt_2 (same id) is a no-op even after a later manual change
+    db = SessionLocal()
+    db.get(Organization, org_id).plan = "pro"
+    db.commit()
+    db.close()
+    db = SessionLocal()
+    apply_subscription_event(db, _sub_event("evt_2", 200, "canceled"))
+    db.close()
+    db = SessionLocal()
+    assert db.get(Organization, org_id).plan == "pro"  # dedup skipped re-cancel
+    db.close()
+
+
 def test_webhook_subscription_deleted_downgrades_to_starter(api):
     org_id = _signup(api, "Cancel Co", "cancel@cancelco.com")["organization_id"]
     db = SessionLocal()

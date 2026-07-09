@@ -8,6 +8,7 @@ Stripe is imported lazily so the package is only required where billing is
 actually configured (e.g. the hosted deployment) — the desktop build doesn't
 need it. When `STRIPE_SECRET_KEY` is unset every endpoint returns 503.
 """
+import datetime as dt
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -16,7 +17,8 @@ from sqlalchemy.orm import Session
 from ..config import get_settings
 from ..db import get_db
 from ..deps import require_owner, require_team
-from ..models.core import Organization, User
+from ..models.base import utcnow
+from ..models.core import Organization, ProcessedStripeEvent, User
 from ..ratelimit import rate_limit
 from ..schemas import CheckoutRequest, CheckoutSessionOut, SubscriptionOut
 
@@ -97,14 +99,39 @@ def create_portal(user: User = Depends(require_owner), db: Session = Depends(get
     return CheckoutSessionOut(url=session.url)
 
 
+def _event_time(event: dict) -> dt.datetime:
+    created = event.get("created")
+    if isinstance(created, (int, float)):
+        return dt.datetime.fromtimestamp(created, tz=dt.timezone.utc)
+    return utcnow()
+
+
+def _is_newer(org: Organization, when: dt.datetime) -> bool:
+    """Is `when` newer than the last applied subscription event for this org?
+    (Guards against an out-of-order/replayed event regressing state.)"""
+    last = org.subscription_event_at
+    if last is None:
+        return True
+    if last.tzinfo is None:  # SQLite returns naive
+        last = last.replace(tzinfo=dt.timezone.utc)
+    return when > last
+
+
 def apply_subscription_event(db: Session, event: dict) -> None:
     """Sync org billing state from a Stripe event. Pure/DB-only (no network),
-    so it's unit-testable without live Stripe signatures."""
+    so it's unit-testable without live Stripe signatures. Idempotent by event id
+    and ordered by the event's created time."""
+    event_id = event.get("id")
+    if event_id and db.get(ProcessedStripeEvent, event_id) is not None:
+        return  # already handled — retry/replay is a no-op
     etype = event.get("type")
     obj = event.get("data", {}).get("object", {})
     settings = get_settings()
+    when = _event_time(event)
 
     if etype == "checkout.session.completed":
+        # The linking event (carries org_id + plan) — always applied so the
+        # customer↔org mapping is established regardless of event ordering.
         org_id = (obj.get("metadata") or {}).get("organization_id")
         plan = (obj.get("metadata") or {}).get("plan")
         org = db.get(Organization, org_id) if org_id else None
@@ -114,7 +141,7 @@ def apply_subscription_event(db: Session, event: dict) -> None:
             if plan:
                 org.plan = plan
             org.subscription_status = "active"
-            db.commit()
+            org.subscription_event_at = when
 
     elif etype in ("customer.subscription.updated", "customer.subscription.deleted"):
         customer_id = obj.get("customer")
@@ -125,7 +152,8 @@ def apply_subscription_event(db: Session, event: dict) -> None:
             if customer_id
             else None
         )
-        if org:
+        # Skip a subscription event older than the last one we applied.
+        if org and _is_newer(org, when):
             org.subscription_status = obj.get("status")
             # Map the active price back to a plan; on cancel, drop to starter.
             if etype == "customer.subscription.deleted" or obj.get("status") in (
@@ -139,7 +167,11 @@ def apply_subscription_event(db: Session, event: dict) -> None:
                 mapped = settings.plan_for_stripe_price(price_id) if price_id else None
                 if mapped:
                     org.plan = mapped
-            db.commit()
+            org.subscription_event_at = when
+
+    if event_id:
+        db.add(ProcessedStripeEvent(id=event_id))
+    db.commit()
 
 
 @router.post("/webhook")

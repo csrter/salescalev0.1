@@ -73,6 +73,11 @@ class Organization(Base):
     )
     stripe_subscription_id: Mapped[Optional[str]] = mapped_column(String(64))
     subscription_status: Mapped[Optional[str]] = mapped_column(String(32))
+    # `created` time of the last applied Stripe subscription event — an older
+    # event is ignored so an out-of-order/replayed webhook can't regress plan.
+    subscription_event_at: Mapped[Optional[dt.datetime]] = mapped_column(
+        DateTime(timezone=True)
+    )
     # Phase 6: the Organization's own qualified-lead definition — a structured
     # checklist (list of {"key", "label"} dicts), not free text. None/empty
     # means the Organization uses a simple qualified yes/no with no checklist.
@@ -176,6 +181,16 @@ class User(Base):
     mfa_otp_expires_at: Mapped[Optional[dt.datetime]] = mapped_column(
         DateTime(timezone=True)
     )
+    created_at: Mapped[dt.datetime] = created_at_column()
+
+
+class ProcessedStripeEvent(Base):
+    """Idempotency ledger for Stripe webhooks: an event id present here was
+    already handled, so retries/replays become no-ops."""
+
+    __tablename__ = "processed_stripe_events"
+
+    id: Mapped[str] = mapped_column(String(255), primary_key=True)  # Stripe event id
     created_at: Mapped[dt.datetime] = created_at_column()
 
 
