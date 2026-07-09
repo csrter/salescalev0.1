@@ -39,7 +39,7 @@ import { Integrations } from "./integrations";
 import { TwoFactorSettings } from "./security";
 import { CommandPalette, type Command } from "./components/CommandPalette";
 import { ToastProvider } from "./components/Toast";
-import { setThemePref } from "./theme";
+import { setThemePref, useBranding, useTheme } from "./theme";
 import {
   forgotPassword,
   oauthStart,
@@ -62,7 +62,9 @@ type IconName =
   | "plus"
   | "chevron"
   | "search"
-  | "collapse";
+  | "collapse"
+  | "sun"
+  | "moon";
 
 const ICON_PATHS: Record<IconName, string> = {
   clients:
@@ -80,6 +82,8 @@ const ICON_PATHS: Record<IconName, string> = {
   chevron: "M9 18l6-6-6-6",
   search: "M11 19a8 8 0 1 0 0-16 8 8 0 0 0 0 16z M21 21l-4.35-4.35",
   collapse: "M11 17l-5-5 5-5 M18 17l-5-5 5-5",
+  sun: "M12 17a5 5 0 1 0 0-10 5 5 0 0 0 0 10z M12 1v2 M12 21v2 M4.22 4.22l1.42 1.42 M18.36 18.36l1.42 1.42 M1 12h2 M21 12h2 M4.22 19.78l1.42-1.42 M18.36 5.64l1.42-1.42",
+  moon: "M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z",
 };
 
 function Icon({ name }: { name: IconName }) {
@@ -401,6 +405,7 @@ export default function App() {
                   {session.is_superadmin ? " · platform" : ""}
                 </span>
               </div>
+              <ThemeToggle />
             </div>
             <button className="logout" onClick={logout}>
               <Icon name="logout" />
@@ -446,6 +451,23 @@ export default function App() {
       </div>
       </ToastProvider>
     </ManageProvider>
+  );
+}
+
+function ThemeToggle() {
+  const { pref, setPref } = useTheme();
+  const resolvedDark =
+    pref === "system"
+      ? window.matchMedia("(prefers-color-scheme: dark)").matches
+      : pref === "dark";
+  return (
+    <button
+      className="theme-toggle"
+      title={`Theme: ${pref} — switch to ${resolvedDark ? "light" : "dark"}`}
+      onClick={() => setPref(resolvedDark ? "light" : "dark")}
+    >
+      <Icon name={resolvedDark ? "sun" : "moon"} />
+    </button>
   );
 }
 
@@ -504,6 +526,7 @@ function MfaGate({
 }
 
 function Login({ onLogin }: { onLogin: (s: Session) => void }) {
+  const branding = useBranding();
   const [mode, setMode] = useState<"login" | "signup" | "forgot">("login");
   const [orgName, setOrgName] = useState("");
   const [fullName, setFullName] = useState("");
@@ -527,11 +550,12 @@ function Login({ onLogin }: { onLogin: (s: Session) => void }) {
       <div className="auth-aside">
         <Logo auth />
         <h2 className="auth-headline">
-          Every client's ads &amp; CRM, in one place.
+          Revolutionizing the way you run&nbsp;ads.
         </h2>
         <p className="auth-tag">
-          Meta, Google and more — blended cross-platform metrics, server-side
-          conversions and a native CRM, built for modern agencies.
+          Every client's ads &amp; CRM, in one place. Meta, Google and more —
+          blended cross-platform metrics, server-side conversions and a native
+          CRM, built for modern agencies.
         </p>
         <ul className="auth-points">
           <li>Manage every client's ad accounts from one login</li>
@@ -619,7 +643,7 @@ function Login({ onLogin }: { onLogin: (s: Session) => void }) {
         </h1>
         <p className="auth-sub">
           {mode === "login"
-            ? "Log in to your Salescale workspace."
+            ? `Log in to your ${branding.product_name} workspace.`
             : mode === "signup"
             ? "Start managing your agency's clients in minutes."
             : "We'll email you a link to set a new password."}
