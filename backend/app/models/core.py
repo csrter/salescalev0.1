@@ -6,6 +6,7 @@ from sqlalchemy import (
     Boolean,
     DateTime,
     ForeignKey,
+    Integer,
     String,
     Text,
     UniqueConstraint,
@@ -142,6 +143,16 @@ class User(Base):
     email_verified: Mapped[bool] = mapped_column(
         Boolean, default=False, nullable=False
     )
+    # Bumped to revoke all outstanding sessions (password reset, logout-all).
+    # The access token carries this value; get_current_user rejects a token
+    # whose version is behind the user's.
+    token_version: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0", nullable=False
+    )
+    # How the account was created: None = email/password (local), else the
+    # social provider ("google"/"meta"). Used to decide whether a social login
+    # may attach to an existing account (see api/social_auth.py).
+    auth_provider: Mapped[Optional[str]] = mapped_column(String(20))
     created_at: Mapped[dt.datetime] = created_at_column()
 
 

@@ -1,9 +1,21 @@
 import datetime as dt
-from typing import Any, Dict, List, Optional
+from typing import Annotated, Any, Dict, List, Optional
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field
+from pydantic import AfterValidator, BaseModel, ConfigDict, EmailStr, Field
 
 from . import platforms as platform_registry
+
+
+def _within_bcrypt_limit(v: str) -> str:
+    # bcrypt silently truncates at 72 bytes; reject anything longer so a
+    # password is never quietly shortened (which also weakens it).
+    if len(v.encode("utf-8")) > 72:
+        raise ValueError("Password must be at most 72 bytes long")
+    return v
+
+
+# A password to be hashed: 8..72 bytes. Reused by every credential-setting model.
+Password = Annotated[str, Field(min_length=8), AfterValidator(_within_bcrypt_limit)]
 
 
 class LoginRequest(BaseModel):
@@ -25,7 +37,7 @@ class ForgotPasswordRequest(BaseModel):
 
 class ResetPasswordRequest(BaseModel):
     token: str
-    new_password: str = Field(min_length=8)
+    new_password: Password
 
 
 class TokenResponse(BaseModel):
@@ -48,7 +60,7 @@ class OrgSignupRequest(BaseModel):
 
     organization_name: str = Field(min_length=1, max_length=200)
     email: EmailStr
-    password: str = Field(min_length=8)
+    password: Password
     full_name: str = Field(min_length=1, max_length=200)
 
 
@@ -62,7 +74,7 @@ class OrganizationOut(BaseModel):
 
 class TeamMemberCreate(BaseModel):
     email: EmailStr
-    password: str = Field(min_length=8)
+    password: Password
     full_name: str = Field(min_length=1, max_length=200)
     role: str  # admin | member (owner is only created via signup)
 

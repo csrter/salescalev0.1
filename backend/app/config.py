@@ -39,6 +39,11 @@ class Settings(BaseSettings):
     # Rate limiting on public endpoints (signup/login). Disabled in the test
     # suite; keep on in every real environment.
     rate_limit_enabled: bool = True
+    # Only honor the X-Forwarded-For header (for the real client IP behind a
+    # load balancer / reverse proxy) when this is set — otherwise a client
+    # could spoof it to evade rate limits. Turn on in a hosted deploy that sits
+    # behind a trusted proxy; leave off for direct/desktop.
+    trust_forwarded_for: bool = False
 
     # When true, users must verify their email before they can log in. Off by
     # default so a fresh deploy works before email delivery is wired up.

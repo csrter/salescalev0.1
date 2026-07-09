@@ -22,6 +22,7 @@ from ..models.attribution import LandingEvent
 from ..models.base import utcnow
 from ..models.conversions import ConversionEvent
 from ..models.core import Client
+from ..ratelimit import rate_limit
 from ..schemas import LeadSubmissionIn
 from ..services import lead_ingest
 from ..services.conversion_dispatch import dispatch_conversion
@@ -29,10 +30,17 @@ from ..services.external_sync import push_contact_update
 
 router = APIRouter(tags=["leads"])
 
+# Public, unauthenticated lead submit — form submits are far rarer than
+# pageviews, so a tighter per-IP cap than /track/landing.
+_lead_limit = rate_limit("track_lead", limit=30, window_seconds=60)
+
 
 @router.post("/api/track/lead", status_code=201)
 def capture_lead(
-    body: LeadSubmissionIn, request: Request, db: Session = Depends(get_db)
+    body: LeadSubmissionIn,
+    request: Request,
+    db: Session = Depends(get_db),
+    _: None = _lead_limit,
 ):
     """No auth (embedded on client landing pages) — same trust model as
     /api/track/landing: inserts scoped to a known client, organization_id

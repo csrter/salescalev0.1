@@ -34,6 +34,13 @@ def get_current_user(
     user = db.get(User, payload["sub"])
     if user is None or not user.is_active:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "User not found or inactive")
+    # Session revocation: a password reset or logout-all bumps token_version,
+    # invalidating every token issued before it. (Tokens minted before this
+    # feature carry no tv and default to 0, matching a fresh user.)
+    if payload.get("tv", 0) != user.token_version:
+        raise HTTPException(
+            status.HTTP_401_UNAUTHORIZED, "Session expired — please log in again"
+        )
     # Enforce org suspension on every request, not just at login — otherwise a
     # suspended org's existing tokens keep working until they expire (up to
     # jwt_expire_minutes). Super-admins (operators) are exempt.

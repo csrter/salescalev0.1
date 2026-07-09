@@ -15,6 +15,8 @@ Trust model (these are public, unauthenticated-by-JWT endpoints):
   duplicates (services/lead_ingest.py).
 """
 
+import json
+
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -26,7 +28,7 @@ from ..models.base import utcnow
 from ..models.core import CONN_ACTIVE, Client, PlatformConnection
 from ..models.crm import LeadFormConfig
 from ..services import connections as conn_svc
-from ..services import lead_ingest, meta_leadgen
+from ..services import integration_creds, lead_ingest, meta_leadgen
 from ..services.external_sync import push_contact_update
 
 router = APIRouter(prefix="/api/webhooks", tags=["lead-webhooks"])
@@ -50,13 +52,51 @@ def meta_verify(request: Request):
     raise HTTPException(403, "Verification failed")
 
 
+def _verify_meta_signature(db: Session, raw: bytes, signature) -> bool:
+    """Verify the leadgen webhook HMAC. Tries the operator's global app secret
+    first, then — for tenants on a bring-your-own Meta app — the app secret of
+    each org that owns a LeadFormConfig for a page_id named in the (still
+    untrusted) payload. The body is only acted on once a signature passes."""
+    settings = get_settings()
+    if settings.meta_app_secret and meta_leadgen.verify_signature(
+        settings.meta_app_secret, raw, signature
+    ):
+        return True
+    try:
+        body = json.loads(raw)
+    except (ValueError, TypeError):
+        return False
+    page_ids = {
+        str((change.get("value") or {}).get("page_id") or "")
+        for entry in (body.get("entry") or [])
+        for change in (entry.get("changes") or [])
+    }
+    page_ids.discard("")
+    tried: set[str] = set()
+    for page_id in page_ids:
+        config = db.execute(
+            select(LeadFormConfig).where(
+                LeadFormConfig.platform == "meta",
+                LeadFormConfig.external_key == page_id,
+            )
+        ).scalar_one_or_none()
+        if config is None:
+            continue
+        client = db.get(Client, config.client_id)
+        if client is None:
+            continue
+        secret = integration_creds.resolve_meta(db, client.organization_id).app_secret
+        if secret and secret not in tried:
+            tried.add(secret)
+            if meta_leadgen.verify_signature(secret, raw, signature):
+                return True
+    return False
+
+
 @router.post("/meta/leadgen")
 async def meta_leadgen_webhook(request: Request, db: Session = Depends(get_db)):
     raw = await request.body()
-    settings = get_settings()
-    if not meta_leadgen.verify_signature(
-        settings.meta_app_secret, raw, request.headers.get("X-Hub-Signature-256")
-    ):
+    if not _verify_meta_signature(db, raw, request.headers.get("X-Hub-Signature-256")):
         raise HTTPException(403, "Invalid signature")
 
     body = await request.json()

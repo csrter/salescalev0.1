@@ -29,7 +29,11 @@ def verify_password(password: str, hashed: str) -> bool:
 
 
 def create_access_token(
-    user_id: str, role: str, organization_id: str, client_id: Optional[str]
+    user_id: str,
+    role: str,
+    organization_id: str,
+    client_id: Optional[str],
+    token_version: int = 0,
 ) -> str:
     settings = get_settings()
     payload = {
@@ -37,6 +41,9 @@ def create_access_token(
         "role": role,
         "organization_id": organization_id,
         "client_id": client_id,
+        # Session-revocation counter; get_current_user rejects a token whose tv
+        # is behind the user's current token_version.
+        "tv": token_version,
         "exp": dt.datetime.now(dt.timezone.utc)
         + dt.timedelta(minutes=settings.jwt_expire_minutes),
     }

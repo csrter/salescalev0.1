@@ -69,6 +69,42 @@ def test_password_reset_flow(api):
     assert api.post("/api/auth/login", json={"email": "rf@resetflow.com", "password": new_pw}).status_code == 200
 
 
+def test_logout_all_revokes_existing_sessions(api):
+    sess = _signup(api, "Logout Co", "logout@logoutco.com")
+    h = {"Authorization": f"Bearer {sess['access_token']}"}
+    assert api.get("/api/auth/me", headers=h).status_code == 200
+    assert api.post("/api/auth/logout-all", headers=h).status_code == 200
+    # the same token no longer works — token_version moved past it
+    assert api.get("/api/auth/me", headers=h).status_code == 401
+
+
+def test_password_reset_revokes_existing_sessions(api):
+    sess = _signup(api, "Reset Revoke Co", "rr@resetrevoke.com")
+    h = {"Authorization": f"Bearer {sess['access_token']}"}
+    assert api.get("/api/auth/me", headers=h).status_code == 200
+    api.post("/api/auth/forgot-password", json={"email": "rr@resetrevoke.com"})
+    token = _token(_last_email("rr@resetrevoke.com").body)
+    assert api.post(
+        "/api/auth/reset-password", json={"token": token, "new_password": "post-reset-pass-1"}
+    ).status_code == 200
+    # a session that predates the reset is invalidated (kicks other devices)
+    assert api.get("/api/auth/me", headers=h).status_code == 401
+
+
+def test_signup_rejects_overlong_password(api):
+    # >72 bytes would be silently truncated by bcrypt — reject it instead.
+    r = api.post(
+        "/api/orgs/signup",
+        json={
+            "organization_name": "Long Pw Co",
+            "email": "longpw@longpwco.com",
+            "password": "a" * 73,
+            "full_name": "X",
+        },
+    )
+    assert r.status_code == 422
+
+
 def test_reset_token_is_single_use(api):
     # A reset link is bound to the password hash it was issued for, so once
     # used it can't be replayed (even within its 30-min TTL).

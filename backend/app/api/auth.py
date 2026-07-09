@@ -63,7 +63,9 @@ def login(body: LoginRequest, db: Session = Depends(get_db), _: None = _login_li
         raise HTTPException(
             status.HTTP_403_FORBIDDEN, "Please verify your email before logging in"
         )
-    token = create_access_token(user.id, user.role, user.organization_id, user.client_id)
+    token = create_access_token(
+        user.id, user.role, user.organization_id, user.client_id, user.token_version
+    )
     return TokenResponse(
         access_token=token,
         role=user.role,
@@ -81,7 +83,9 @@ def me(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """The session for the current token — used by the frontend after a social
     login redirect to fill in role/org details."""
     org = db.get(Organization, user.organization_id)
-    token = create_access_token(user.id, user.role, user.organization_id, user.client_id)
+    token = create_access_token(
+        user.id, user.role, user.organization_id, user.client_id, user.token_version
+    )
     return TokenResponse(
         access_token=token,
         role=user.role,
@@ -158,5 +162,17 @@ def reset_password(
     if user is None or payload.get("pw") != password_fingerprint(user.hashed_password):
         raise HTTPException(400, "Invalid or expired reset link")
     user.hashed_password = hash_password(body.new_password)
+    # Revoke every existing session — a reset should log out other devices,
+    # and if an attacker triggered it, kick them the moment the owner resets.
+    user.token_version += 1
+    db.commit()
+    return OkResponse()
+
+
+@router.post("/logout-all", response_model=OkResponse)
+def logout_all(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Revoke every outstanding session for the caller (all devices). The
+    current token stops working on its next request too."""
+    user.token_version += 1
     db.commit()
     return OkResponse()

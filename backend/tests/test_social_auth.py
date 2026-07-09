@@ -29,19 +29,56 @@ def test_start_configured_returns_consent_url(api, monkeypatch):
 
 def test_find_or_create_new_then_existing():
     db = SessionLocal()
-    u1 = sa.find_or_create_social_user(db, "Social@New.com", "Sam Social")
+    u1 = sa.find_or_create_social_user(db, "Social@New.com", "Sam Social", "google", True)
     assert u1.email == "social@new.com"
     assert u1.role == "owner"
-    assert u1.email_verified is True  # provider already verified it
-    u2 = sa.find_or_create_social_user(db, "social@new.com", "Sam Social")
+    assert u1.email_verified is True  # provider verified it
+    assert u1.auth_provider == "google"
+    u2 = sa.find_or_create_social_user(db, "social@new.com", "Sam Social", "google", True)
     assert u2.id == u1.id  # second time logs in, doesn't duplicate
+    db.close()
+
+
+def test_unverified_social_cannot_attach_to_existing_account():
+    # A local (password) account exists; a social login whose provider did NOT
+    # verify the email (e.g. Meta) must not take it over.
+    from fastapi import HTTPException
+
+    from app.models.core import Organization, ROLE_OWNER, User
+    from app.security import hash_password
+
+    db = SessionLocal()
+    org = Organization(name="Victim Co")
+    db.add(org)
+    db.flush()
+    db.add(
+        User(
+            organization_id=org.id,
+            email="victim@example.com",
+            hashed_password=hash_password("real-password-123"),
+            full_name="Victim",
+            role=ROLE_OWNER,
+        )
+    )
+    db.commit()
+    # Meta login (email_verified=False) for the same email is refused.
+    try:
+        sa.find_or_create_social_user(db, "victim@example.com", "x", "meta", False)
+        assert False, "unverified social login attached to a password account"
+    except HTTPException as e:
+        assert e.status_code == 409
+    # A verified provider (Google) may attach.
+    u = sa.find_or_create_social_user(db, "victim@example.com", "x", "google", True)
+    assert u.email == "victim@example.com"
     db.close()
 
 
 def test_callback_creates_session_and_me_works(api, monkeypatch):
     _configure_google(monkeypatch)
     monkeypatch.setattr(
-        sa, "_exchange_and_fetch", lambda provider, code: ("oauthuser@example.com", "OAuth User")
+        sa,
+        "_exchange_and_fetch",
+        lambda provider, code: ("oauthuser@example.com", "OAuth User", True),
     )
     state = create_action_token("social:google", "nonce", minutes=5)
     r = api.get(

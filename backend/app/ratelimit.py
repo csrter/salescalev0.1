@@ -37,11 +37,13 @@ _store = _FixedWindow()
 
 
 def _client_ip(request: Request) -> str:
-    # Behind a proxy/load balancer the real client is the first X-Forwarded-For
-    # hop; fall back to the socket peer for direct connections.
-    fwd = request.headers.get("x-forwarded-for")
-    if fwd:
-        return fwd.split(",")[0].strip()
+    # Only trust X-Forwarded-For when we're explicitly behind a proxy
+    # (TRUST_FORWARDED_FOR) — otherwise a client can spoof the header to rotate
+    # its apparent IP and defeat the limiter. Default: the real socket peer.
+    if get_settings().trust_forwarded_for:
+        fwd = request.headers.get("x-forwarded-for")
+        if fwd:
+            return fwd.split(",")[0].strip()
     return request.client.host if request.client else "unknown"
 
 

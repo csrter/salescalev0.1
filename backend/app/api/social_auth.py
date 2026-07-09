@@ -70,8 +70,9 @@ def _auth_url(provider: str, state: str) -> str:
     return f"https://www.facebook.com/{get_settings().meta_api_version}/dialog/oauth?{q}"
 
 
-def _exchange_and_fetch(provider: str, code: str) -> tuple[str, str]:
-    """Return (email, full_name) for the authorizing user. Raises on failure."""
+def _exchange_and_fetch(provider: str, code: str) -> tuple[str, str, bool]:
+    """Return (email, full_name, email_verified) for the authorizing user.
+    email_verified reflects the provider's assertion. Raises on failure."""
     cid, csecret = _creds(provider)
     redirect = _redirect_uri(provider)
     if provider == "google":
@@ -97,7 +98,8 @@ def _exchange_and_fetch(provider: str, code: str) -> tuple[str, str]:
         email = info.get("email")
         if not email:
             raise HTTPException(400, "Google account has no email")
-        return email, info.get("name") or ""
+        verified = str(info.get("email_verified")).lower() == "true"
+        return email, info.get("name") or "", verified
     # Meta
     v = get_settings().meta_api_version
     tok = httpx.get(
@@ -121,15 +123,29 @@ def _exchange_and_fetch(provider: str, code: str) -> tuple[str, str]:
     email = info.get("email")
     if not email:
         raise HTTPException(400, "Meta account did not share an email")
-    return email, info.get("name") or ""
+    # Meta's /me email is not a guaranteed-verified signal, so treat it as
+    # unverified — it must not silently attach to a pre-existing account.
+    return email, info.get("name") or "", False
 
 
-def find_or_create_social_user(db: Session, email: str, full_name: str) -> User:
+def find_or_create_social_user(
+    db: Session, email: str, full_name: str, provider: str, email_verified: bool
+) -> User:
     """Log in an existing user by email, or provision a new Organization + Owner.
-    The provider has already verified the email, so it's marked verified."""
+
+    Attaching to an EXISTING account is only allowed when the provider verified
+    the email, or the account was itself created via this same provider —
+    otherwise an unverified provider email (e.g. Meta's) could take over a
+    password or other-provider account."""
     email = email.lower()
     user = db.execute(select(User).where(User.email == email)).scalar_one_or_none()
     if user is not None:
+        if not email_verified and user.auth_provider != provider:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                "An account with this email already exists. Sign in with your "
+                "password.",
+            )
         return user
     org = Organization(name=f"{full_name}'s Organization" if full_name else "My Organization")
     db.add(org)
@@ -141,7 +157,8 @@ def find_or_create_social_user(db: Session, email: str, full_name: str) -> User:
         hashed_password=hash_password(secrets.token_urlsafe(24)),
         full_name=full_name or email,
         role=ROLE_OWNER,
-        email_verified=True,
+        email_verified=email_verified,
+        auth_provider=provider,
     )
     db.add(user)
     db.commit()
@@ -167,9 +184,11 @@ def callback(provider: str, code: str = "", state: str = "", db: Session = Depen
     except pyjwt.PyJWTError:
         raise HTTPException(400, "Invalid or expired login state")
 
-    email, full_name = _exchange_and_fetch(provider, code)
-    user = find_or_create_social_user(db, email, full_name)
-    token = create_access_token(user.id, user.role, user.organization_id, user.client_id)
+    email, full_name, email_verified = _exchange_and_fetch(provider, code)
+    user = find_or_create_social_user(db, email, full_name, provider, email_verified)
+    token = create_access_token(
+        user.id, user.role, user.organization_id, user.client_id, user.token_version
+    )
     # Hand the session token back to the web app via the URL fragment (not the
     # query string, so it isn't logged by servers/proxies). The app reads it,
     # then calls /api/auth/me for the rest of the session.

@@ -9,15 +9,22 @@ from ..deps import TenantScope, get_scope
 from ..models.attribution import LandingEvent
 from ..models.base import utcnow
 from ..models.core import Client
+from ..ratelimit import rate_limit
 from ..schemas import LandingEventIn, LandingEventOut
 
 router = APIRouter(tags=["attribution"])
+
+# Public, unauthenticated capture — cap per-IP so a single source can't flood
+# a client's attribution table. Generous enough for real landing-page traffic.
+_track_limit = rate_limit("track_landing", limit=120, window_seconds=60)
 
 
 @router.post(
     "/api/track/landing", response_model=LandingEventOut, status_code=201
 )
-def capture_landing_event(body: LandingEventIn, db: Session = Depends(get_db)):
+def capture_landing_event(
+    body: LandingEventIn, db: Session = Depends(get_db), _: None = _track_limit
+):
     """Public capture endpoint — embedded on client landing pages, so no
     auth. It only ever inserts an attribution row for a known client; it
     reads nothing back beyond the created row."""
