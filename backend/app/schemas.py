@@ -27,6 +27,50 @@ class OkResponse(BaseModel):
     ok: bool = True
 
 
+# --- Two-factor auth ---
+
+
+class MfaStatusOut(BaseModel):
+    method: Optional[str] = None  # None | "totp" | "email" | "sms"
+    phone_hint: Optional[str] = None  # masked phone, for the sms method
+    backup_codes_remaining: int = 0
+
+
+class TotpSetupOut(BaseModel):
+    secret: str  # base32, for manual entry
+    otpauth_uri: str  # rendered as a QR code by the frontend
+
+
+class MfaCodeIn(BaseModel):
+    code: str = Field(min_length=4, max_length=12)
+
+
+class MfaSmsSetupIn(BaseModel):
+    phone: str = Field(min_length=7, max_length=20)
+
+
+class MfaDisableIn(BaseModel):
+    password: str
+
+
+class MfaEnabledOut(BaseModel):
+    method: str
+    backup_codes: List[str]  # shown once, at enable time
+
+
+class LoginChallenge(BaseModel):
+    """Returned by /login when the account has 2FA — no session yet."""
+
+    mfa_required: bool = True
+    method: str
+    challenge_token: str
+
+
+class MfaLoginIn(BaseModel):
+    challenge_token: str
+    code: str = Field(min_length=4, max_length=20)  # a 2FA code or a backup code
+
+
 class VerifyEmailRequest(BaseModel):
     token: str
 

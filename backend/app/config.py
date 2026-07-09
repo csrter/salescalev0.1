@@ -95,6 +95,13 @@ class Settings(BaseSettings):
     # per-org address) must be on a domain you've verified in Resend.
     resend_api_key: str = ""
 
+    # SMS via Twilio, used for phone-based 2FA. All three must be set or SMS
+    # 2FA is unavailable (enrollment returns 503). TOTP + email 2FA need none
+    # of this.
+    twilio_account_sid: str = ""
+    twilio_auth_token: str = ""
+    twilio_from_number: str = ""
+
     # Phase 8 — Stripe subscription billing. Unset = billing disabled (the
     # /api/billing endpoints return 503). Each plan maps to a Stripe Price.
     stripe_secret_key: str = ""

@@ -29,6 +29,7 @@ from .api import (
     leads,
     manage,
     metrics,
+    mfa,
     orgs,
     platforms,
     social_auth,
@@ -82,6 +83,7 @@ app.add_middleware(
 
 app.include_router(auth.router)
 app.include_router(social_auth.router)
+app.include_router(mfa.router)
 app.include_router(orgs.router)
 app.include_router(admin.router)
 app.include_router(billing.router)

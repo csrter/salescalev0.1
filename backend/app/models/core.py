@@ -153,6 +153,23 @@ class User(Base):
     # social provider ("google"/"meta"). Used to decide whether a social login
     # may attach to an existing account (see api/social_auth.py).
     auth_provider: Mapped[Optional[str]] = mapped_column(String(20))
+
+    # --- Two-factor auth (see services/mfa.py, api/mfa.py) ---
+    # Active second factor: None = off, else "totp" | "email" | "sms".
+    mfa_method: Mapped[Optional[str]] = mapped_column(String(10))
+    # TOTP shared secret (Fernet-encrypted at rest). Present once TOTP is set up
+    # (may exist unconfirmed during enrollment before mfa_method flips to totp).
+    totp_secret_encrypted: Mapped[Optional[str]] = mapped_column(Text)
+    # SMS destination for phone 2FA (encrypted — it's PII).
+    mfa_phone_encrypted: Mapped[Optional[str]] = mapped_column(Text)
+    # One-time recovery codes, each stored as a bcrypt hash; consumed on use.
+    mfa_backup_codes: Mapped[Optional[list]] = mapped_column(JSON)
+    # A pending email/SMS one-time code (bcrypt-hashed) + its expiry, set when a
+    # login challenge or enrollment sends a code.
+    mfa_otp_hash: Mapped[Optional[str]] = mapped_column(String(200))
+    mfa_otp_expires_at: Mapped[Optional[dt.datetime]] = mapped_column(
+        DateTime(timezone=True)
+    )
     created_at: Mapped[dt.datetime] = created_at_column()
 
 

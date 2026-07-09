@@ -10,7 +10,9 @@ from ..models.core import ORG_SUSPENDED, Organization, User
 from ..ratelimit import rate_limit
 from ..schemas import (
     ForgotPasswordRequest,
+    LoginChallenge,
     LoginRequest,
+    MfaLoginIn,
     OkResponse,
     ResetPasswordRequest,
     TokenResponse,
@@ -18,6 +20,7 @@ from ..schemas import (
 )
 from ..security import (
     create_access_token,
+    create_action_token,
     decode_action_payload,
     decode_action_token,
     hash_password,
@@ -25,6 +28,10 @@ from ..security import (
     verify_password,
 )
 from ..services import auth_email
+from ..services import email as email_service
+from ..services import mfa, sms
+
+_MFA_CHALLENGE_PURPOSE = "mfa_login"
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
@@ -38,7 +45,43 @@ _login_limit = rate_limit("login", limit=20, window_seconds=300)
 _recover_limit = rate_limit("recover", limit=5, window_seconds=900)
 
 
-@router.post("/login", response_model=TokenResponse)
+def _token_response(user: User, org: Organization) -> TokenResponse:
+    token = create_access_token(
+        user.id, user.role, user.organization_id, user.client_id, user.token_version
+    )
+    return TokenResponse(
+        access_token=token,
+        role=user.role,
+        organization_id=user.organization_id,
+        organization_name=org.name,
+        client_id=user.client_id,
+        full_name=user.full_name,
+        is_superadmin=is_superadmin(user),
+        email_verified=user.email_verified,
+    )
+
+
+def _dispatch_login_code(db: Session, user: User) -> None:
+    """For email/SMS 2FA, send the one-time login code to the user."""
+    code = mfa.set_pending_code(user)
+    if user.mfa_method == mfa.METHOD_SMS:
+        phone = mfa.load_phone(user)
+        try:
+            sms.send_sms(phone, f"Your Salescale verification code is {code}")
+        except RuntimeError:
+            pass  # delivery failure surfaces as an inability to complete login
+    else:
+        org = db.get(Organization, user.organization_id)
+        email_service.send_email(
+            db,
+            org,
+            user.email,
+            "Your Salescale verification code",
+            f"Your Salescale verification code is {code}. It expires in 5 minutes.",
+        )
+
+
+@router.post("/login", response_model=None)
 def login(body: LoginRequest, db: Session = Depends(get_db), _: None = _login_limit):
     user = db.execute(
         select(User).where(User.email == body.email.lower())
@@ -63,19 +106,58 @@ def login(body: LoginRequest, db: Session = Depends(get_db), _: None = _login_li
         raise HTTPException(
             status.HTTP_403_FORBIDDEN, "Please verify your email before logging in"
         )
-    token = create_access_token(
-        user.id, user.role, user.organization_id, user.client_id, user.token_version
-    )
-    return TokenResponse(
-        access_token=token,
-        role=user.role,
-        organization_id=user.organization_id,
-        organization_name=org.name,
-        client_id=user.client_id,
-        full_name=user.full_name,
-        is_superadmin=is_superadmin(user),
-        email_verified=user.email_verified,
-    )
+    # Second factor: password alone isn't a session — issue a short-lived
+    # challenge and (for email/SMS) send the code. The client completes at
+    # /login/mfa.
+    if user.mfa_method:
+        challenge = create_action_token(
+            _MFA_CHALLENGE_PURPOSE,
+            user.id,
+            minutes=10,
+            extra={"tv": user.token_version},
+        )
+        if user.mfa_method in (mfa.METHOD_EMAIL, mfa.METHOD_SMS):
+            _dispatch_login_code(db, user)
+            db.commit()
+        return LoginChallenge(method=user.mfa_method, challenge_token=challenge)
+    return _token_response(user, org)
+
+
+@router.post("/login/mfa", response_model=TokenResponse)
+def login_mfa(body: MfaLoginIn, db: Session = Depends(get_db), _: None = _login_limit):
+    """Second step of a 2FA login: exchange the challenge + a valid code (TOTP,
+    the emailed/texted code, or a backup code) for a session."""
+    try:
+        payload = decode_action_payload(body.challenge_token, _MFA_CHALLENGE_PURPOSE)
+    except pyjwt.PyJWTError:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid or expired challenge")
+    user = db.get(User, payload["sub"])
+    if (
+        user is None
+        or not user.is_active
+        or not user.mfa_method
+        or payload.get("tv", 0) != user.token_version
+    ):
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid or expired challenge")
+    org = db.get(Organization, user.organization_id)
+    if org.status == ORG_SUSPENDED and not is_superadmin(user):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Organization suspended")
+    if not _verify_mfa_code(user, body.code):
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid code")
+    db.commit()  # persist a consumed one-time / backup code
+    return _token_response(user, org)
+
+
+def _verify_mfa_code(user: User, code: str) -> bool:
+    if user.mfa_method == mfa.METHOD_TOTP:
+        secret = mfa.load_totp_secret(user)
+        if secret and mfa.verify_totp(secret, code):
+            return True
+    elif user.mfa_method in (mfa.METHOD_EMAIL, mfa.METHOD_SMS):
+        if mfa.verify_pending_code(user, code):
+            return True
+    # A backup/recovery code satisfies any method.
+    return mfa.consume_backup_code(user, code)
 
 
 @router.get("/me", response_model=TokenResponse)
@@ -83,19 +165,7 @@ def me(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """The session for the current token — used by the frontend after a social
     login redirect to fill in role/org details."""
     org = db.get(Organization, user.organization_id)
-    token = create_access_token(
-        user.id, user.role, user.organization_id, user.client_id, user.token_version
-    )
-    return TokenResponse(
-        access_token=token,
-        role=user.role,
-        organization_id=user.organization_id,
-        organization_name=org.name,
-        client_id=user.client_id,
-        full_name=user.full_name,
-        is_superadmin=is_superadmin(user),
-        email_verified=user.email_verified,
-    )
+    return _token_response(user, org)
 
 
 @router.post("/verify-email", response_model=OkResponse)
