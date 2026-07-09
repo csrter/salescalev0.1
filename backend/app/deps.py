@@ -157,6 +157,39 @@ def get_scope(user: User = Depends(get_current_user)) -> TenantScope:
     return TenantScope(user)
 
 
+def mfa_gate(
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(_bearer),
+    db: Session = Depends(get_db),
+) -> None:
+    """Hard server-side enforcement of the org 2FA policy. Applied at the
+    router level to the app-data routers: a team member of an org that requires
+    2FA is blocked (403) until they enable it. The enrollment path
+    (/api/mfa, /api/auth, /api/orgs/me) is deliberately NOT gated so they can
+    comply. Super-admins are exempt (operator access).
+
+    Tolerant of unauthenticated requests so it's safe on routers that also carry
+    a public endpoint (e.g. Stripe/CRM webhooks): with no/invalid token it does
+    nothing and the route's own auth (or lack of it) applies.
+    """
+    if credentials is None:
+        return
+    try:
+        payload = decode_access_token(credentials.credentials)
+    except pyjwt.PyJWTError:
+        return  # the endpoint's own auth dependency will reject it
+    user = db.get(User, payload.get("sub"))
+    if user is None or is_superadmin(user):
+        return
+    if user.role in TEAM_ROLES and not user.mfa_method:
+        org = db.get(Organization, user.organization_id)
+        if org is not None and org.require_mfa:
+            raise HTTPException(
+                status.HTTP_403_FORBIDDEN,
+                "Two-factor authentication is required by your organization — "
+                "enable it to continue.",
+            )
+
+
 def bind_integration_creds(
     user: User = Depends(get_current_user), db: Session = Depends(get_db)
 ) -> None:

@@ -1,6 +1,6 @@
 import logging
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 logging.basicConfig(
@@ -35,6 +35,7 @@ from .api import (
     social_auth,
 )
 from .config import get_settings
+from .deps import mfa_gate
 from .migrations import upgrade_to_head
 
 _settings = get_settings()
@@ -81,28 +82,35 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Routers left OPEN so a 2FA-gated user can still authenticate, enroll, and
+# manage their session/policy: auth, social_auth, mfa, orgs, admin (super-admin
+# only), platforms (discovery), and the public ingest/branding routers.
 app.include_router(auth.router)
 app.include_router(social_auth.router)
 app.include_router(mfa.router)
 app.include_router(orgs.router)
 app.include_router(admin.router)
-app.include_router(billing.router)
-app.include_router(integrations.router)
 app.include_router(platforms.router)
-app.include_router(clients.router)
-app.include_router(connect_meta.router)
-app.include_router(connect_google.router)
-app.include_router(browser.router)
-app.include_router(manage.router)
 app.include_router(attribution.router)
 app.include_router(leads.router)
-app.include_router(conversions.router)
-app.include_router(metrics.router)
-app.include_router(dashboard.router)
-app.include_router(crm.router)
 app.include_router(lead_webhooks.router)
 app.include_router(branding.router)
-app.include_router(ai.router)
+
+# App-data routers — hard-gated by the org 2FA policy (mfa_gate is a no-op for
+# unauthenticated requests, so their public webhooks still work).
+_MFA = [Depends(mfa_gate)]
+app.include_router(billing.router, dependencies=_MFA)
+app.include_router(integrations.router, dependencies=_MFA)
+app.include_router(clients.router, dependencies=_MFA)
+app.include_router(connect_meta.router, dependencies=_MFA)
+app.include_router(connect_google.router, dependencies=_MFA)
+app.include_router(browser.router, dependencies=_MFA)
+app.include_router(manage.router, dependencies=_MFA)
+app.include_router(conversions.router, dependencies=_MFA)
+app.include_router(metrics.router, dependencies=_MFA)
+app.include_router(dashboard.router, dependencies=_MFA)
+app.include_router(crm.router, dependencies=_MFA)
+app.include_router(ai.router, dependencies=_MFA)
 
 
 @app.get("/api/health")

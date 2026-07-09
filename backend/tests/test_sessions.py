@@ -1,4 +1,5 @@
 """Session viewing / revoke, logout-everywhere, and the org 2FA policy."""
+import pyotp
 
 PW = "session-pass-123456"
 
@@ -69,3 +70,28 @@ def test_org_require_mfa_gates_team_members(api):
     # only the owner may change the policy
     hm = _h(_login(api, "member@policyco.com"))
     assert api.put("/api/orgs/me/require-mfa", headers=hm, json={"require_mfa": False}).status_code == 403
+
+
+def test_require_mfa_is_enforced_server_side(api):
+    owner = _signup(api, "Enforce Co", "owner@enforceco.com")
+    ho = _h(owner)
+    api.post(
+        "/api/orgs/me/members",
+        headers=ho,
+        json={"email": "m@enforceco.com", "password": PW, "full_name": "M", "role": "member"},
+    )
+    api.put("/api/orgs/me/require-mfa", headers=ho, json={"require_mfa": True})
+    hm = _h(_login(api, "m@enforceco.com"))
+
+    # App-data routers are hard-blocked (not just the UI) until 2FA is on...
+    assert api.get("/api/clients", headers=hm).status_code == 403
+    assert api.get("/api/clients", headers=ho).status_code == 403  # owner too
+    # ...but the enrollment / auth / org-read path stays open so they can comply
+    assert api.get("/api/mfa", headers=hm).status_code == 200
+    assert api.get("/api/auth/me", headers=hm).status_code == 200
+    assert api.get("/api/orgs/me", headers=hm).status_code == 200
+
+    # enroll TOTP, then app access is restored
+    secret = api.post("/api/mfa/totp/setup", headers=hm).json()["secret"]
+    api.post("/api/mfa/totp/enable", headers=hm, json={"code": pyotp.TOTP(secret).now()})
+    assert api.get("/api/clients", headers=hm).status_code == 200
