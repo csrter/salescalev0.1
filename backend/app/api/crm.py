@@ -452,6 +452,14 @@ def update_deal(
                 crm_svc.close_deal(db, client, deal, body.status)
             except ValueError as e:
                 raise HTTPException(400, str(e))
+    if body.stage_id is not None or (
+        body.status is not None and deal.status != "open"
+    ):
+        # Outreach CRM-sync rule: a pipeline move or a won/lost close exits
+        # any active outreach sequence for this contact — no manual cleanup.
+        from ..services import outreach_sequences
+
+        outreach_sequences.exit_for_contact(db, deal.contact_id)
     db.commit()
     return DealOut.model_validate(deal)
 

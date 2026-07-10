@@ -22,6 +22,18 @@ class Settings(BaseSettings):
     # leadgen webhooks) — any string, must match the App Dashboard config.
     meta_webhook_verify_token: str = ""
 
+    # Outreach module (Instagram DM automation). The scheduler is the asyncio
+    # loop in main.py driving sequence steps + queued-send flushes; disabled in
+    # tests (they call the tick synchronously).
+    outreach_scheduler_enabled: bool = True
+    outreach_tick_seconds: int = 60
+    # Default per-account daily send cap for newly connected IG accounts —
+    # deliberately conservative; tenants can raise it per account.
+    outreach_default_daily_cap: int = 100
+    # Queued (window-closed) automated messages older than this are dropped
+    # rather than sent into a long-dead thread.
+    outreach_queue_max_age_hours: int = 168
+
     google_client_id: str = ""
     google_client_secret: str = ""
     google_developer_token: str = ""

@@ -238,6 +238,36 @@ actually built vs. what's still planned.)_
 - [ ] Phase 9 — White-labeling & AI insights
 - [ ] Phase 10 — Call tracking, account health & client trust
 
+### Feature module: Outreach (Instagram DM automation) — [~] scaffolded
+Built on the compliant Meta Graph / Instagram Messaging API (extends the
+existing leadgen-webhook trust model; no browser automation/scraping).
+- Backend: `app/models/outreach.py` (+ Alembic `e522d55c44a7`),
+  `services/instagram_api.py` (Graph calls — RE-VERIFY each request shape
+  against live docs when `instagram_manage_messages` App Review access
+  lands, same gating as Phase 7b), `services/outreach_send.py` (single send
+  gateway: 24h-window/cap/audit enforcement; automated sends never use a
+  message tag, queue until the window reopens), `services/outreach_rules.py`
+  (inbound trigger engine), `services/outreach_sequences.py` (step engine +
+  A/B promotion + `run_due` scheduler tick), `services/outreach_ingest.py`
+  (webhook processing), `api/outreach.py` + `api/outreach_webhooks.py`.
+  Scheduler is the asyncio loop in `main.py` (`OUTREACH_SCHEDULER_ENABLED`,
+  off in tests). CRM stage change exits sequences (hook in `api/crm.py`).
+  18 tests in `tests/test_outreach.py`; full suite 202 green (TZ=UTC).
+- Frontend: `frontend/src/outreach.tsx` (`OutreachView`: Inbox/Rules/
+  Sequences/Prospects/Analytics/Accounts), wired into `App.tsx` Workspace
+  nav (team-only; member = Rep/inbox-only). NOT yet typechecked/built —
+  this box lacks Node; run `npm run build` in `frontend/` to verify.
+- Compliance reality baked in: the IG API cannot cold-DM a user who hasn't
+  engaged, so prospect/target lists are WATCH lists that auto-enroll on
+  first inbound engagement — not cold-send lists. Roles: Owner/Admin =
+  Manager, Member = Rep, Client = no access.
+- Desktop: ships via the existing Electron + PyInstaller DMG flow (repo uses
+  Electron, not Tauri as the module brief assumed — reused rather than
+  parallel-built). No shell changes needed.
+- TODO before production: run frontend build; per-endpoint Graph shape
+  re-verification at App-Review time; webhook-subscription retry UI; Ad
+  Library prospecting source (service stub present, no UI).
+
 ## PHASE FILES
 
 Run these one at a time, in order, as separate Claude Code sessions or

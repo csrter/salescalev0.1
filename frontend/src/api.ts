@@ -618,3 +618,295 @@ export const resetUserPassword = (userId: string) =>
   api<PasswordResetResult>(`/api/admin/users/${userId}/reset-password`, {
     method: "POST",
   });
+
+// --- Outreach (Instagram DM automation) ---
+
+export interface IgAccount {
+  id: string;
+  client_id: string;
+  ig_user_id: string;
+  username: string | null;
+  name: string | null;
+  status: "active" | "disconnected";
+  error_detail: string | null;
+  daily_send_cap: number;
+  automation_paused: boolean;
+  connected_at: string | null;
+}
+
+export type OutreachTriggerType =
+  | "dm"
+  | "story_reply"
+  | "comment"
+  | "live_comment"
+  | "mention"
+  | "story_mention";
+
+export interface OutreachRule {
+  id: string;
+  client_id: string;
+  account_id: string;
+  name: string;
+  enabled: boolean;
+  trigger_type: OutreachTriggerType;
+  keywords: string[];
+  media_ids: string[];
+  filters: { min_followers?: number; max_followers?: number; verified_only?: boolean };
+  reply_text: string | null;
+  create_contact: boolean;
+  tag_names: string[];
+  enroll_sequence_id: string | null;
+  capture_prospect: boolean;
+  once_per_user: boolean;
+}
+
+export interface OutreachStep {
+  id?: string;
+  position?: number;
+  kind: "message" | "wait" | "condition";
+  text_a?: string | null;
+  text_b?: string | null;
+  promoted_variant?: string | null;
+  wait_hours?: number | null;
+  condition?: string | null;
+  on_true?: string | null;
+  on_false?: string | null;
+}
+
+export interface OutreachSequence {
+  id: string;
+  client_id: string;
+  account_id: string;
+  name: string;
+  description: string | null;
+  status: "draft" | "active" | "paused";
+  review_first_day: boolean;
+  exit_on_reply: boolean;
+  settings: Record<string, unknown>;
+  activated_at: string | null;
+  steps?: OutreachStep[];
+}
+
+export interface OutreachConvo {
+  id: string;
+  client_id: string;
+  account_id: string;
+  ig_user_id: string;
+  peer: { username?: string; name?: string; follower_count?: number };
+  contact_id: string | null;
+  contact_name: string | null;
+  window_open: boolean;
+  human_agent_available: boolean;
+  last_user_message_at: string | null;
+  last_message_at: string | null;
+  last_message_preview: string | null;
+  unread_count: number;
+  enrollments: {
+    id: string;
+    sequence_name: string;
+    status: string;
+    exit_reason: string | null;
+  }[];
+  deal_value_cents: number | null;
+  qualified: boolean;
+}
+
+export interface OutreachMsg {
+  id: string;
+  direction: "in" | "out";
+  text: string | null;
+  status: string;
+  kind: string | null;
+  variant: string | null;
+  event_type: string | null;
+  message_tag: string | null;
+  error_detail: string | null;
+  sent_at: string | null;
+  created_at: string;
+}
+
+export interface OutreachProspect {
+  id: string;
+  client_id: string;
+  username: string;
+  ig_user_id: string | null;
+  source: string;
+  status: string;
+  vertical: string | null;
+  enrichment: Record<string, unknown>;
+  contact_id: string | null;
+  conversation_id: string | null;
+  sequence_id: string | null;
+  engaged_at: string | null;
+  created_at: string;
+}
+
+export interface OutreachAnalytics {
+  headline: {
+    sent: number;
+    received: number;
+    reply_rate: number;
+    active_enrollments: number;
+    avg_reply_seconds: number | null;
+  };
+  sequences: {
+    sequence_id: string;
+    name: string;
+    status: string;
+    enrolled: number;
+    sent: number;
+    replied: number;
+    booked: number;
+    closed: number;
+    reply_rate: number;
+    variants: {
+      step_position: number;
+      promoted: string | null;
+      a: { sent: number; replies: number };
+      b: { sent: number; replies: number };
+    }[];
+  }[];
+  rules: {
+    rule_id: string;
+    name: string;
+    trigger_type: string;
+    fired: number;
+    sent: number;
+    replies: number;
+  }[];
+  verticals: { vertical: string; prospects: number; engaged: number }[];
+}
+
+const q = (params: Record<string, string | undefined>) => {
+  const usp = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) if (v) usp.set(k, v);
+  const s = usp.toString();
+  return s ? `?${s}` : "";
+};
+
+export const listIgAccounts = (clientId?: string) =>
+  api<IgAccount[]>(`/api/outreach/accounts${q({ client_id: clientId })}`);
+export const igConnectStart = (clientId: string) =>
+  api<{ url: string }>(`/api/outreach/accounts/connect/start?client_id=${clientId}`);
+export const updateIgAccount = (
+  id: string,
+  body: { daily_send_cap?: number; automation_paused?: boolean }
+) =>
+  api<IgAccount>(`/api/outreach/accounts/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify(body),
+  });
+export const disconnectIgAccount = (id: string) =>
+  api(`/api/outreach/accounts/${id}`, { method: "DELETE" });
+
+export const listOutreachRules = (clientId?: string) =>
+  api<OutreachRule[]>(`/api/outreach/rules${q({ client_id: clientId })}`);
+export const createOutreachRule = (body: Partial<OutreachRule>) =>
+  api<OutreachRule>("/api/outreach/rules", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+export const updateOutreachRule = (id: string, body: Partial<OutreachRule>) =>
+  api<OutreachRule>(`/api/outreach/rules/${id}`, {
+    method: "PUT",
+    body: JSON.stringify(body),
+  });
+export const deleteOutreachRule = (id: string) =>
+  api(`/api/outreach/rules/${id}`, { method: "DELETE" });
+
+export const listOutreachSequences = (clientId?: string) =>
+  api<OutreachSequence[]>(`/api/outreach/sequences${q({ client_id: clientId })}`);
+export const getOutreachSequence = (id: string) =>
+  api<OutreachSequence>(`/api/outreach/sequences/${id}`);
+export const createOutreachSequence = (body: {
+  account_id: string;
+  name: string;
+  description?: string;
+  review_first_day?: boolean;
+  exit_on_reply?: boolean;
+}) =>
+  api<OutreachSequence>("/api/outreach/sequences", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+export const saveOutreachSteps = (id: string, steps: OutreachStep[]) =>
+  api<OutreachSequence>(`/api/outreach/sequences/${id}/steps`, {
+    method: "PUT",
+    body: JSON.stringify(steps),
+  });
+export const activateOutreachSequence = (id: string) =>
+  api<OutreachSequence>(`/api/outreach/sequences/${id}/activate`, { method: "POST" });
+export const pauseOutreachSequence = (id: string) =>
+  api<OutreachSequence>(`/api/outreach/sequences/${id}/pause`, { method: "POST" });
+
+export const outreachInbox = (clientId?: string, search?: string) =>
+  api<OutreachConvo[]>(`/api/outreach/inbox${q({ client_id: clientId, q: search })}`);
+export const outreachMessages = (conversationId: string) =>
+  api<OutreachMsg[]>(`/api/outreach/conversations/${conversationId}/messages`);
+export const outreachReply = (
+  conversationId: string,
+  body: { text: string; use_human_agent?: boolean }
+) =>
+  api<{ status: string }>(`/api/outreach/conversations/${conversationId}/reply`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+export const outreachMarkRead = (conversationId: string) =>
+  api(`/api/outreach/conversations/${conversationId}/read`, { method: "POST" });
+export const outreachEnroll = (body: { sequence_id: string; conversation_id: string }) =>
+  api<{ id: string }>(`/api/outreach/enrollments`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+export const outreachUnenroll = (id: string) =>
+  api(`/api/outreach/enrollments/${id}`, { method: "DELETE" });
+
+export const outreachPendingMessages = (clientId?: string) =>
+  api<{ id: string; conversation_id: string; text: string; created_at: string }[]>(
+    `/api/outreach/messages/pending${q({ client_id: clientId })}`
+  );
+export const outreachApproveMessage = (id: string) =>
+  api<{ status: string }>(`/api/outreach/messages/${id}/approve`, { method: "POST" });
+export const outreachDiscardMessage = (id: string) =>
+  api(`/api/outreach/messages/${id}/discard`, { method: "POST" });
+
+export const listOutreachProspects = (clientId?: string) =>
+  api<OutreachProspect[]>(`/api/outreach/prospects${q({ client_id: clientId })}`);
+export const importOutreachProspects = (body: {
+  client_id: string;
+  handles: string[];
+  vertical?: string;
+  sequence_id?: string;
+  account_id?: string;
+}) =>
+  api<{ created: number; skipped: number }>("/api/outreach/prospects/import", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+export const enrichOutreachProspect = (id: string) =>
+  api<{ status: string }>(`/api/outreach/prospects/${id}/enrich`, { method: "POST" });
+export const deleteOutreachProspect = (id: string) =>
+  api(`/api/outreach/prospects/${id}`, { method: "DELETE" });
+
+export const outreachAnalytics = (clientId?: string, days = 30) =>
+  api<OutreachAnalytics>(
+    `/api/outreach/analytics${q({ client_id: clientId, days: String(days) })}`
+  );
+export const outreachAuditExportUrl = (clientId?: string) =>
+  `/api/outreach/audit/export${q({ client_id: clientId })}`;
+
+/** Download an authenticated CSV export (api() is JSON-only). */
+export async function downloadCsv(path: string, filename: string) {
+  const session = getSession();
+  const resp = await fetch(`${BASE}${path}`, {
+    headers: session ? { Authorization: `Bearer ${session.access_token}` } : {},
+  });
+  if (!resp.ok) throw new Error(`Export failed (HTTP ${resp.status})`);
+  const blob = await resp.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}

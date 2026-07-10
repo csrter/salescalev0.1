@@ -19,8 +19,28 @@ from .dashboard import DashboardLayout
 from .ai import AiUsage
 from .email import EmailLog
 from .integrations import IntegrationCredential
+from .outreach import (
+    InstagramAccount,
+    InstagramWebhookEvent,
+    OutreachConversation,
+    OutreachEnrollment,
+    OutreachMessage,
+    OutreachProspect,
+    OutreachSequence,
+    OutreachStep,
+    OutreachTriggerRule,
+)
 
 __all__ = [
+    "InstagramAccount",
+    "InstagramWebhookEvent",
+    "OutreachConversation",
+    "OutreachEnrollment",
+    "OutreachMessage",
+    "OutreachProspect",
+    "OutreachSequence",
+    "OutreachStep",
+    "OutreachTriggerRule",
     "IntegrationCredential",
     "Organization",
     "User",

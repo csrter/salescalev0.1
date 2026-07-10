@@ -38,6 +38,7 @@ import { Billing, ResetPassword, VerifyEmail } from "./account";
 import { Integrations } from "./integrations";
 import { TwoFactorSettings } from "./security";
 import { BrandingSettings } from "./branding";
+import { OutreachView } from "./outreach";
 import { CommandPalette, type Command } from "./components/CommandPalette";
 import { ToastProvider } from "./components/Toast";
 import { setThemePref, useBranding, useTheme } from "./theme";
@@ -66,6 +67,7 @@ type IconName =
   | "collapse"
   | "sun"
   | "moon"
+  | "outreach"
   | "branding";
 
 const ICON_PATHS: Record<IconName, string> = {
@@ -86,6 +88,8 @@ const ICON_PATHS: Record<IconName, string> = {
   collapse: "M11 17l-5-5 5-5 M18 17l-5-5 5-5",
   sun: "M12 17a5 5 0 1 0 0-10 5 5 0 0 0 0 10z M12 1v2 M12 21v2 M4.22 4.22l1.42 1.42 M18.36 18.36l1.42 1.42 M1 12h2 M21 12h2 M4.22 19.78l1.42-1.42 M18.36 5.64l1.42-1.42",
   moon: "M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z",
+  outreach:
+    "M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z",
   branding:
     "M12 2.7l5.66 5.63a8 8 0 1 1-11.31 0z M12 16a3 3 0 0 0 3-3",
 };
@@ -120,6 +124,7 @@ function initials(name: string): string {
 
 type Tab =
   | "clients"
+  | "outreach"
   | "changes"
   | "audit"
   | "team"
@@ -131,6 +136,7 @@ type Tab =
 
 const PAGE_TITLES: Record<Tab, string> = {
   clients: "Clients",
+  outreach: "Outreach",
   changes: "Pending changes",
   audit: "Audit log",
   team: "Team",
@@ -275,6 +281,7 @@ export default function App() {
   // both consume this same filtered list.
   const nav: { key: Tab; label: string; icon: IconName; section: string; show: boolean }[] = [
     { key: "clients", label: "Clients", icon: "clients", section: "Workspace", show: true },
+    { key: "outreach", label: "Outreach", icon: "outreach", section: "Workspace", show: isTeam },
     { key: "changes", label: "Pending changes", icon: "changes", section: "Ads", show: isTeam },
     { key: "audit", label: "Audit log", icon: "audit", section: "Ads", show: true },
     { key: "team", label: "Team", icon: "team", section: "Settings", show: isAdmin },
@@ -442,6 +449,7 @@ export default function App() {
                 onOpenConsumed={() => setOpenClientId(null)}
               />
             )}
+            {tab === "outreach" && isTeam && <OutreachView isAdmin={isAdmin} />}
             {tab === "changes" && <PendingChangesPanel />}
             {tab === "audit" && <AuditLogView />}
             {tab === "team" && isAdmin && <TeamAdmin session={session} />}

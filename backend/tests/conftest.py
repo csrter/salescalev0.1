@@ -31,6 +31,9 @@ os.environ["SUPERADMIN_EMAILS"] = "platform@salescale.com,pager@salescale.com"
 # The suite makes many signup/login calls from one client; the limiter is
 # exercised separately in test_ratelimit.py.
 os.environ["RATE_LIMIT_ENABLED"] = "false"
+# Outreach: tests drive the sequence engine synchronously (run_due /
+# /run-tick), never via the background asyncio loop.
+os.environ["OUTREACH_SCHEDULER_ENABLED"] = "false"
 
 import pytest
 from fastapi.testclient import TestClient

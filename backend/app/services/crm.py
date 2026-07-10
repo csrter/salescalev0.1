@@ -40,13 +40,23 @@ DEFAULT_STAGES: List[Tuple[str, bool]] = [
 def get_or_create_pipeline(db: Session, client: Client) -> Pipeline:
     """Every client gets one default pipeline on first CRM touch. Stages are
     then customizable per client (PUT /api/crm/pipelines/{id}/stages)."""
-    pipeline = db.execute(
-        select(Pipeline).where(
-            Pipeline.organization_id == client.organization_id,
-            Pipeline.client_id == client.id,
-            Pipeline.is_default.is_(True),
+    # first() not one-or-none: nothing constrains defaults to a single row
+    # (direct imports/backfills can add another), and "get or create" should
+    # pick the earliest deterministically rather than 500.
+    pipeline = (
+        db.execute(
+            select(Pipeline)
+            .where(
+                Pipeline.organization_id == client.organization_id,
+                Pipeline.client_id == client.id,
+                Pipeline.is_default.is_(True),
+            )
+            .order_by(Pipeline.created_at)
+            .limit(1)
         )
-    ).scalar_one_or_none()
+        .scalars()
+        .first()
+    )
     if pipeline is not None:
         return pipeline
     pipeline = Pipeline(

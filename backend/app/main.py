@@ -31,6 +31,8 @@ from .api import (
     metrics,
     mfa,
     orgs,
+    outreach,
+    outreach_webhooks,
     platforms,
     social_auth,
 )
@@ -117,6 +119,7 @@ app.include_router(platforms.router)
 app.include_router(attribution.router)
 app.include_router(leads.router)
 app.include_router(lead_webhooks.router)
+app.include_router(outreach_webhooks.router)
 app.include_router(branding.router)
 
 # App-data routers — hard-gated by the org 2FA policy (mfa_gate is a no-op for
@@ -134,6 +137,7 @@ app.include_router(metrics.router, dependencies=_MFA)
 app.include_router(dashboard.router, dependencies=_MFA)
 app.include_router(crm.router, dependencies=_MFA)
 app.include_router(ai.router, dependencies=_MFA)
+app.include_router(outreach.router, dependencies=_MFA)
 
 
 @app.get("/api/health")
@@ -146,3 +150,37 @@ def _migrate():
     # Bring any database (fresh or existing) up to the current schema via
     # Alembic — the single source of truth for schema, in dev and prod alike.
     upgrade_to_head()
+
+
+@app.on_event("startup")
+async def _outreach_scheduler():
+    """Outreach sequence scheduler — the first background loop in the app.
+    Drives due sequence steps + queued-send flushes on an interval. Each tick
+    runs in a worker thread (sync SQLAlchemy) with its own session; failures
+    are logged and never kill the loop. Disabled in tests (they tick
+    synchronously via the service)."""
+    if not _settings.outreach_scheduler_enabled:
+        return
+    import asyncio
+
+    from .db import SessionLocal
+    from .services import outreach_sequences
+
+    log = logging.getLogger("salescale.outreach")
+
+    def _tick():
+        db = SessionLocal()
+        try:
+            outreach_sequences.run_due(db)
+        finally:
+            db.close()
+
+    async def _loop():
+        while True:
+            await asyncio.sleep(max(5, _settings.outreach_tick_seconds))
+            try:
+                await asyncio.get_event_loop().run_in_executor(None, _tick)
+            except Exception:
+                log.exception("outreach scheduler tick failed")
+
+    asyncio.create_task(_loop())

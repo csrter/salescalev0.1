@@ -2223,3 +2223,18 @@ button.link.danger { color: var(--danger); background: none; border: none; }
 .mfa-gate { min-height: 100vh; display: flex; align-items: flex-start; justify-content: center; padding: 3rem 1.5rem; }
 .mfa-gate-inner { width: 100%; max-width: 720px; }
 .mfa-gate-inner > h1 { margin: 1.2rem 0 0.3rem; }
+
+/* --- Outreach module --- */
+.outreach .subnav select { min-width: 160px; }
+.outreach-list { width: 320px; flex: 0 0 320px; max-height: 640px; overflow-y: auto; }
+.outreach-thread { flex: 1; min-width: 0; }
+.outreach .thread-row:hover { background: var(--accent-soft, rgba(127,127,127,.1)) !important; }
+.outreach .stat-tile { min-width: 150px; padding: 14px 16px; }
+.outreach .stat-tile small { opacity: .7; }
+.outreach .step-editor { margin-bottom: 10px; }
+.outreach section { margin-top: 20px; }
+.outreach .pending-review { margin-bottom: 12px; }
+@media (max-width: 900px) {
+  .outreach-list { width: 100%; flex-basis: auto; max-height: 320px; }
+  .outreach > div[style*="flex"] { flex-direction: column; }
+}
