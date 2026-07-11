@@ -83,6 +83,39 @@ def resolve_google(db: Session, org_id: str) -> GoogleCreds:
     return _google_from_settings()
 
 
+# --- Phase 12: simple single-key providers (BYO-first, operator fallback) ---
+
+# provider id -> Settings attr holding the operator's global fallback key
+# ("" = no fallback: the org must connect its own key, e.g. Hunter, whose API
+# terms prohibit multi-tenant use of one shared key).
+KEY_PROVIDERS: dict[str, str] = {
+    "google_places": "google_places_api_key",
+    "zerobounce": "zerobounce_api_key",
+    "hunter": "",
+}
+
+
+def resolve_key(db: Session, org_id: str, provider: str) -> str:
+    """The org's own key for a single-key provider, else the operator's
+    global fallback (when that provider allows one), else ""."""
+    row = _row(db, org_id, provider)
+    if row and row.secret_encrypted:
+        return decrypt_secret(row.secret_encrypted)
+    settings_attr = KEY_PROVIDERS.get(provider) or ""
+    return getattr(get_settings(), settings_attr, "") if settings_attr else ""
+
+
+def key_source(db: Session, org_id: str, provider: str) -> str:
+    """organization | global | none — for the settings UI, never the key."""
+    row = _row(db, org_id, provider)
+    if row and row.secret_encrypted:
+        return "organization"
+    settings_attr = KEY_PROVIDERS.get(provider) or ""
+    if settings_attr and getattr(get_settings(), settings_attr, ""):
+        return "global"
+    return "none"
+
+
 # --- request/job-scoped current credentials ---
 
 _meta_var: contextvars.ContextVar = contextvars.ContextVar("meta_creds", default=None)

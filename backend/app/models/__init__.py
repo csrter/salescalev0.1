@@ -20,6 +20,7 @@ from .dashboard import CrmListPreference, DashboardLayout
 from .ai import AiUsage
 from .email import EmailLog
 from .integrations import IntegrationCredential
+from .lead_finder import EmailVerificationRecord, LeadFinderSearch
 from .team import MembershipAuditEntry, OrganizationInvite, OrganizationMembership
 from .outreach import (
     InstagramAccount,
@@ -79,4 +80,6 @@ __all__ = [
     "CrmListPreference",
     "AiUsage",
     "EmailLog",
+    "LeadFinderSearch",
+    "EmailVerificationRecord",
 ]

@@ -99,7 +99,7 @@ Roles:
    assumption. No cold-outreach feature may bypass consent and opt-out
    requirements.
 
-## PRODUCT CAPABILITIES (built, Phases 1–11)
+## PRODUCT CAPABILITIES (built, Phases 1–14)
 
 1. Multi-tenant foundation: Organization tenancy, roles, Meta + Google
    OAuth, encrypted token storage, account/campaign browser.
@@ -126,6 +126,17 @@ Roles:
     GDPR/CCPA export and deletion.
 11. Full SaaS design-system pass (delivered via the security-audit +
     UI-modernization effort; treat as complete).
+12. Lead Finder & email verification: Google Places business search by
+    vertical + geography with per-org monthly metering, own-site /
+    BYO-provider enrichment, verification pipeline with
+    `verification_status` on contacts and a shared outreach gate, plus
+    the verified-email action gate on invites/connections.
+13. Teams & seats: invite flow, multi-org memberships + switcher,
+    tier-gated seats, membership audit events.
+14. Custom CRM fields: per-Organization typed field definitions, JSONB
+    values with GIN indexing, filtering/sorting, CSV import mapping,
+    per-field client visibility. Plus the house CRM (org-level prospect
+    pipeline) as a post-14 addition.
 
 Related module, specced separately (not a numbered phase): the
 **Outreach** module — fully automated Instagram outreach on the
@@ -136,17 +147,10 @@ Build proceeds against dev-mode API; go-live gates on Meta App Review.
 
 ## REMAINING WORK
 
-12. Lead Finder & email verification (Phase 12): Google Places business
-    search by vertical + geography, website/BYO-provider enrichment,
-    verification pipeline with `verification_status` on contacts, and
-    account email verification at signup. Guardrail 6 applies with
-    force.
-13. Teams & seats (Phase 13): invite flow, Owner/Admin/Member/Client
-    permission matrix enforced at the data-access layer, tier-gated
-    seats, membership audit events.
-14. Custom CRM fields (Phase 14): per-Organization typed field
-    definitions, JSONB values with GIN indexing, filtering/sorting,
-    CSV import mapping, API exposure, per-field client visibility.
+All numbered phases (1–14) are built. What's left, in order: Stripe
+live activation + the entitlement flip, the Outreach module build
+(dev-mode now, go-live gated on Meta App Review), and the release gate
+— see the unchecked items at the bottom of STATUS.
 
 ## STATUS
 
@@ -211,7 +215,50 @@ Build proceeds against dev-mode API; go-live gates on Meta App Review.
       resolves the house id on first open and mounts the existing CrmView.
       Tests: backend/tests/test_house_crm.py. Feeds the Outreach module
       and Phase 12 Lead Finder (house CRM is where found leads land).
-- [ ] Phase 12 — Lead Finder & email verification
+- [x] Phase 12 — Lead Finder & email verification: Google Places (New)
+      Text Search behind /api/lead-finder (services/places.py, explicit
+      FieldMask — request only displayed/stored fields; per Google's
+      caching policy only place IDs + query text are ever stored, never
+      result payloads). Per-org MONTHLY metering for searches and
+      verifications via two ledger tables (lead_finder_searches,
+      email_verifications — the AiUsage pattern), TIER_LIMITS entries +
+      usage/enforce pairs in services/entitlements.py, self-service view
+      at /api/lead-finder/usage. Import creates org-scoped contacts
+      (source=lead_finder, source_external_id=place_id → idempotent
+      re-import, search query kept on source_detail for attribution) plus
+      linked Company rows; dedupe marking is org-wide on normalized phone
+      digits / website domain / casefolded name (lead_finder.OrgCrmIndex
+      → "already in your CRM" inline, never silent skips). Enrichment
+      (services/enrichment.py): polite own-site crawler (robots.txt,
+      honest UA, ≤5 conventional contact paths, fast timeouts, kill
+      switch) + EnrichmentProvider adapter, Hunter reference impl — BYO
+      org key ONLY, no operator fallback (their ToS). Verification
+      (services/email_verification.py): VerificationProvider adapter,
+      ZeroBounce batch reference impl, NullProvider→unknown when no key;
+      contacts gained verification_status/verified_at/candidate_emails
+      (migration f7a2c8d4e9b1); changing a contact's email resets the
+      verdict; runs automatically post-import (BackgroundTasks
+      enrich→verify, quota-respecting), as a CSV-import bulk action
+      (verify flag) and via POST /api/crm/contacts/verify. THE OUTREACH
+      GATE: email_verification.sendable()/assert_can_email() is the one
+      shared check — every future email-send feature routes audiences
+      through it (invalid excluded, risky warned), never re-implements.
+      BYO keys (google_places/zerobounce/hunter) in IntegrationCredential
+      via /api/lead-finder/providers, write-only + encrypted, resolved
+      key-first with operator env fallback (integration_creds.resolve_key
+      / KEY_PROVIDERS). Part D existed from Phases 1/13 (24h token,
+      rate-limited resend, login gate); added require_verified_email on
+      invite send / member add / connect starts — active when
+      require_email_verification is on, closing the sessions-issued-
+      before-the-flip hole. Frontend: Lead Finder tab (leadfinder.tsx,
+      team-only, Workspace section; imports land in the house CRM),
+      verification badge + column + filter in the CRM lead list, drawer
+      verify/re-verify button, CSV-import verify checkbox. Tests:
+      backend/tests/test_lead_finder.py + gate test in test_auth_email.py
+      (Lead Finder tests use their own org — the seeded Atlas Reach org's
+      contact counts feed the metrics suite's assertions). Guardrail 6
+      holds: licensed Places API, the business's own site, BYO providers —
+      zero Meta-surface contact anywhere in the pipeline.
 - [ ] Stripe live activation + entitlement flip (after 12–14, so real
       limits land everywhere in one pass)
 - [ ] Outreach module build (dev-mode) — go-live gated on Meta App
@@ -222,14 +269,11 @@ Build proceeds against dev-mode API; go-live gates on Meta App Review.
 
 ## PHASE FILES
 
-Remaining phase files, run one at a time as separate Claude Code
-sessions, in this order: `PHASE_13_TEAMS_SEATS.md`,
-`PHASE_14_CUSTOM_CRM_FIELDS.md`,
-`PHASE_12_LEAD_FINDER_VERIFICATION.md`. Each is self-contained but
-assumes this file's architecture and guardrails as fixed context. All
-three hard-depend only on Phase 6 plus the entitlement stubs.
-Completed phase files (1–11) and `PLATFORMS.md` remain in the repo as
-reference for the patterns they established.
+All numbered phase files (1–14) are complete. They and `PLATFORMS.md`
+remain in the repo as reference for the patterns they established.
+Remaining work is the unnumbered items above: Stripe live activation +
+entitlement flip, the Outreach module build (gated on Meta App Review),
+and the release gate.
 
 ## BEFORE FINISHING ANY SESSION
 

@@ -31,6 +31,7 @@ from ..deps import (
     require_admin,
     require_owner,
     require_team,
+    require_verified_email,
 )
 from ..ratelimit import enforce_bucket, rate_limit
 from ..services import auth_email, entitlements, sessions, team
@@ -308,6 +309,7 @@ def add_member(
     body: TeamMemberCreate,
     user: User = Depends(require_admin),
     db: Session = Depends(get_db),
+    _verified: User = Depends(require_verified_email),
 ):
     """Direct-create with a temporary password the admin shares out-of-band.
     The email-invite flow below is the primary path; this stays for teams
@@ -591,6 +593,7 @@ def send_invite(
     body: InviteCreate,
     user: User = Depends(require_admin),
     db: Session = Depends(get_db),
+    _verified: User = Depends(require_verified_email),
 ):
     """Email an invite. The mail carries the only copy of the token; the DB
     stores its hash. A pending invite reserves a seat (see entitlements)."""

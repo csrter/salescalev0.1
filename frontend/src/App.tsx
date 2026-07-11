@@ -53,6 +53,7 @@ import { AcceptInvite, Billing, ResetPassword, VerifyEmail } from "./account";
 import { Integrations } from "./integrations";
 import { TwoFactorSettings } from "./security";
 import { BrandingSettings } from "./branding";
+import { LeadFinderView } from "./leadfinder";
 import { OutreachView } from "./outreach";
 import { CommandPalette, type Command } from "./components/CommandPalette";
 import { ToastProvider, useToast } from "./components/Toast";
@@ -74,6 +75,7 @@ import {
   Check,
   ChevronLeft,
   ChevronRight,
+  Compass,
   CreditCard,
   Eye,
   GitBranch,
@@ -127,6 +129,7 @@ function pingSave(phase: "saving" | "saved" | "error") {
 type Tab =
   | "clients"
   | "crm"
+  | "leads"
   | "outreach"
   | "changes"
   | "audit"
@@ -140,6 +143,7 @@ type Tab =
 const PAGE_TITLES: Record<Tab, string> = {
   clients: "Clients",
   crm: "CRM",
+  leads: "Lead Finder",
   outreach: "Outreach",
   changes: "Pending changes",
   audit: "Audit log",
@@ -353,6 +357,7 @@ export default function App() {
   const nav: NavItem[] = [
     { key: "clients", label: "Clients", icon: Building2, section: "Workspace", show: true },
     { key: "crm", label: "CRM", icon: Table2, section: "Workspace", show: isTeam },
+    { key: "leads", label: "Lead Finder", icon: Compass, section: "Workspace", show: isTeam },
     { key: "outreach", label: "Outreach", icon: Send, section: "Workspace", show: isTeam },
     { key: "changes", label: "Pending changes", icon: GitBranch, section: "Ads", show: isTeam },
     { key: "audit", label: "Audit log", icon: Eye, section: "Ads", show: true },
@@ -497,6 +502,7 @@ export default function App() {
                       </div>
                     </section>
                   ))}
+                {tab === "leads" && isTeam && <LeadFinderView />}
                 {tab === "outreach" && isTeam && <OutreachView isAdmin={isAdmin} />}
                 {tab === "changes" && <PendingChangesPanel />}
                 {tab === "audit" && <AuditLogView />}

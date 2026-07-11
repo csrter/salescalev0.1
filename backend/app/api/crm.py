@@ -19,7 +19,7 @@ CRM writes never touch a live ad platform, so they are not staged changes
 import json
 from typing import Dict, List, Optional
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Query
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -36,6 +36,7 @@ from ..models.crm import (
     Pipeline,
     PipelineStage,
 )
+from ..models.lead_finder import VERIFICATION_STATUSES
 from ..schemas import (
     ACTIVITY_TYPES,
     ActivityCreateIn,
@@ -54,11 +55,14 @@ from ..schemas import (
     QualificationIn,
     StageOut,
     StagesUpdateIn,
+    VerifyContactsIn,
 )
 from ..ratelimit import rate_limit
 from ..services import crm as crm_svc
 from ..services import custom_fields as custom_fields_svc
+from ..services import email_verification
 from ..services import entitlements, external_sync, metrics
+from ..services import lead_finder as lead_finder_svc
 from ..models.base import utcnow
 
 router = APIRouter(prefix="/api/crm", tags=["crm"])
@@ -275,6 +279,9 @@ def list_contacts(
         default=None,
         description="JSON list of custom-field filters: [{key, op, value}]",
     ),
+    verification: Optional[str] = Query(
+        default=None, description="Filter by verification_status (Phase 12)"
+    ),
     scope: TenantScope = Depends(get_scope),
     db: Session = Depends(get_db),
 ):
@@ -286,6 +293,10 @@ def list_contacts(
         Contact.organization_id == client.organization_id,
         Contact.client_id == client.id,
     )
+    if verification:
+        if verification not in VERIFICATION_STATUSES:
+            raise HTTPException(400, "Unknown verification status")
+        stmt = stmt.where(Contact.verification_status == verification)
 
     definitions = custom_fields_svc.definitions_by_key(db, scope.organization_id)
     if cf_filter:
@@ -378,7 +389,12 @@ def update_contact(
     if body.last_name is not None:
         contact.last_name = body.last_name
     if body.email is not None:
-        contact.email = body.email.lower() if body.email else None
+        new_email = body.email.lower() if body.email else None
+        if new_email != contact.email:
+            # A different address means the old verdict says nothing about
+            # the new one (Phase 12).
+            email_verification.reset_status(contact)
+        contact.email = new_email
     if body.phone is not None:
         contact.phone = body.phone
     if body.custom_fields is not None:
@@ -484,6 +500,7 @@ _CSV_SYSTEM_TARGETS = {"first_name", "last_name", "email", "phone"}
 @router.post("/contacts/import")
 def import_contacts(
     body: CsvImportIn,
+    background: BackgroundTasks,
     user: User = Depends(require_admin),
     scope: TenantScope = Depends(get_scope),
     db: Session = Depends(get_db),
@@ -546,6 +563,7 @@ def import_contacts(
 
     imported = 0
     failed: List[dict] = []
+    created_contacts: List[Contact] = []
     for idx, row in enumerate(body.rows):
         identity: Dict[str, Optional[str]] = {}
         custom: Dict[str, object] = {}
@@ -582,13 +600,57 @@ def import_contacts(
             failed.append({"row": idx, "error": str(e)})
             continue
         db.add(contact)
+        db.flush()
+        created_contacts.append(contact)
         imported += 1
 
     db.commit()
+    # Phase 12 bulk action: verify the imported addresses after the response.
+    # Quota-checked inside the pipeline — an over-quota import still imports,
+    # it just leaves contacts unverified instead of part-verifying the file.
+    if body.verify and created_contacts:
+        background.add_task(
+            lead_finder_svc.enrich_and_verify,
+            scope.organization_id,
+            [c.id for c in created_contacts],
+        )
     return {
         "imported": imported,
         "failed": failed,
         "created_fields": created_fields,
+        "verification_queued": bool(body.verify and created_contacts),
+    }
+
+
+@router.post("/contacts/verify")
+def verify_contacts_bulk(
+    body: VerifyContactsIn,
+    user: User = Depends(require_team),
+    scope: TenantScope = Depends(get_scope),
+    db: Session = Depends(get_db),
+):
+    """Phase 12 task 11: verify any manually selected contact set. Synchronous
+    (the caller wants the badges to update), metered against the org's monthly
+    quota as one batch — 402 if it doesn't fit, nothing part-verified."""
+    if not body.contact_ids:
+        raise HTTPException(400, "No contacts selected")
+    if len(body.contact_ids) > 500:
+        raise HTTPException(400, "At most 500 contacts per request")
+    org = db.get(Organization, scope.organization_id)
+    contacts = [scope.get_or_404(db, Contact, cid) for cid in body.contact_ids]
+    with_email = [c for c in contacts if c.email]
+    email_verification.verify_contacts(db, org, with_email, user_id=user.id)
+    db.commit()
+    return {
+        "verified": {
+            c.id: {
+                "verification_status": c.verification_status,
+                "verified_at": c.verified_at,
+            }
+            for c in with_email
+        },
+        "skipped_no_email": [c.id for c in contacts if not c.email],
+        "usage": entitlements.email_verification_usage(db, org),
     }
 
 

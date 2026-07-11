@@ -4,7 +4,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..db import get_db
-from ..deps import require_admin
+from ..deps import require_admin, require_verified_email
 from ..models.core import AdAccount, Client, PLATFORM_GOOGLE, User
 from ..security import create_state_token, decode_state_token
 from ..services import connections, google_ads_api, integration_creds
@@ -18,6 +18,7 @@ def start_google_oauth(
     client_id: str,
     user: User = Depends(require_admin),
     db: Session = Depends(get_db),
+    _verified: User = Depends(require_verified_email),
 ):
     # Client ownership first (404 for cross-tenant, before leaking config state).
     client = db.get(Client, client_id)

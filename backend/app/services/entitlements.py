@@ -28,9 +28,32 @@ from ..models.team import INVITE_PENDING, OrganizationInvite, OrganizationMember
 # (services/custom_fields.MAX_ACTIVE_DEFINITIONS) to bound query/UI complexity;
 # a tier value of None means "top out at that hard ceiling", not "unlimited".
 TIER_LIMITS: dict[str, dict[str, int | None]] = {
-    "starter": {"clients": 5, "seats": 5, "custom_fields": 20},
-    "pro": {"clients": 25, "seats": 15, "custom_fields": 50},
-    "agency": {"clients": None, "seats": None, "custom_fields": None},
+    # lead_finder_searches / email_verifications are MONTHLY caps (calendar
+    # month, UTC) on metered external calls that cost real money per unit
+    # (Google Places ~$35/1k searches, verification ~$8/1k emails). Unlike
+    # seats/clients, even the agency tier keeps a finite number — an
+    # unmetered tenant here is direct margin loss, not just oversubscription.
+    "starter": {
+        "clients": 5,
+        "seats": 5,
+        "custom_fields": 20,
+        "lead_finder_searches": 40,
+        "email_verifications": 250,
+    },
+    "pro": {
+        "clients": 25,
+        "seats": 15,
+        "custom_fields": 50,
+        "lead_finder_searches": 200,
+        "email_verifications": 2000,
+    },
+    "agency": {
+        "clients": None,
+        "seats": None,
+        "custom_fields": None,
+        "lead_finder_searches": 1000,
+        "email_verifications": 10000,
+    },
 }
 
 
@@ -136,6 +159,70 @@ def enforce_can_add_custom_field(db: Session, org: Organization) -> None:
             status.HTTP_402_PAYMENT_REQUIRED,
             f"Your {org.plan} plan allows {usage['limit']} active custom "
             "fields. Archive one or upgrade to add more.",
+        )
+
+
+def _month_count(db: Session, model, organization_id: str) -> int:
+    """Rows this org created in the current calendar month (UTC) — the
+    metering rule shared by every per-month ledger (same as ai_insights
+    .month_usage)."""
+    import datetime as dt
+
+    now = dt.datetime.now(dt.timezone.utc)
+    month_start = dt.datetime(now.year, now.month, 1, tzinfo=dt.timezone.utc)
+    return db.execute(
+        select(func.count())
+        .select_from(model)
+        .where(
+            model.organization_id == organization_id,
+            model.created_at >= month_start,
+        )
+    ).scalar_one()
+
+
+def lead_finder_usage(db: Session, org: Organization) -> dict:
+    """Self-service "X of Y used" for Lead Finder searches this month."""
+    from ..models.lead_finder import LeadFinderSearch
+
+    return {
+        "used": _month_count(db, LeadFinderSearch, org.id),
+        "limit": _limits(org)["lead_finder_searches"],
+    }
+
+
+def enforce_can_search_leads(db: Session, org: Organization) -> None:
+    """402 when the org has used its monthly Lead Finder search quota."""
+    usage = lead_finder_usage(db, org)
+    cap = usage["limit"]
+    if cap is not None and usage["used"] >= cap:
+        raise HTTPException(
+            status.HTTP_402_PAYMENT_REQUIRED,
+            f"Your {org.plan} plan allows {cap} Lead Finder searches per "
+            "month. Upgrade for more.",
+        )
+
+
+def email_verification_usage(db: Session, org: Organization) -> dict:
+    """Self-service "X of Y used" for email verifications this month."""
+    from ..models.lead_finder import EmailVerificationRecord
+
+    return {
+        "used": _month_count(db, EmailVerificationRecord, org.id),
+        "limit": _limits(org)["email_verifications"],
+    }
+
+
+def enforce_can_verify_emails(db: Session, org: Organization, count: int = 1) -> None:
+    """402 when verifying `count` more addresses would exceed the monthly
+    quota — batch-aware so a bulk request is atomically in or out, never
+    silently truncated."""
+    usage = email_verification_usage(db, org)
+    cap = usage["limit"]
+    if cap is not None and usage["used"] + count > cap:
+        raise HTTPException(
+            status.HTTP_402_PAYMENT_REQUIRED,
+            f"Your {org.plan} plan allows {cap} email verifications per "
+            f"month ({max(cap - usage['used'], 0)} remaining). Upgrade for more.",
         )
 
 

@@ -26,6 +26,7 @@ from .api import (
     custom_fields,
     dashboard,
     integrations,
+    lead_finder,
     lead_webhooks,
     leads,
     manage,
@@ -137,6 +138,7 @@ app.include_router(conversions.router, dependencies=_MFA)
 app.include_router(metrics.router, dependencies=_MFA)
 app.include_router(dashboard.router, dependencies=_MFA)
 app.include_router(crm.router, dependencies=_MFA)
+app.include_router(lead_finder.router, dependencies=_MFA)
 app.include_router(custom_fields.router, dependencies=_MFA)
 app.include_router(ai.router, dependencies=_MFA)
 app.include_router(outreach.router, dependencies=_MFA)

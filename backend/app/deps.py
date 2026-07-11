@@ -87,6 +87,24 @@ def require_owner(user: User = Depends(get_current_user)) -> User:
     return user
 
 
+def require_verified_email(user: User = Depends(get_current_user)) -> User:
+    """Phase 12 task 13: with email verification enforced, unverified accounts
+    are blocked from inviting members and connecting ad accounts. The login
+    gate alone doesn't cover sessions issued before the flag was flipped (it
+    only runs at login), so the sensitive actions re-check here. No-op when
+    require_email_verification is off (dev/desktop default), same as login."""
+    if (
+        get_settings().require_email_verification
+        and not user.email_verified
+        and not is_superadmin(user)
+    ):
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "Verify your email address to use this feature",
+        )
+    return user
+
+
 def is_superadmin(user: User) -> bool:
     """Platform super-admin — a Salescale operator, not a tenant role. Derived
     solely from the SUPERADMIN_EMAILS allowlist; it cannot be set via signup or

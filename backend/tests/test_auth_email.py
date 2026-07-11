@@ -145,3 +145,43 @@ def test_reset_token_cannot_be_used_as_verify_token(api):
     api.post("/api/auth/forgot-password", json={"email": "purpose@purposeco.com"})
     reset_token = _token(_last_email("purpose@purposeco.com").body)
     assert api.post("/api/auth/verify-email", json={"token": reset_token}).status_code == 400
+
+
+def test_unverified_blocked_from_inviting_and_connecting(api, monkeypatch):
+    """Phase 12 task 13: with verification enforced, an unverified account
+    can't invite members or start an ad-account connection — even with a
+    session issued before the flag was flipped (the login gate alone wouldn't
+    catch that)."""
+    from app.config import get_settings
+
+    body = _signup(api, "Unverified Gate Co", "gate@unverifiedgate.com")
+    h = {"Authorization": f"Bearer {body['access_token']}"}
+    client_id = api.post("/api/clients", json={"name": "GC"}, headers=h).json()["id"]
+
+    monkeypatch.setattr(get_settings(), "require_email_verification", True)
+    r = api.post(
+        "/api/orgs/me/invites",
+        json={"email": "newbie@unverifiedgate.com", "role": "member"},
+        headers=h,
+    )
+    assert r.status_code == 403 and "verify" in r.json()["detail"].lower()
+    r = api.get(
+        "/api/connect/meta/start", params={"client_id": client_id}, headers=h
+    )
+    assert r.status_code == 403 and "verify" in r.json()["detail"].lower()
+
+    # verify the address → both actions unblock
+    token = _token(_last_email("gate@unverifiedgate.com").body)
+    assert api.post("/api/auth/verify-email", json={"token": token}).status_code == 200
+    r = api.post(
+        "/api/orgs/me/invites",
+        json={"email": "newbie@unverifiedgate.com", "role": "member"},
+        headers=h,
+    )
+    assert r.status_code == 201, r.text
+    # (connect now passes the verified gate; it 503s on missing Meta app
+    # credentials, which is the next check in that endpoint.)
+    r = api.get(
+        "/api/connect/meta/start", params={"client_id": client_id}, headers=h
+    )
+    assert r.status_code == 503

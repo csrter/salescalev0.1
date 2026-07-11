@@ -1,0 +1,70 @@
+/* ==========================================================================
+   leadfinder.css — .lf-* layout/composition only (spec §3.3, §7).
+   Owner: Lead Finder view (Phase 12). Primitives (.card, .btn, .badge,
+   .kpi, .table, .alert, .empty) live in components/ui.css.
+   Tokens only — no color/size/duration/z-index literals (grep gate §3.4).
+   ========================================================================== */
+
+.lf-head {
+  margin-bottom: var(--space-4);
+}
+
+.lf-sub {
+  margin: 0;
+  max-width: 68ch;
+  font-size: var(--text-sm);
+  color: var(--ink-soft);
+}
+
+/* ---- search bar: keyword | location | button ---------------------------- */
+
+.lf-search {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1.4fr) auto;
+  gap: var(--space-3);
+  align-items: center;
+  margin: var(--space-5) 0 var(--space-4);
+}
+
+@media (max-width: 720px) {
+  .lf-search {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ---- results toolbar ----------------------------------------------------- */
+
+.lf-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+  margin-bottom: var(--space-3);
+}
+
+.lf-count {
+  font-size: var(--text-sm);
+  color: var(--ink-soft);
+}
+
+/* ---- result cells -------------------------------------------------------- */
+
+.lf-biz {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.lf-biz-name {
+  font-weight: 600;
+}
+
+.lf-biz-addr {
+  font-size: var(--text-xs);
+  color: var(--ink-soft);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

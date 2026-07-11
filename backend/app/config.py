@@ -107,6 +107,22 @@ class Settings(BaseSettings):
     # per-org address) must be on a domain you've verified in Resend.
     resend_api_key: str = ""
 
+    # Phase 12 — Lead Finder. The operator's global Google Places API key,
+    # used when an Organization hasn't connected its own (BYO key via
+    # /api/lead-finder/providers). Unset + no org key = Lead Finder search
+    # returns 503. Server-side only, like every platform secret.
+    google_places_api_key: str = ""
+    # Phase 12 — email verification (ZeroBounce reference adapter). Same
+    # org-key-first, operator-fallback resolution as Places. Unset + no org
+    # key = verification requests are recorded as "unknown" in dev, so the
+    # pipeline stays exercisable without a paid key.
+    zerobounce_api_key: str = ""
+    # Website email-discovery crawler (Part B). Kill switch + politeness knobs;
+    # the crawler only ever fetches the imported business's own site.
+    lead_finder_crawl_enabled: bool = True
+    lead_finder_crawl_timeout_seconds: float = 5.0
+    lead_finder_crawl_max_pages: int = 5
+
     # SMS via Twilio, used for phone-based 2FA. All three must be set or SMS
     # 2FA is unavailable (enrollment returns 503). TOTP + email 2FA need none
     # of this.

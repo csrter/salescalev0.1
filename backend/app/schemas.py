@@ -727,6 +727,11 @@ class ContactOutTeam(ContactOutPublic):
     source_detail: Optional[Dict[str, Any]] = None
     qualification: Optional[Dict[str, bool]] = None
     external_crm_id: Optional[str] = None
+    # Phase 12 — team-only: verification is agency workflow, not a
+    # client-portal surface.
+    verification_status: str = "unverified"
+    verified_at: Optional[dt.datetime] = None
+    candidate_emails: Optional[List[Dict[str, Any]]] = None
 
 
 class ContactCreateIn(BaseModel):
@@ -849,6 +854,15 @@ class CsvImportIn(BaseModel):
     mapping: Dict[str, str]
     rows: List[Dict[str, Any]]
     new_fields: Optional[List[CsvNewField]] = None
+    # Phase 12: queue email verification for the imported rows (background,
+    # quota-checked in the pipeline).
+    verify: bool = False
+
+
+class VerifyContactsIn(BaseModel):
+    """Phase 12: bulk email verification of a manually selected contact set."""
+
+    contact_ids: List[str] = Field(min_length=1, max_length=500)
 
 
 class QualificationIn(BaseModel):

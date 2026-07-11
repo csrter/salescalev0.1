@@ -969,6 +969,7 @@ export function CsvImportDialog({
   const [mapping, setMapping] = useState<Record<string, MappingTarget>>({});
   const [newTypes, setNewTypes] = useState<Record<string, CustomFieldType>>({});
   const [busy, setBusy] = useState(false);
+  const [verify, setVerify] = useState(true);
   const [result, setResult] = useState<{ imported: number; failed: { row: number; error: string }[] } | null>(
     null
   );
@@ -1025,13 +1026,19 @@ export function CsvImportDialog({
           mapping,
           rows: parsed.rows,
           new_fields,
+          verify,
         }),
       }
     )
       .then((r) => {
         setResult(r);
         onDone();
-        toast(`Imported ${r.imported} contact(s)`, "ok");
+        toast(
+          verify && r.imported > 0
+            ? `Imported ${r.imported} contact(s) — verifying emails in the background`
+            : `Imported ${r.imported} contact(s)`,
+          "ok"
+        );
       })
       .catch((e) => setError((e as Error).message))
       .finally(() => setBusy(false));
@@ -1132,6 +1139,14 @@ export function CsvImportDialog({
               {error}
             </span>
           )}
+          <label className="crm-check">
+            <input
+              type="checkbox"
+              checked={verify}
+              onChange={(e) => setVerify(e.target.checked)}
+            />
+            <span>Verify email addresses after import (uses your monthly quota)</span>
+          </label>
           <div className="crm-form-actions" style={{ marginTop: "0.75rem" }}>
             <Button variant="primary" size="sm" busy={busy} onClick={submit}>
               Import {parsed.rows.length} row(s)

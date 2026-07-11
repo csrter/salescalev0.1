@@ -21,6 +21,7 @@ import {
   ChevronRight as LChevronRight,
   ChevronUp as LChevronUp,
   Command as LCommand,
+  Compass as LCompass,
   CreditCard as LCreditCard,
   Eye as LEye,
   GitBranch as LGitBranch,
@@ -69,6 +70,7 @@ export const ChevronLeft = withDefaults(LChevronLeft, "ChevronLeft");
 export const ChevronRight = withDefaults(LChevronRight, "ChevronRight");
 export const ChevronUp = withDefaults(LChevronUp, "ChevronUp");
 export const Command = withDefaults(LCommand, "Command");
+export const Compass = withDefaults(LCompass, "Compass");
 export const CreditCard = withDefaults(LCreditCard, "CreditCard");
 export const Eye = withDefaults(LEye, "Eye");
 export const GitBranch = withDefaults(LGitBranch, "GitBranch");

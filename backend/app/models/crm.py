@@ -94,6 +94,19 @@ class Contact(Base):
     # never trusted as sent. GIN-indexed (jsonb_path_ops) on Postgres so
     # filtered list views stay fast at 40k+ contacts.
     custom_fields: Mapped[Optional[dict]] = mapped_column(JsonB)
+    # Phase 12 email verification. Status is a provider verdict about
+    # `email` (models/lead_finder.VERIFICATION_STATUSES); any change to
+    # `email` must reset it to "unverified" — services/email_verification
+    # owns that rule. verified_at is when the verdict was issued.
+    verification_status: Mapped[str] = mapped_column(
+        String(20), default="unverified", server_default="unverified", nullable=False
+    )
+    verified_at: Mapped[Optional[dt.datetime]] = mapped_column(DateTime(timezone=True))
+    # Phase 12 enrichment: candidate contact emails discovered from the
+    # business's own website or the org's connected provider, pending
+    # verification — [{"email", "source", "found_at"}]. Never treated as a
+    # verified address; promotion into `email` happens explicitly.
+    candidate_emails: Mapped[Optional[list]] = mapped_column(JSON)
     created_at: Mapped[dt.datetime] = created_at_column()
 
 
@@ -119,7 +132,9 @@ RESERVED_CONTACT_FIELD_KEYS: frozenset[str] = frozenset(
         "qualification",
         "qualified",
         "qualified_at",
-        "verification_status",  # reserved ahead of Phase 12
+        "verification_status",
+        "verified_at",
+        "candidate_emails",
         "external_crm_id",
         "custom_fields",
         "created_at",

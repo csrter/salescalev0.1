@@ -23,7 +23,14 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
 } from "react";
-import { ADMIN_ROLES, TEAM_ROLES, api, type Session } from "./api";
+import {
+  ADMIN_ROLES,
+  TEAM_ROLES,
+  api,
+  verifyContacts,
+  type Session,
+  type VerificationStatus,
+} from "./api";
 import { DataTable, type Column } from "./components/DataTable";
 import { ConfirmDialog, type ReceiptRow } from "./components/Dialog";
 import {
@@ -84,6 +91,10 @@ interface ContactRow {
   source: string | null;
   qualified_at: string | null;
   created_at: string;
+  // Phase 12 — present in team payloads only (verification is agency
+  // workflow, never a client-portal field).
+  verification_status?: VerificationStatus | null;
+  verified_at?: string | null;
   qualification?: Record<string, boolean> | null;
   custom_fields?: CustomValues | null;
   attribution?: {
@@ -160,6 +171,18 @@ function QualifiedBadge({ contact }: { contact?: ContactRow | null }) {
     <Badge tone="ok">qualified</Badge>
   ) : (
     <Badge tone="neutral">unqualified</Badge>
+  );
+}
+
+/** Phase 12 email-verification verdict. Renders nothing when the field is
+ * absent (client-role payloads) — the badge is a team-facing signal. */
+function VerificationBadge({ contact }: { contact?: ContactRow | null }) {
+  const status = contact?.verification_status;
+  if (!status) return null;
+  return (
+    <Badge tone={status}>
+      {status === "unverified" ? "unverified email" : `email ${status}`}
+    </Badge>
   );
 }
 
@@ -769,6 +792,7 @@ function LeadList({
   const [showFilters, setShowFilters] = useState(false);
   const [cols, setCols] = useState<string[]>([]);
   const [filters, setFilters] = useState<CfFilter[]>([]);
+  const [verifFilter, setVerifFilter] = useState<string>("");
 
   // Per-user column choice (Phase 4 preference pattern), loaded per client view.
   useEffect(() => {
@@ -803,14 +827,17 @@ function LeadList({
   );
 
   const rows = useMemo(() => {
-    if (filters.length === 0) return contacts;
-    return contacts.filter((c) =>
+    let out = contacts;
+    if (verifFilter)
+      out = out.filter((c) => (c.verification_status ?? "unverified") === verifFilter);
+    if (filters.length === 0) return out;
+    return out.filter((c) =>
       filters.every((f) => {
         const d = defByKey[f.key];
         return d ? matchesFilter(c, d, f) : true;
       })
     );
-  }, [contacts, filters, defByKey]);
+  }, [contacts, filters, defByKey, verifFilter]);
 
   const columns: Column<ContactRow>[] = [
     {
@@ -849,6 +876,16 @@ function LeadList({
       render: (c) => <QualifiedBadge contact={c} />,
       sortValue: (c) => (c.qualified_at ? 1 : 0),
     },
+    ...(isTeam
+      ? [
+          {
+            key: "verification",
+            header: "Verification",
+            render: (c) => <VerificationBadge contact={c} />,
+            sortValue: (c) => c.verification_status ?? "",
+          } satisfies Column<ContactRow>,
+        ]
+      : []),
     {
       key: "created",
       header: "Created",
@@ -866,6 +903,21 @@ function LeadList({
       <div className="crm-toolbar">
         <h4 className="crm-subhead crm-subhead--sm">Leads ({rows.length})</h4>
         <div className="crm-toolbar-spacer crm-leadlist-actions">
+          {isTeam && (
+            <select
+              className="crm-verif-filter"
+              aria-label="Filter by email verification"
+              value={verifFilter}
+              onChange={(e) => setVerifFilter(e.target.value)}
+            >
+              <option value="">All emails</option>
+              <option value="valid">Valid</option>
+              <option value="risky">Risky</option>
+              <option value="invalid">Invalid</option>
+              <option value="unknown">Unknown</option>
+              <option value="unverified">Unverified</option>
+            </select>
+          )}
           {pickableDefs.length > 0 && (
             <>
               <Button
@@ -1252,6 +1304,23 @@ function ContactDrawer({
   const reload = useCallback(() => setBump((b) => b + 1), []);
   const panelRef = useDrawerA11y(onClose);
   const titleId = `crm-drawer-${contactId}`;
+  const [verifying, setVerifying] = useState(false);
+
+  const runVerify = async () => {
+    if (verifying) return;
+    setVerifying(true);
+    try {
+      const r = await verifyContacts([contactId]);
+      const status = r.verified[contactId]?.verification_status;
+      toast(status ? `Email verified: ${status}` : "No email to verify", "ok");
+      reload();
+      onChanged();
+    } catch (e) {
+      toast((e as Error).message, "error");
+    } finally {
+      setVerifying(false);
+    }
+  };
 
   useEffect(() => {
     let alive = true;
@@ -1287,6 +1356,24 @@ function ContactDrawer({
           {detail.source ? ` · via ${detail.source.replace(/_/g, " ")}` : ""}
         </p>
         <AttributionChips contact={detail} />
+
+        {isTeam && detail.email && (
+          <div className="crm-verify-row">
+            <Button
+              variant="ghost"
+              size="sm"
+              busy={verifying}
+              onClick={() => void runVerify()}
+            >
+              {detail.verification_status === "unverified"
+                ? "Verify email"
+                : "Re-verify email"}
+            </Button>
+            {detail.verified_at && (
+              <Timestamp iso={detail.verified_at} prefix="checked " />
+            )}
+          </div>
+        )}
 
         {isTeam && (
           <QualificationPanel
@@ -1431,6 +1518,7 @@ function ContactDrawer({
             {contactName(detail ?? { id: contactId } as ContactRow)}
           </h4>
           <QualifiedBadge contact={detail} />
+          <VerificationBadge contact={detail} />
           <div className="crm-toolbar-spacer">
             <Button variant="ghost" size="sm" onClick={onClose}>
               Close

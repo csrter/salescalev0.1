@@ -110,10 +110,12 @@ export function toneForStatus(status: string): BadgeTone {
     case "executed":
     case "success":
     case "engaged":
+    case "valid": // Phase 12 email verification verdict
       return "ok";
     case "paused":
     case "stale":
     case "expiring":
+    case "risky": // Phase 12: deliverable but reputation-hazardous
       return "warn";
     case "error":
     case "rejected":
@@ -121,6 +123,7 @@ export function toneForStatus(status: string): BadgeTone {
     case "failed":
     case "lost":
     case "suspended":
+    case "invalid": // Phase 12: verified undeliverable
       return "danger";
     case "pending":
     case "in_review":

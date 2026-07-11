@@ -1023,3 +1023,84 @@ export async function downloadCsv(path: string, filename: string) {
   a.click();
   URL.revokeObjectURL(url);
 }
+
+// --- Phase 12: Lead Finder & email verification ---
+
+export type VerificationStatus =
+  | "unverified"
+  | "valid"
+  | "risky"
+  | "invalid"
+  | "unknown";
+
+export interface LeadFinderPlace {
+  place_id: string;
+  name: string;
+  address: string | null;
+  phone: string | null;
+  website: string | null;
+  rating: number | null;
+  types: string[];
+  in_crm: boolean;
+}
+
+export interface MeteredUsage {
+  used: number;
+  limit: number | null; // null = unlimited
+}
+
+export interface LeadFinderUsage {
+  searches: MeteredUsage;
+  verifications: MeteredUsage;
+  plan: string;
+}
+
+export const searchLeads = (query: string, location?: string) =>
+  api<{ search_id: string; results: LeadFinderPlace[]; usage: MeteredUsage }>(
+    "/api/lead-finder/search",
+    { method: "POST", body: JSON.stringify({ query, location: location || null }) }
+  );
+
+export const importLeads = (
+  searchId: string,
+  clientId: string,
+  places: LeadFinderPlace[]
+) =>
+  api<{ created: number; contact_ids: string[]; skipped: { place_id: string; reason: string }[] }>(
+    "/api/lead-finder/import",
+    {
+      method: "POST",
+      body: JSON.stringify({ search_id: searchId, client_id: clientId, places }),
+    }
+  );
+
+export const getLeadFinderUsage = () =>
+  api<LeadFinderUsage>("/api/lead-finder/usage");
+
+export interface LeadProviderStatus {
+  provider: string;
+  configured: boolean;
+  source: "organization" | "global" | "none";
+}
+
+export const listLeadProviders = () =>
+  api<LeadProviderStatus[]>("/api/lead-finder/providers");
+export const setLeadProviderKey = (provider: string, apiKey: string) =>
+  api<LeadProviderStatus>(`/api/lead-finder/providers/${provider}`, {
+    method: "PUT",
+    body: JSON.stringify({ api_key: apiKey }),
+  });
+export const deleteLeadProviderKey = (provider: string) =>
+  api<LeadProviderStatus>(`/api/lead-finder/providers/${provider}`, {
+    method: "DELETE",
+  });
+
+export const verifyContacts = (contactIds: string[]) =>
+  api<{
+    verified: Record<string, { verification_status: VerificationStatus; verified_at: string | null }>;
+    skipped_no_email: string[];
+    usage: MeteredUsage;
+  }>("/api/crm/contacts/verify", {
+    method: "POST",
+    body: JSON.stringify({ contact_ids: contactIds }),
+  });

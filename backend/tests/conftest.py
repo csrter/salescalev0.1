@@ -23,6 +23,10 @@ for _k in (
     "GOOGLE_CLIENT_SECRET",
     "GOOGLE_DEVELOPER_TOKEN",
     "GOOGLE_LOGIN_CUSTOMER_ID",
+    # Phase 12: Lead Finder tests assert both the unconfigured 503 and the
+    # BYO-key path, so the operator fallback keys must read as unset.
+    "GOOGLE_PLACES_API_KEY",
+    "ZEROBOUNCE_API_KEY",
 ):
     os.environ[_k] = ""
 # One dedicated platform super-admin for the /api/admin tests. No org-scoped

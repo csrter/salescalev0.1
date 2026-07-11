@@ -4,7 +4,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..db import get_db
-from ..deps import require_admin
+from ..deps import require_admin, require_verified_email
 from ..models.core import AdAccount, Client, PLATFORM_META, User
 from ..security import create_state_token, decode_state_token
 from ..services import connections, integration_creds, meta_api
@@ -18,6 +18,7 @@ def start_meta_oauth(
     client_id: str,
     user: User = Depends(require_admin),
     db: Session = Depends(get_db),
+    _verified: User = Depends(require_verified_email),
 ):
     """Admin-only: begin OAuth for one client in the caller's Organization.
     The signed state token binds the eventual callback to this organization
