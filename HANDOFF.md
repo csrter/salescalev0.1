@@ -1,192 +1,174 @@
 # Salescale — Session Handoff
 
 Orientation for a fresh Claude Code session (or a new engineer). Read this
-first, then `RELEASE_CHECKLIST.md` for the granular release status and
-`CLAUDE.md` for the product vision/phase plan.
+first, then `CLAUDE.md` for product vision/guardrails/phase status,
+`DEPLOYMENT.md` for the deploy runbook, and `RELEASE_CHECKLIST.md` for
+granular release status.
 
-_Last updated: 2026-07-09 (Phase 2 UI modernization session)._
+_Last updated: 2026-07-11 (Phase 12 + connect/auth fixes + production deploy)._
 
 ---
 
 ## ⚠️ Read this first
 
-- **Work is committed to a branch, NOT pushed, and `main` is untouched.** All
-  of this session's work (25 commits) lives on branch
-  **`session/foundation-billing-auth`**. `main` is still at the original clone
-  commit `f5c837c`; **nothing has been pushed to any remote.** To promote:
-  fast-forward `main` to the branch (or open a PR) when you're happy — ask
-  before doing it.
-- **This machine has no toolchain.** No system Node, Python ≥3.10, Homebrew, or
-  PyInstaller. Each session downloads a standalone **Python 3.11** and **Node
-  20** into its (ephemeral, per-session) scratchpad and puts them on `PATH`. A
-  new session must re-provision. See "Toolchain" below.
-- **Run backend tests with `TZ=UTC`** or ~9 metrics/CRM tests flake (local
-  timezone vs. UTC seed data — not a code bug). Full suite: **184 passing**.
-- **Do NOT point anything at the live Supabase DB for testing.** Use a throwaway
-  SQLite DB (`DATABASE_URL=sqlite:////tmp/x.db`). Earlier cleanups wiped real
-  data; the standing rule is throwaway SQLite for all verification.
+1. **SALESCALE IS LIVE IN PRODUCTION** at `https://app.salescale.lol` /
+   `https://api.salescale.lol`, running against the **real Supabase
+   database — the same one local dev's `backend/.env` points at.** Two
+   consequences:
+   - Never test against `backend/.env`'s `DATABASE_URL`. The pytest suite
+     pins its own throwaway SQLite automatically; anything manual gets
+     `DATABASE_URL=sqlite:////tmp/x.db`.
+   - **A deployed migration applies to the live DB on container start**
+     (`alembic upgrade head` runs at boot). Treat schema changes as
+     production changes now. New NOT-NULL columns need a `server_default`
+     to apply to a non-empty DB.
+
+2. **Branch `feature/ui-revamp` holds 48 unpushed commits and exists ONLY on
+   this Mac.** `origin/main` (github.com/csrter/salescalev0.1) is still at
+   `f5c837c` (2026-07-07); no remote branch exists for this work. The VPS has
+   a code *snapshot* (no git history). Losing this laptop loses the history —
+   pushing the branch is the single highest-value 10-second action available.
+
+3. **Run backend tests with `TZ=UTC`**
+   (`cd backend && TZ=UTC .venv/bin/python -m pytest -q`) or ~9 metrics tests
+   flake on timezone math. Full suite: **283 passing** as of `8f71709`.
+
+4. **Secrets:** production `backend/.env` lives only at
+   `deploy@2.25.75.95:~/salescale/backend/.env` (mode 600). If
+   `TOKEN_ENCRYPTION_KEY` is ever lost, every stored ad-platform token is
+   permanently undecryptable — all client ad-account connections would need
+   re-authorizing. **Back that file up to a password manager.** Not yet done
+   as of this writing.
 
 ## What Salescale is
 
-A multi-tenant SaaS for marketing agencies to manage clients' paid ads (Meta +
-Google live; Snapchat/Reddit/LinkedIn/Microsoft/TikTok/Pinterest/Nextdoor
-scaffolded) plus a native CRM — from one login. Each agency is an
-**Organization** (tenant); hard tenant isolation is the #1 rule. Atlas Reach is
-tenant #1.
+Multi-tenant B2B SaaS for marketing agencies: ads management with real write
+access (Meta + Google live, 7 more platforms scaffolded as adapters), native
+CRM + house CRM, server-side conversion tracking, Lead Finder (Google
+Places) + email verification, Instagram outreach module (built, go-live gated
+on Meta App Review), white-label client portals. Each agency is an
+**Organization** (tenant); tenant isolation is the #1 rule; Atlas Reach is
+tenant #1 and dogfoods everything. Full detail + standing guardrails:
+`CLAUDE.md`.
 
-## Architecture
+## Product state
 
-- **Backend** (`backend/`): FastAPI + SQLAlchemy, custom JWT auth (HS256, not
-  Supabase Auth). DB is **Supabase Postgres** via psycopg3 (session pooler),
-  falling back to local SQLite with no config. Schema owned by **Alembic**,
-  auto-migrated on startup (`app/migrations.py`). ~80 endpoints.
-- **Frontend** (`frontend/src/`): React + Vite + TypeScript. Design system in
-  `App.css` (navy/cobalt, light/dark aware, tenant-brand CSS vars). Logo is an
-  inline SVG (`logo.tsx`).
-- **Desktop** (`electron-app/`): Electron shell that spawns the packaged backend
-  binary (`run.py` → uvicorn on `127.0.0.1:8000`) and loads the built frontend.
-  Reads `~/Library/Application Support/salescale-app/config.json` for
-  `databaseUrl`, secrets, `superadminEmails`, and the Meta/Google app creds.
-- **Hosted web** (production path): `backend/Dockerfile` + `frontend/Dockerfile`
-  (nginx) + `docker-compose.yml`. Guide in `DEPLOYMENT.md`.
+**All numbered phases (1–14) are built** — per-phase notes in `CLAUDE.md`
+STATUS. Landed this week (all on `feature/ui-revamp`):
 
-## Build & run
+| Commit | What |
+|--------|------|
+| `9ff0d87` | Phase 12 — Lead Finder (Google Places, per-org monthly metering, org-wide dedupe, house-CRM import) + email verification (ZeroBounce adapter, `verification_status` on contacts, the shared outreach gate `email_verification.sendable()`) + own-site enrichment + BYO provider keys |
+| `fb81469` | Connect fix — a Google MCC / Meta BM login no longer dumps every visible ad account onto one client. Discovery ≠ attachment (`services/ad_accounts.py`); per-client "Manage accounts" picker; `PATCH /api/ad-accounts/{id}` reassign with full client_id cascade; OAuth callbacks handle cancel/API errors with a branded page instead of 4xx/500 |
+| `4f704c9` | Auth/team fix — social sign-in failures redirect to login with `?login_error=` reason; Integrations page lists the 4 exact OAuth redirect URIs; invites without an email transport return `invite_link` to the Admin (shown once, never stored/listed); network-level platform errors normalize into `MetaApiError`/`GoogleApiError`/`PlacesError` |
+| `1b5143e` `f401640` `8f71709` | Deployment: completed env-var runbook; VPS hardening guide; Caddy stack (`deploy/docker-compose.prod.yml`) and Traefik-reuse stack (`deploy/docker-compose.traefik.yml`) |
 
-- **Tests:** `cd backend && TZ=UTC DATABASE_URL=sqlite:////tmp/x.db <venv>/bin/python -m pytest`
-  → **184 passing** (22 files). CI: `.github/workflows/ci.yml` (needs a GitHub
-  remote to run).
-- **Run backend locally:** `uvicorn app.main:app` from `backend/` (reads
-  `backend/.env`). Health: `GET /api/health`.
-- **Full desktop build:** `./build-macos.sh` (PyInstaller backend from `run.py`
-  → `vite build` → `electron-builder --mac --arm64`). Output:
-  `electron-app/dist/Salescale-0.1.0-arm64.dmg` (**unsigned** — right-click →
-  Open on first launch). The script hardcodes `python3`/`npm`; run with the
-  provisioned 3.11/Node 20 on `PATH`.
-- **Frontend build gotcha:** Vite 8 uses rolldown; if `vite build` fails on a
-  missing native binding, `npm install --no-save @rolldown/binding-darwin-arm64`
-  then rebuild.
+**Remaining roadmap** (see CLAUDE.md): Stripe live activation + entitlement
+flip → Outreach go-live (Meta App Review + Business Verification, plus a
+Google Standard-access developer token for *other* agencies to connect — see
+`PLATFORM_APPROVALS.md`; long lead times, external clocks) → release gate
+(RLS audit, live-card billing test, Atlas Reach dogfood week).
 
-## Toolchain (re-provision each session)
+## Production environment (deployed 2026-07-11)
 
-- **Python 3.11:** download `cpython-3.11.x-aarch64-apple-darwin-install_only`
-  from `github.com/astral-sh/python-build-standalone` (latest release), extract
-  to scratchpad, `python -m venv`, `pip install -r requirements.txt
-  -r requirements-dev.txt` (adds `pyotp`, `pip-audit` used ad hoc).
-- **Node 20:** `nodejs.org/dist/latest-v20.x/node-v20.x-darwin-arm64.tar.gz`;
-  put `bin/` on `PATH` so `npm`'s `env node` shebang resolves.
+| Thing | Where |
+|-------|-------|
+| Web app | `https://app.salescale.lol` |
+| API | `https://api.salescale.lol` — health: `GET /api/health` → `{"ok":true}` |
+| VPS | Hostinger KVM, `2.25.75.95`, Ubuntu, 7.8GB RAM |
+| SSH | `ssh deploy@2.25.75.95` — key-only (key: this Mac's `~/.ssh/id_ed25519`); root login + password auth disabled |
+| Host security | `ufw` (22/80/443 only), `fail2ban`, `unattended-upgrades`, Docker log rotation capped via `/etc/docker/daemon.json` |
+| Code | `~/salescale` on the VPS — tar snapshot of `8f71709`, **not a git clone** |
+| Stack | `~/salescale/deploy/docker-compose.traefik.yml` → containers `deploy-backend-1`, `deploy-frontend-1` (no host ports; Traefik reaches them over Docker networking) |
+| TLS / routing | **Pre-existing Traefik** (`traefik-traefik-1`, host network, config `/docker/traefik/`) discovers our containers via labels; owns Let's Encrypt certs (issued 2026-07-11, auto-renew). We did NOT deploy Caddy here — `docker-compose.prod.yml` is the variant for a clean box. |
+| DNS | Porkbun — A records `app`/`api` → `2.25.75.95`. Porkbun's parking wildcard (`*.salescale.lol` → pixie.porkbun.com) remains; harmless, exact A records win. |
+| Database | Supabase Postgres (session pooler) — **shared with local dev** |
+| Email | Resend (key carried over from dev config) — invites/verification/resets deliver |
+| OAuth | All four redirect URIs registered and verified live on the Meta app + Google OAuth client: `https://api.salescale.lol/api/{connect,auth/oauth}/{meta,google}/callback` |
 
-## Config & secrets
+**Careful:** the VPS also runs Carter's other apps (`hermes-webui`,
+`openclaw`, `9router` — compose projects under `/docker/`) behind the same
+Traefik. Never stop/prune containers broadly; scope every docker command to
+the `deploy` compose project.
 
-`backend/.env` (gitignored) currently holds working values for: `DATABASE_URL`
-(Supabase session pooler, ref `jtzowohhtrrfzxbchujj`), `JWT_SECRET`,
-`TOKEN_ENCRYPTION_KEY` (Fernet), `SUPERADMIN_EMAILS=carterbruns@gmail.com`,
-`RESEND_API_KEY`, `EMAIL_DEFAULT_FROM_ADDRESS`, **`META_APP_ID`/`META_APP_SECRET`**
-(live, tested), and **`GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET`/
-`GOOGLE_DEVELOPER_TOKEN`/`GOOGLE_LOGIN_CUSTOMER_ID`** (live, tested). See
-`.env.example` for the full list incl. optional `TWILIO_*` (SMS 2FA) and
-`TRUST_FORWARDED_FOR`. **Supabase is empty** — sign up fresh in the app; the
-migrations create the schema on first run.
+**Redeploy procedure** (no git remote on the VPS — ship a snapshot from the
+Mac). The archive contains only tracked files, so the VPS's `backend/.env` /
+`deploy/.env` are never overwritten:
 
-## Built this session (all committed to the branch, tested)
+```bash
+# on the Mac, repo root, work committed:
+git archive --format=tar.gz -o /tmp/salescale-deploy.tar.gz HEAD
+scp /tmp/salescale-deploy.tar.gz deploy@2.25.75.95:~/
+ssh deploy@2.25.75.95 'tar xzf ~/salescale-deploy.tar.gz -C ~/salescale && rm ~/salescale-deploy.tar.gz \
+  && cd ~/salescale/deploy && docker compose -f docker-compose.traefik.yml up -d --build'
+rm /tmp/salescale-deploy.tar.gz
+```
 
-Read the git log on `session/foundation-billing-auth` for the full sequence.
-Highlights:
+**Logs / status:**
 
-- **Platform registry (Phase 7a):** `backend/app/platforms.py` is the single
-  source of truth; insights/change-execution/conversion seams are all
-  registry-driven (fixed a Google `else` misroute); generic click-ID capture
-  (`LandingEvent.click_ids`); `GET /api/platforms` + a dynamic frontend. All 7
-  new platforms registered as STUBs ("coming soon"). Per-platform adapter
-  internals (7b) are NOT built — gated on your dev accounts.
-- **Meta connected & verified** end-to-end (OAuth → token → ad accounts → live
-  campaigns) against a real account. **Google connected** via the **Atlas Reach
-  MCC agency model** (`list_manager_child_accounts` — pulled Best Spas Direct +
-  Paganelli HVAC). Both work in **Development mode**; going public still needs
-  Meta App Review + Business Verification and a Google Standard-access developer
-  token (see `PLATFORM_APPROVALS.md`).
-- **Desktop OAuth:** opens auth in the system browser, passes the operator
-  Meta/Google creds through, and lands on a "return to app" page + refresh on
-  focus (`electron-app/`, `api/connect_common.py`).
-- **Two-factor auth:** TOTP (authenticator), email, and SMS (Twilio; 503 until
-  configured) + 10 single-use backup codes. Two-step login (`/login` →
-  challenge → `/login/mfa`). Security settings UI with QR enrollment.
-- **Session management:** `user_sessions` table (device list, per-device revoke,
-  "log out everywhere"); token carries a `sid`, validated per request.
-- **Org 2FA policy:** owner toggle (`require_mfa`) that gates team members to
-  enrollment — **enforced server-side** (`deps.mfa_gate` on the app-data
-  routers), not just in the UI.
-- **Security hardening (multiple passes + a full audit):** single-use reset
-  tokens, constant-time login, per-request org-suspension, session revocation,
-  social-login email-trust, fail-closed default `JWT_SECRET`, prod security
-  headers (nginx CSP/HSTS/…), API docs off in prod, rate limits on every public
-  webhook/callback, SSRF egress guard + encrypted external-sync secret, Stripe
-  webhook idempotency/ordering, request body-size limit + input caps. **Deps
-  clean** (`pip-audit` + `npm audit`); no secrets in git history.
+```bash
+ssh deploy@2.25.75.95
+cd ~/salescale/deploy
+docker compose -f docker-compose.traefik.yml ps
+docker compose -f docker-compose.traefik.yml logs backend --tail 100
+docker logs traefik-traefik-1 --since 10m     # routing / cert issues
+```
 
-## Migrations (this session)
+## Not done yet (roughly in order)
 
-Alembic head is **`f2b6d90c4a17`**. Chain added this session:
-`f1a2b3c4d5e6` (landing click_ids) → `c7e2a1b9d4f8` (token_version +
-auth_provider) → `d5f8b3a06c21` (MFA columns) → `e9a4c2b71f30` (org require_mfa
-+ user_sessions) → `f2b6d90c4a17` (Stripe idempotency + subscription_event_at).
-Any model change needs `alembic revision --autogenerate`; it applies on next
-startup. NOT-NULL columns need a `server_default` to apply to non-empty DBs.
+1. **Push `feature/ui-revamp` to GitHub** (warning #2).
+2. **Back up the VPS `backend/.env`** to a password manager (warning #4).
+3. **Flip `REQUIRE_EMAIL_VERIFICATION=true`** in the VPS `backend/.env` once a
+   real invite email is confirmed delivered, then redeploy. It's off by
+   default so fresh deploys aren't blocked by broken email — but email works
+   here now.
+4. **Uptime monitor** on `https://api.salescale.lol/api/health` (UptimeRobot
+   or similar). Not set up.
+5. **Stripe live activation + entitlement flip** — tier gating all flows
+   through `services/entitlements.py` stubs; Phase 8 billing is built, not live.
+6. **Outreach go-live** — code built (`9d01f16`); blocked on Meta App Review.
+7. **Release gate** — RLS audit on new tables, live-card billing test, one
+   full Atlas Reach dogfood week.
+8. Desktop social sign-in can't complete its round-trip (the callback
+   redirects the session token to `APP_BASE_URL`, which the file:// Electron
+   UI can't receive). Password login works on desktop. Fix would be a
+   custom-protocol handoff — only if desktop social login is ever wanted; the
+   hosted web app is the primary client now.
 
-## What's left before beta / production
+## Dev environment notes
 
-Detailed in `RELEASE_CHECKLIST.md`. The short version:
-
-- **Deploy** backend + frontend to a host + domain (nothing is deployed). The
-  desktop ad-OAuth flow and the `APP_BASE_URL` redirects want the hosted web
-  build.
-- **Meta App Review + Business Verification** and **Google Standard-access
-  developer token** to let *other* agencies connect (your own accounts already
-  work in dev mode). Long lead time — start early. See `PLATFORM_APPROVALS.md`.
-- **Stripe** live keys/products to turn billing on; **Resend** domain
-  verification to email addresses other than your own; **Twilio** for SMS 2FA.
-- **GDPR/CCPA data export + deletion** (not built) + legal copy.
-- **Deferred security hardening** (documented, non-blocking): Postgres RLS
-  defense-in-depth; tier caps on ad-connections/conversion-configs/CRM records;
-  full inbound-sync replay protection; SSRF IP-pinning.
-- Code-signing/notarization (only if shipping the desktop app); backups +
-  uptime monitoring.
-
-## In flight / next up
-
-- **Phase 2 (UI modernization): IMPLEMENTED** (7 `ui:` commits, Stages 0–9).
-  What landed: `theme.css` (all tokens via CSS `light-dark()`, glass/type/
-  spacing/motion scales, tenant-brandable vars) + `theme.ts` (persisted
-  light/dark/system toggle, runtime branding → CSS vars); `src/components/`
-  (Button/GlassCard/Badge/Field/Skeleton/EmptyState, sortable **DataTable**,
-  Toast, **Cmd+K CommandPalette**); collapsible sidebar sections + icon-rail
-  collapse; glass topbar/auth/widgets/CRM drawer; skeletons everywhere;
-  audit log, Google search terms, CRM lead list, and superadmin org list all
-  on DataTable; new **Branding settings page** (`branding.tsx`, Settings →
-  Branding, admin-gated) covering white-label name/logo/colors/email + the
-  custom-domain claim→TXT→verify flow, live-rethemes via `refreshBranding()`.
-  Branding API round-trip was verified against a live backend on throwaway
-  SQLite. The brief's "DM inbox (LinkedIn/Instagram)" remains out of scope
-  (new feature, not a restyle).
-- **Not visually verified in a browser** — the Claude-in-Chrome extension was
-  disconnected all session, so verification was `tsc`+`vite build`+oxlint+
-  dev-server transforms only. Worth a quick human pass over: login page,
-  sidebar collapse, Cmd+K palette, dark-mode toggle, dashboard widgets, CRM.
-- **Security×UI overlaps (honored, re-verify in review):** `App.tsx` auth
-  gates/`MfaGate`/role nav filters restyled but logically untouched; the
-  palette builds commands from the same role-filtered nav list; `creatives.tsx`
-  sandboxed `dangerouslySetInnerHTML` preview untouched; branding logo/favicon
-  URLs re-guarded client-side (`safeBrandUrl`, http(s) only) on top of the
-  backend validator.
+- **Backend:** FastAPI + SQLAlchemy 2 + Alembic (linear chain, auto-run at
+  startup), venv at `backend/.venv` (a second `backend/venv` exists and is
+  what the VPS-era launch configs reference — both work).
+- **Frontend:** React + Vite + TS, Deep Cobalt design system (`DESIGN.md`) —
+  tokens only in `theme.css`, shared primitives in `src/components/`, view
+  CSS per-prefix under `src/styles/views/`.
+- **Tests:** `cd backend && TZ=UTC .venv/bin/python -m pytest -q` → 283.
+  Suites that create org data use dedicated org fixtures (`lf_org`,
+  `connect_org`) — never seed into Atlas Reach; metrics/isolation suites
+  assert over its counts.
+- **UI verification:** `.claude/launch.json` has `backend-alt3`/`frontend-alt3`
+  (8030/5203, `dev-alt3.db` — copy `dev-alt2.db` to create; gitignored,
+  delete after). Login `uitest@example.com` / `housecrm-verify-1`.
+  Preview-pane gotchas (sandboxed servers can't read `.env` → set
+  TOKEN_ENCRYPTION_KEY inline for connection-bearing endpoints; dialog
+  screenshots render black — verify via read_page/JS) are in Claude's
+  project memory.
+- **Desktop build:** `./build-macos.sh` (PyInstaller backend → vite build →
+  electron-builder) → `Salescale-0.1.0-arm64.dmg`, unsigned. If `vite build`
+  fails on a missing rolldown native binding:
+  `npm install --no-save @rolldown/binding-darwin-arm64`.
 
 ## Doc map
 
-- `RELEASE_CHECKLIST.md` — granular, current status of every release item.
-- `DEPLOYMENT.md` — hosted deploy (backend + frontend + env vars).
-- `PLATFORM_APPROVALS.md` — Meta/Google app + approval steps, scopes, redirect
-  URIs.
-- `PLATFORMS.md` — per-platform reference for the adapter work.
+- `CLAUDE.md` — product vision, standing guardrails, per-phase STATUS
+  (kept current; update it + commit before ending any session).
+- `DEPLOYMENT.md` — full deploy runbook: env vars, VPS hardening, Caddy vs
+  Traefik-reuse stacks, team onboarding.
+- `RELEASE_CHECKLIST.md` — granular release items (predates this week; the
+  deploy items in it are now done).
+- `PLATFORM_APPROVALS.md` — Meta App Review / Google developer-token steps.
+- `PLATFORMS.md` — per-platform adapter reference.
 - `.env.example` — every config var with notes.
-- `CLAUDE.md` — product vision + phases (its "Current Status" is partially
-  stale; trust this file + `RELEASE_CHECKLIST.md`).
 - Auto-memory: `~/.claude/projects/-Users-carter-Desktop-salescale/memory/`
-  (Supabase backend, desktop build, backend-tests/TZ gotcha).
+  (Supabase, tests/TZ, connect flows, Phase 12, UI stack).
