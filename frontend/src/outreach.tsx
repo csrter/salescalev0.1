@@ -1,12 +1,18 @@
 /**
  * Outreach — compliant Instagram DM automation.
  *
- * One view, five panels: Inbox (Rep-accessible), Rules, Sequences, Prospects,
- * Analytics, plus account Settings. Admin-only panels are hidden for the
- * member (Rep) role, matching the server-side gates.
+ * One view, six tabs: Inbox (Rep-accessible), Trigger rules, Sequences,
+ * Prospects, Analytics, Accounts. Admin-only tabs are hidden for the member
+ * (Rep) role, matching the server-side gates.
  */
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import {
   activateOutreachSequence,
   api,
@@ -52,8 +58,24 @@ import {
   type OutreachTriggerType,
 } from "./api";
 import { DataTable, type Column } from "./components/DataTable";
-import { Badge, Button, EmptyState, Field, GlassCard, SkeletonText } from "./components/ui";
+import { ConfirmDialog, Dialog, type ReceiptRow } from "./components/Dialog";
+import {
+  Alert,
+  Badge,
+  Button,
+  EmptyState,
+  Field,
+  GlassCard,
+  Kpi,
+  KpiGrid,
+  KpiSkeleton,
+  Segmented,
+  SkeletonText,
+  Tabs,
+} from "./components/ui";
+import { Plus, Send } from "./components/icons";
 import { useToast } from "./components/Toast";
+import "./styles/views/outreach.css";
 
 const TRIGGER_LABELS: Record<OutreachTriggerType, string> = {
   dm: "New DM",
@@ -71,6 +93,23 @@ function timeAgo(iso: string | null): string {
   if (s < 3600) return `${Math.floor(s / 60)}m ago`;
   if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
   return `${Math.floor(s / 86400)}d ago`;
+}
+
+/**
+ * Confirm-on-dirty guard for the hand-rolled editor dialogs: captures a
+ * snapshot when the dialog opens and asks before discarding unsaved edits.
+ */
+function useDirtyGuard(open: boolean, serialized: string): () => boolean {
+  const snapshot = useRef(serialized);
+  useEffect(() => {
+    if (open) snapshot.current = serialized;
+    // Snapshot the value present at open time; later edits are compared to it.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
+  return () => {
+    if (serialized === snapshot.current) return true;
+    return window.confirm("Discard unsaved changes?");
+  };
 }
 
 type Panel = "inbox" | "rules" | "sequences" | "prospects" | "analytics" | "settings";
@@ -99,32 +138,39 @@ export function OutreachView({ isAdmin }: { isAdmin: boolean }) {
     { key: "analytics", label: "Analytics", adminOnly: true },
     { key: "settings", label: "Accounts", adminOnly: true },
   ];
+  const visible = panels.filter((p) => isAdmin || !p.adminOnly);
 
   return (
     <div className="outreach">
       {disconnected.length > 0 && (
-        <p className="notice">
-          {disconnected.map((a) => a.username || a.ig_user_id).join(", ")}{" "}
-          {disconnected.length === 1 ? "needs" : "need"} to be reconnected —
-          automated sequences are paused for{" "}
-          {disconnected.length === 1 ? "that account" : "those accounts"}.
-          {isAdmin && " Reconnect from the Accounts panel."}
-        </p>
+        <div className="or-banner">
+          <Alert tone="warn" title="Reconnect required">
+            {disconnected.map((a) => a.username || a.ig_user_id).join(", ")}{" "}
+            {disconnected.length === 1 ? "needs" : "need"} to be reconnected —
+            automated sequences are paused for{" "}
+            {disconnected.length === 1 ? "that account" : "those accounts"}.
+            {isAdmin && (
+              <Button variant="link" size="sm" onClick={() => setPanel("settings")}>
+                Go to Accounts
+              </Button>
+            )}
+          </Alert>
+        </div>
       )}
-      <div className="subnav" style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
-        {panels
-          .filter((p) => isAdmin || !p.adminOnly)
-          .map((p) => (
-            <Button
-              key={p.key}
-              variant={panel === p.key ? "primary" : "ghost"}
-              onClick={() => setPanel(p.key)}
-            >
-              {p.label}
-            </Button>
-          ))}
-        <span style={{ flex: 1 }} />
-        <select value={clientId} onChange={(e) => setClientId(e.target.value)}>
+
+      <div className="or-subnav">
+        <Tabs
+          ariaLabel="Outreach sections"
+          tabs={visible.map((p) => ({ id: p.key, label: p.label }))}
+          active={panel}
+          onChange={(id) => setPanel(id as Panel)}
+        />
+        <select
+          className="select or-select"
+          aria-label="Filter by client"
+          value={clientId}
+          onChange={(e) => setClientId(e.target.value)}
+        >
           <option value="">All clients</option>
           {clients.map((c) => (
             <option key={c.id} value={c.id}>
@@ -133,6 +179,7 @@ export function OutreachView({ isAdmin }: { isAdmin: boolean }) {
           ))}
         </select>
       </div>
+
       {panel === "inbox" && (
         <InboxPanel clientId={clientId} isAdmin={isAdmin} accounts={accounts} />
       )}
@@ -176,6 +223,8 @@ function InboxPanel({
   const [messages, setMessages] = useState<OutreachMsg[] | null>(null);
   const [draft, setDraft] = useState("");
   const [humanAgent, setHumanAgent] = useState(false);
+  const [sending, setSending] = useState(false);
+  const [enrollPick, setEnrollPick] = useState("");
   const [sequences, setSequences] = useState<OutreachSequence[]>([]);
   const selectedRef = useRef<string | null>(null);
 
@@ -207,6 +256,7 @@ function InboxPanel({
     setSelected(c);
     selectedRef.current = c.id;
     setMessages(null);
+    setEnrollPick("");
     outreachMessages(c.id).then(setMessages).catch(() => {});
     if (c.unread_count > 0) outreachMarkRead(c.id).catch(() => {});
   }, []);
@@ -221,6 +271,7 @@ function InboxPanel({
 
   const send = async () => {
     if (!selected || !draft.trim()) return;
+    setSending(true);
     try {
       await outreachReply(selected.id, {
         text: draft.trim(),
@@ -232,6 +283,8 @@ function InboxPanel({
       toast("Reply sent", "ok");
     } catch (e) {
       toast(e instanceof Error ? e.message : "Send failed", "error");
+    } finally {
+      setSending(false);
     }
   };
 
@@ -240,25 +293,39 @@ function InboxPanel({
     try {
       await outreachEnroll({ sequence_id: sequenceId, conversation_id: selected.id });
       toast("Enrolled in sequence", "ok");
+      setEnrollPick("");
       refresh();
     } catch (e) {
       toast(e instanceof Error ? e.message : "Enroll failed", "error");
+      setEnrollPick("");
     }
   };
 
+  const unenroll = (id: string) => {
+    outreachUnenroll(id)
+      .then(() => {
+        toast("Exited sequence", "ok");
+        refresh();
+      })
+      .catch((e) => toast(e instanceof Error ? e.message : "Failed", "error"));
+  };
+
   const accountFor = (id: string) => accounts.find((a) => a.id === id);
+  const sendDisabled =
+    !draft.trim() ||
+    (!selected?.window_open &&
+      (!selected?.human_agent_available || !humanAgent));
 
   return (
-    <div style={{ display: "flex", gap: 16, alignItems: "flex-start" }}>
-      <GlassCard className="outreach-list" >
-        <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
-          <input
-            placeholder="Search conversations…"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            style={{ flex: 1 }}
-          />
-        </div>
+    <div className="or-inbox">
+      <GlassCard className="or-convos">
+        <input
+          className="input or-search"
+          placeholder="Search conversations…"
+          aria-label="Search conversations"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+        />
         {convos === null && <SkeletonText lines={6} />}
         {convos !== null && convos.length === 0 && (
           <EmptyState title="No conversations yet">
@@ -266,153 +333,101 @@ function InboxPanel({
             mentions a connected Instagram account.
           </EmptyState>
         )}
-        {convos !== null &&
-          convos.map((c) => (
-            <button
-              key={c.id}
-              className={`thread-row ${selected?.id === c.id ? "active" : ""}`}
-              onClick={() => openConvo(c)}
-              style={{
-                display: "block",
-                width: "100%",
-                textAlign: "left",
-                padding: "10px 12px",
-                borderRadius: 10,
-                background: selected?.id === c.id ? "var(--accent-soft, rgba(43,98,224,.12))" : "transparent",
-                border: "none",
-                cursor: "pointer",
-              }}
-            >
-              <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
-                <strong>
-                  {c.contact_name || c.peer.username || c.ig_user_id}
-                  {c.unread_count > 0 && <Badge tone="info"> {c.unread_count}</Badge>}
-                </strong>
-                <small>{timeAgo(c.last_message_at)}</small>
-              </div>
-              <small style={{ opacity: 0.75 }}>
-                {(c.last_message_preview || "").slice(0, 64)}
-              </small>
-            </button>
-          ))}
+        {convos?.map((c) => (
+          <button
+            key={c.id}
+            type="button"
+            className={`or-convo ${selected?.id === c.id ? "or-convo--active" : ""}`.trim()}
+            onClick={() => openConvo(c)}
+          >
+            <div className="or-convo-top">
+              <span className="or-convo-name">
+                <span>{c.contact_name || c.peer.username || c.ig_user_id}</span>
+                {c.unread_count > 0 && <Badge tone="info">{c.unread_count}</Badge>}
+              </span>
+              <time className="or-convo-time" title={c.last_message_at ?? undefined}>
+                {timeAgo(c.last_message_at)}
+              </time>
+            </div>
+            <span className="or-convo-preview">
+              {(c.last_message_preview || "").slice(0, 64)}
+            </span>
+          </button>
+        ))}
       </GlassCard>
 
       {selected ? (
-        <GlassCard heavy className="outreach-thread" >
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8, flexWrap: "wrap" }}>
-            <h3 style={{ margin: 0 }}>
+        <GlassCard className="or-thread">
+          <div className="or-thread-head">
+            <h3 className="or-thread-title">
               @{selected.peer.username || selected.ig_user_id}
             </h3>
-            <span>
+            <span className="or-badges">
               {selected.window_open ? (
                 <Badge tone="ok">24h window open</Badge>
               ) : selected.human_agent_available ? (
                 <Badge tone="warn">Window closed — human agent only</Badge>
               ) : (
-                <Badge tone="error">Window expired</Badge>
-              )}{" "}
-              <Badge>
+                <Badge tone="danger">Window expired</Badge>
+              )}
+              <Badge tone="neutral">
                 {accountFor(selected.account_id)?.username || "account"}
               </Badge>
             </span>
           </div>
 
-          {/* CRM context */}
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", margin: "10px 0" }}>
-            {selected.contact_id ? (
-              <Badge tone="ok">CRM contact linked</Badge>
-            ) : (
-              <Badge>No CRM contact yet</Badge>
-            )}
-            {selected.qualified && <Badge tone="ok">Qualified</Badge>}
-            {selected.deal_value_cents != null && (
-              <Badge tone="info">
-                Open deals ${(selected.deal_value_cents / 100).toLocaleString()}
-              </Badge>
-            )}
-            {selected.enrollments.map((e) => (
-              <Badge key={e.id} tone={e.status === "active" ? "info" : ""}>
-                {e.sequence_name}: {e.status}
-                {e.exit_reason ? ` (${e.exit_reason})` : ""}
-                {isAdmin && e.status === "active" && (
-                  <button
-                    className="link"
-                    style={{ marginLeft: 6 }}
-                    onClick={() =>
-                      outreachUnenroll(e.id).then(refreshNoop).catch(refreshNoop)
-                    }
-                  >
-                    exit
-                  </button>
-                )}
-              </Badge>
-            ))}
-            {isAdmin && sequences.length > 0 && (
-              <select defaultValue="" onChange={(e) => enroll(e.target.value)}>
-                <option value="" disabled>
-                  Enroll in sequence…
-                </option>
-                {sequences
-                  .filter((s) => s.client_id === selected.client_id)
-                  .map((s) => (
-                    <option key={s.id} value={s.id}>
-                      {s.name}
-                    </option>
-                  ))}
-              </select>
-            )}
-          </div>
-
-          <div className="thread-messages" style={{ maxHeight: 420, overflowY: "auto", display: "flex", flexDirection: "column", gap: 6 }}>
+          <div className="or-messages" aria-live="polite">
             {messages === null && <SkeletonText lines={4} />}
-            {messages?.map((m) => (
-              <div
-                key={m.id}
-                style={{
-                  alignSelf: m.direction === "out" ? "flex-end" : "flex-start",
-                  maxWidth: "72%",
-                  padding: "8px 12px",
-                  borderRadius: 12,
-                  background:
-                    m.direction === "out"
-                      ? "var(--accent, #2b62e0)"
-                      : "var(--accent-soft, rgba(127,127,127,.15))",
-                  color: m.direction === "out" ? "#fff" : "inherit",
-                  opacity: m.status === "queued" || m.status === "pending_review" ? 0.6 : 1,
-                }}
-              >
-                <div>{m.text}</div>
-                <small style={{ opacity: 0.8 }}>
-                  {m.direction === "out" ? m.kind : m.event_type}
-                  {m.variant ? ` · variant ${m.variant.toUpperCase()}` : ""}
-                  {m.message_tag ? ` · ${m.message_tag}` : ""}
-                  {" · "}
-                  {m.status}
-                  {m.error_detail ? ` — ${m.error_detail}` : ""}
-                  {" · "}
-                  {timeAgo(m.sent_at || m.created_at)}
-                </small>
-              </div>
-            ))}
+            {messages?.map((m) => {
+              const muted = m.status === "queued" || m.status === "pending_review";
+              return (
+                <div
+                  key={m.id}
+                  className={[
+                    "or-msg",
+                    m.direction === "out" ? "or-msg--out" : "or-msg--in",
+                    muted ? "or-msg--muted" : "",
+                  ]
+                    .filter(Boolean)
+                    .join(" ")}
+                >
+                  <div>{m.text}</div>
+                  <small className="or-msg-meta">
+                    {m.direction === "out" ? m.kind : m.event_type}
+                    {m.variant ? ` · variant ${m.variant.toUpperCase()}` : ""}
+                    {m.message_tag ? ` · ${m.message_tag}` : ""}
+                    {" · "}
+                    {m.status}
+                    {m.error_detail ? ` — ${m.error_detail}` : ""}
+                    {" · "}
+                    {timeAgo(m.sent_at || m.created_at)}
+                  </small>
+                </div>
+              );
+            })}
           </div>
 
-          <div style={{ marginTop: 12 }}>
-            <textarea
-              rows={2}
-              style={{ width: "100%" }}
-              placeholder={
+          <div className="or-composer">
+            <Field
+              label="Reply"
+              description={
                 selected.window_open
-                  ? "Reply…"
+                  ? undefined
                   : selected.human_agent_available
-                    ? "Window closed — replies must be sent as a human agent"
-                    : "The 7-day human-agent window has expired; wait for the user to re-engage"
+                    ? "Window closed — replies must be sent as a human agent."
+                    : "The 7-day human-agent window has expired; wait for the user to re-engage."
               }
-              value={draft}
-              onChange={(e) => setDraft(e.target.value)}
-            />
-            <div style={{ display: "flex", gap: 12, alignItems: "center", marginTop: 6 }}>
+            >
+              <textarea
+                rows={2}
+                placeholder={selected.window_open ? "Reply…" : "Reply…"}
+                value={draft}
+                onChange={(e) => setDraft(e.target.value)}
+              />
+            </Field>
+            <div className="or-composer-actions">
               {!selected.window_open && selected.human_agent_available && (
-                <label style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                <label className="or-check">
                   <input
                     type="checkbox"
                     checked={humanAgent}
@@ -421,34 +436,97 @@ function InboxPanel({
                   Send with HUMAN_AGENT tag (you are replying personally)
                 </label>
               )}
-              <span style={{ flex: 1 }} />
               <Button
                 variant="primary"
-                disabled={
-                  !draft.trim() ||
-                  (!selected.window_open &&
-                    (!selected.human_agent_available || !humanAgent))
-                }
+                busy={sending}
+                disabled={sendDisabled}
                 onClick={send}
               >
+                <Send size={16} />
                 Send
               </Button>
             </div>
           </div>
         </GlassCard>
       ) : (
-        <GlassCard className="outreach-thread">
+        <GlassCard className="or-thread">
           <EmptyState title="Select a conversation">
             Pick a thread to see its history, CRM context, and reply.
           </EmptyState>
         </GlassCard>
       )}
+
+      {selected ? (
+        <GlassCard className="or-context">
+          <h4 className="or-context-title">Contact context</h4>
+          <div className="or-chips">
+            {selected.contact_id ? (
+              <Badge tone="ok">CRM contact linked</Badge>
+            ) : (
+              <Badge tone="neutral">No CRM contact yet</Badge>
+            )}
+            {selected.qualified && <Badge tone="ok">Qualified</Badge>}
+            {selected.deal_value_cents != null && (
+              <Badge tone="accent">
+                Open deals ${(selected.deal_value_cents / 100).toLocaleString()}
+              </Badge>
+            )}
+          </div>
+
+          {(selected.enrollments.length > 0 || (isAdmin && sequences.length > 0)) && (
+            <>
+              <h4 className="or-context-title">Sequences</h4>
+              <div className="or-chips">
+                {selected.enrollments.map((e) => (
+                  <div key={e.id} className="or-enrollment">
+                    <Badge tone={e.status === "active" ? "info" : "neutral"}>
+                      {e.sequence_name}: {e.status}
+                      {e.exit_reason ? ` (${e.exit_reason})` : ""}
+                    </Badge>
+                    {isAdmin && e.status === "active" && (
+                      <Button variant="link" size="sm" onClick={() => unenroll(e.id)}>
+                        Exit
+                      </Button>
+                    )}
+                  </div>
+                ))}
+                {isAdmin && sequences.length > 0 && (
+                  <select
+                    className="select"
+                    aria-label="Enroll in sequence"
+                    value={enrollPick}
+                    onChange={(e) => {
+                      setEnrollPick(e.target.value);
+                      enroll(e.target.value);
+                    }}
+                  >
+                    <option value="" disabled>
+                      Enroll in sequence…
+                    </option>
+                    {sequences
+                      .filter((s) => s.client_id === selected.client_id)
+                      .map((s) => (
+                        <option key={s.id} value={s.id}>
+                          {s.name}
+                        </option>
+                      ))}
+                  </select>
+                )}
+              </div>
+            </>
+          )}
+        </GlassCard>
+      ) : (
+        <GlassCard className="or-context">
+          <h4 className="or-context-title">Contact context</h4>
+          <p className="or-muted">
+            CRM link, qualification, deals, and sequence enrollment show here once
+            you open a conversation.
+          </p>
+        </GlassCard>
+      )}
     </div>
   );
-}
-
-function refreshNoop() {
-  /* enrollment chips refresh on the next inbox poll */
 }
 
 // --- Trigger rules ---
@@ -480,6 +558,11 @@ function RulesPanel({ clientId, accounts }: { clientId: string; accounts: IgAcco
   }, [clientId]);
   useEffect(refresh, [refresh]);
 
+  const guard = useDirtyGuard(editing != null, JSON.stringify(editing ?? {}));
+  const close = () => {
+    if (guard()) setEditing(null);
+  };
+
   const save = async () => {
     if (!editing?.name || !editing.account_id) {
       toast("Name and account are required", "error");
@@ -494,6 +577,15 @@ function RulesPanel({ clientId, accounts }: { clientId: string; accounts: IgAcco
     } catch (e) {
       toast(e instanceof Error ? e.message : "Save failed", "error");
     }
+  };
+
+  const remove = (r: OutreachRule) => {
+    deleteOutreachRule(r.id)
+      .then(() => {
+        toast("Rule deleted", "ok");
+        refresh();
+      })
+      .catch((e) => toast(e instanceof Error ? e.message : "Delete failed", "error"));
   };
 
   const columns: Column<OutreachRule>[] = [
@@ -527,7 +619,7 @@ function RulesPanel({ clientId, accounts }: { clientId: string; accounts: IgAcco
       key: "enabled",
       header: "Status",
       render: (r) =>
-        r.enabled ? <Badge tone="ok">on</Badge> : <Badge>off</Badge>,
+        r.enabled ? <Badge tone="ok">on</Badge> : <Badge tone="neutral">off</Badge>,
       sortValue: (r) => (r.enabled ? 1 : 0),
     },
     {
@@ -539,12 +631,7 @@ function RulesPanel({ clientId, accounts }: { clientId: string; accounts: IgAcco
           <Button variant="ghost" onClick={() => setEditing({ ...r })}>
             Edit
           </Button>
-          <Button
-            variant="danger"
-            onClick={() =>
-              deleteOutreachRule(r.id).then(refresh).catch(() => {})
-            }
-          >
+          <Button variant="danger-outline" onClick={() => remove(r)}>
             Delete
           </Button>
         </>
@@ -554,12 +641,16 @@ function RulesPanel({ clientId, accounts }: { clientId: string; accounts: IgAcco
 
   return (
     <div>
-      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 12 }}>
-        <p className="page-sub" style={{ margin: 0 }}>
+      <div className="or-head">
+        <p className="or-sub">
           IF an inbound event matches, THEN reply + update the CRM — fully
           automated, always inside Meta's reply windows.
         </p>
-        <Button variant="primary" onClick={() => setEditing({ ...EMPTY_RULE, account_id: accounts[0]?.id })}>
+        <Button
+          variant="primary"
+          onClick={() => setEditing({ ...EMPTY_RULE, account_id: accounts[0]?.id })}
+        >
+          <Plus size={16} />
           New rule
         </Button>
       </div>
@@ -570,162 +661,169 @@ function RulesPanel({ clientId, accounts }: { clientId: string; accounts: IgAcco
         loading={rules === null}
         emptyMessage="No trigger rules yet — create one to start automating inbound engagement."
       />
-      {editing && (
-        <div className="modal-backdrop" onClick={() => setEditing(null)}>
-          <div className="modal wide" onClick={(e) => e.stopPropagation()}>
-            <h3>{editing.id ? "Edit rule" : "New rule"}</h3>
-            <div className="form-grid">
-              <Field label="Name">
-                <input
-                  value={editing.name ?? ""}
-                  onChange={(e) => setEditing({ ...editing, name: e.target.value })}
-                />
-              </Field>
-              <Field label="Instagram account">
-                <select
-                  value={editing.account_id ?? ""}
-                  onChange={(e) => setEditing({ ...editing, account_id: e.target.value })}
-                >
-                  {accounts.map((a) => (
-                    <option key={a.id} value={a.id}>
-                      @{a.username || a.ig_user_id}
-                    </option>
-                  ))}
-                </select>
-              </Field>
-              <Field label="IF — trigger">
-                <select
-                  value={editing.trigger_type}
-                  onChange={(e) =>
-                    setEditing({ ...editing, trigger_type: e.target.value as OutreachTriggerType })
-                  }
-                >
-                  {Object.entries(TRIGGER_LABELS).map(([k, v]) => (
-                    <option key={k} value={k}>
-                      {v}
-                    </option>
-                  ))}
-                </select>
-              </Field>
-              <Field label="…containing keywords (comma-separated, empty = any)">
-                <input
-                  value={(editing.keywords ?? []).join(", ")}
-                  onChange={(e) =>
-                    setEditing({
-                      ...editing,
-                      keywords: e.target.value.split(",").map((s) => s.trim()).filter(Boolean),
-                    })
-                  }
-                />
-              </Field>
-              <Field label="…on specific post/ad ids" optional>
-                <input
-                  value={(editing.media_ids ?? []).join(", ")}
-                  onChange={(e) =>
-                    setEditing({
-                      ...editing,
-                      media_ids: e.target.value.split(",").map((s) => s.trim()).filter(Boolean),
-                    })
-                  }
-                />
-              </Field>
-              <Field label="Only engagers with ≥ followers" optional>
-                <input
-                  type="number"
-                  value={editing.filters?.min_followers ?? ""}
-                  onChange={(e) =>
-                    setEditing({
-                      ...editing,
-                      filters: {
-                        ...editing.filters,
-                        min_followers: e.target.value ? Number(e.target.value) : undefined,
-                      },
-                    })
-                  }
-                />
-              </Field>
-              <Field label="THEN — reply with (private reply for comments)" optional>
-                <textarea
-                  rows={2}
-                  value={editing.reply_text ?? ""}
-                  onChange={(e) => setEditing({ ...editing, reply_text: e.target.value })}
-                  placeholder="Thanks {{username}}! Sending details now."
-                />
-              </Field>
-              <Field label="Apply tags" optional>
-                <input
-                  value={(editing.tag_names ?? []).join(", ")}
-                  onChange={(e) =>
-                    setEditing({
-                      ...editing,
-                      tag_names: e.target.value.split(",").map((s) => s.trim()).filter(Boolean),
-                    })
-                  }
-                />
-              </Field>
-              <Field label="Enroll in sequence" optional>
-                <select
-                  value={editing.enroll_sequence_id ?? ""}
-                  onChange={(e) =>
-                    setEditing({ ...editing, enroll_sequence_id: e.target.value || null })
-                  }
-                >
-                  <option value="">—</option>
-                  {sequences.map((s) => (
-                    <option key={s.id} value={s.id}>
-                      {s.name}
-                    </option>
-                  ))}
-                </select>
-              </Field>
-              <Field label="Options">
-                <span style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
-                  <label>
-                    <input
-                      type="checkbox"
-                      checked={editing.create_contact ?? true}
-                      onChange={(e) => setEditing({ ...editing, create_contact: e.target.checked })}
-                    />{" "}
-                    Create CRM contact
-                  </label>
-                  <label>
-                    <input
-                      type="checkbox"
-                      checked={editing.capture_prospect ?? false}
-                      onChange={(e) => setEditing({ ...editing, capture_prospect: e.target.checked })}
-                    />{" "}
-                    Capture as prospect
-                  </label>
-                  <label>
-                    <input
-                      type="checkbox"
-                      checked={editing.once_per_user ?? true}
-                      onChange={(e) => setEditing({ ...editing, once_per_user: e.target.checked })}
-                    />{" "}
-                    Once per user
-                  </label>
-                  <label>
-                    <input
-                      type="checkbox"
-                      checked={editing.enabled ?? true}
-                      onChange={(e) => setEditing({ ...editing, enabled: e.target.checked })}
-                    />{" "}
-                    Enabled
-                  </label>
-                </span>
-              </Field>
-            </div>
-            <div className="modal-actions">
-              <Button variant="ghost" onClick={() => setEditing(null)}>
-                Cancel
-              </Button>
-              <Button variant="primary" onClick={save}>
-                Save rule
-              </Button>
+
+      <Dialog
+        open={editing != null}
+        onClose={close}
+        closeOnScrim={false}
+        size="lg"
+        title={editing?.id ? "Edit rule" : "New rule"}
+        footer={
+          <>
+            <Button variant="ghost" onClick={close}>
+              Cancel
+            </Button>
+            <Button variant="primary" onClick={save}>
+              Save rule
+            </Button>
+          </>
+        }
+      >
+        {editing && (
+          <div className="or-form">
+            <Field label="Name">
+              <input
+                value={editing.name ?? ""}
+                onChange={(e) => setEditing({ ...editing, name: e.target.value })}
+              />
+            </Field>
+            <Field label="Instagram account">
+              <select
+                value={editing.account_id ?? ""}
+                onChange={(e) => setEditing({ ...editing, account_id: e.target.value })}
+              >
+                {accounts.map((a) => (
+                  <option key={a.id} value={a.id}>
+                    @{a.username || a.ig_user_id}
+                  </option>
+                ))}
+              </select>
+            </Field>
+            <Field label="IF — trigger">
+              <select
+                value={editing.trigger_type}
+                onChange={(e) =>
+                  setEditing({ ...editing, trigger_type: e.target.value as OutreachTriggerType })
+                }
+              >
+                {Object.entries(TRIGGER_LABELS).map(([k, v]) => (
+                  <option key={k} value={k}>
+                    {v}
+                  </option>
+                ))}
+              </select>
+            </Field>
+            <Field label="…containing keywords (comma-separated, empty = any)">
+              <input
+                value={(editing.keywords ?? []).join(", ")}
+                onChange={(e) =>
+                  setEditing({
+                    ...editing,
+                    keywords: e.target.value.split(",").map((s) => s.trim()).filter(Boolean),
+                  })
+                }
+              />
+            </Field>
+            <Field label="…on specific post/ad ids" optional>
+              <input
+                value={(editing.media_ids ?? []).join(", ")}
+                onChange={(e) =>
+                  setEditing({
+                    ...editing,
+                    media_ids: e.target.value.split(",").map((s) => s.trim()).filter(Boolean),
+                  })
+                }
+              />
+            </Field>
+            <Field label="Only engagers with ≥ followers" optional>
+              <input
+                type="number"
+                value={editing.filters?.min_followers ?? ""}
+                onChange={(e) =>
+                  setEditing({
+                    ...editing,
+                    filters: {
+                      ...editing.filters,
+                      min_followers: e.target.value ? Number(e.target.value) : undefined,
+                    },
+                  })
+                }
+              />
+            </Field>
+            <Field label="THEN — reply with (private reply for comments)" optional>
+              <textarea
+                rows={2}
+                value={editing.reply_text ?? ""}
+                onChange={(e) => setEditing({ ...editing, reply_text: e.target.value })}
+                placeholder="Thanks {{username}}! Sending details now."
+              />
+            </Field>
+            <Field label="Apply tags" optional>
+              <input
+                value={(editing.tag_names ?? []).join(", ")}
+                onChange={(e) =>
+                  setEditing({
+                    ...editing,
+                    tag_names: e.target.value.split(",").map((s) => s.trim()).filter(Boolean),
+                  })
+                }
+              />
+            </Field>
+            <Field label="Enroll in sequence" optional>
+              <select
+                value={editing.enroll_sequence_id ?? ""}
+                onChange={(e) =>
+                  setEditing({ ...editing, enroll_sequence_id: e.target.value || null })
+                }
+              >
+                <option value="">—</option>
+                {sequences.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.name}
+                  </option>
+                ))}
+              </select>
+            </Field>
+            <div className="or-fieldset">
+              <span className="field-label">Options</span>
+              <div className="or-options">
+                <label className="or-check">
+                  <input
+                    type="checkbox"
+                    checked={editing.create_contact ?? true}
+                    onChange={(e) => setEditing({ ...editing, create_contact: e.target.checked })}
+                  />
+                  Create CRM contact
+                </label>
+                <label className="or-check">
+                  <input
+                    type="checkbox"
+                    checked={editing.capture_prospect ?? false}
+                    onChange={(e) => setEditing({ ...editing, capture_prospect: e.target.checked })}
+                  />
+                  Capture as prospect
+                </label>
+                <label className="or-check">
+                  <input
+                    type="checkbox"
+                    checked={editing.once_per_user ?? true}
+                    onChange={(e) => setEditing({ ...editing, once_per_user: e.target.checked })}
+                  />
+                  Once per user
+                </label>
+                <label className="or-check">
+                  <input
+                    type="checkbox"
+                    checked={editing.enabled ?? true}
+                    onChange={(e) => setEditing({ ...editing, enabled: e.target.checked })}
+                  />
+                  Enabled
+                </label>
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        )}
+      </Dialog>
     </div>
   );
 }
@@ -746,6 +844,11 @@ function SequencesPanel({ clientId, accounts }: { clientId: string; accounts: Ig
     outreachPendingMessages(clientId || undefined).then(setPending).catch(() => {});
   }, [clientId]);
   useEffect(refresh, [refresh]);
+
+  const guard = useDirtyGuard(editing != null, JSON.stringify(steps));
+  const close = () => {
+    if (guard()) setEditing(null);
+  };
 
   const open = async (s: OutreachSequence) => {
     const full = await getOutreachSequence(s.id);
@@ -791,7 +894,7 @@ function SequencesPanel({ clientId, accounts }: { clientId: string; accounts: Ig
       key: "status",
       header: "Status",
       render: (s) => (
-        <Badge tone={s.status === "active" ? "ok" : s.status === "paused" ? "warn" : ""}>
+        <Badge tone={s.status === "active" ? "ok" : s.status === "paused" ? "warn" : "neutral"}>
           {s.status}
         </Badge>
       ),
@@ -820,7 +923,11 @@ function SequencesPanel({ clientId, accounts }: { clientId: string; accounts: Ig
           {s.status === "active" ? (
             <Button
               variant="ghost"
-              onClick={() => pauseOutreachSequence(s.id).then(refresh).catch(() => {})}
+              onClick={() =>
+                pauseOutreachSequence(s.id)
+                  .then(refresh)
+                  .catch((e) => toast(e instanceof Error ? e.message : "Failed", "error"))
+              }
             >
               Pause
             </Button>
@@ -844,20 +951,28 @@ function SequencesPanel({ clientId, accounts }: { clientId: string; accounts: Ig
   return (
     <div>
       {pending.length > 0 && (
-        <GlassCard className="pending-review" heavy>
-          <h3>Awaiting first-day review ({pending.length})</h3>
+        <GlassCard className="or-pending">
+          <h3 className="or-pending-title">Awaiting first-day review ({pending.length})</h3>
           {pending.map((p) => (
-            <div key={p.id} style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 6 }}>
-              <span style={{ flex: 1 }}>{p.text}</span>
+            <div key={p.id} className="or-pending-row">
+              <span className="or-pending-text">{p.text}</span>
               <Button
                 variant="primary"
-                onClick={() => outreachApproveMessage(p.id).then(refresh).catch(() => {})}
+                onClick={() =>
+                  outreachApproveMessage(p.id)
+                    .then(refresh)
+                    .catch((e) => toast(e instanceof Error ? e.message : "Failed", "error"))
+                }
               >
                 Approve & send
               </Button>
               <Button
-                variant="danger"
-                onClick={() => outreachDiscardMessage(p.id).then(refresh).catch(() => {})}
+                variant="danger-outline"
+                onClick={() =>
+                  outreachDiscardMessage(p.id)
+                    .then(refresh)
+                    .catch((e) => toast(e instanceof Error ? e.message : "Failed", "error"))
+                }
               >
                 Discard
               </Button>
@@ -865,12 +980,13 @@ function SequencesPanel({ clientId, accounts }: { clientId: string; accounts: Ig
           ))}
         </GlassCard>
       )}
-      <div style={{ display: "flex", justifyContent: "space-between", margin: "12px 0" }}>
-        <p className="page-sub" style={{ margin: 0 }}>
+      <div className="or-head">
+        <p className="or-sub">
           Automated follow-up flows. Sequences only message people who have
           engaged — sends outside the 24h window queue until it reopens.
         </p>
         <Button variant="primary" onClick={create}>
+          <Plus size={16} />
           New sequence
         </Button>
       </div>
@@ -881,11 +997,27 @@ function SequencesPanel({ clientId, accounts }: { clientId: string; accounts: Ig
         loading={sequences === null}
         emptyMessage="No sequences yet."
       />
-      {editing && (
-        <div className="modal-backdrop" onClick={() => setEditing(null)}>
-          <div className="modal wide" onClick={(e) => e.stopPropagation()}>
-            <h3>Edit sequence — {editing.name}</h3>
-            <p className="page-sub">
+
+      <Dialog
+        open={editing != null}
+        onClose={close}
+        closeOnScrim={false}
+        size="lg"
+        title={editing ? `Edit sequence — ${editing.name}` : "Edit sequence"}
+        footer={
+          <>
+            <Button variant="ghost" onClick={close}>
+              Close
+            </Button>
+            <Button variant="primary" onClick={saveSteps}>
+              Save steps
+            </Button>
+          </>
+        }
+      >
+        {editing && (
+          <>
+            <p className="or-tokens">
               Steps run top to bottom. Personalization tokens:{" "}
               <code>{"{{first_name}}"}</code> <code>{"{{business_name}}"}</code>{" "}
               <code>{"{{username}}"}</code> <code>{"{{vertical}}"}</code>.
@@ -899,12 +1031,14 @@ function SequencesPanel({ clientId, accounts }: { clientId: string; accounts: Ig
                 onRemove={() => setSteps(steps.filter((_, j) => j !== i))}
               />
             ))}
-            <div style={{ display: "flex", gap: 8, margin: "10px 0" }}>
+            <div className="or-step-add">
               <Button onClick={() => setSteps([...steps, { kind: "message", text_a: "" }])}>
-                + Message
+                <Plus size={16} />
+                Message
               </Button>
               <Button onClick={() => setSteps([...steps, { kind: "wait", wait_hours: 24 }])}>
-                + Wait
+                <Plus size={16} />
+                Wait
               </Button>
               <Button
                 onClick={() =>
@@ -914,20 +1048,13 @@ function SequencesPanel({ clientId, accounts }: { clientId: string; accounts: Ig
                   ])
                 }
               >
-                + Condition
+                <Plus size={16} />
+                Condition
               </Button>
             </div>
-            <div className="modal-actions">
-              <Button variant="ghost" onClick={() => setEditing(null)}>
-                Close
-              </Button>
-              <Button variant="primary" onClick={saveSteps}>
-                Save steps
-              </Button>
-            </div>
-          </div>
-        </div>
-      )}
+          </>
+        )}
+      </Dialog>
     </div>
   );
 }
@@ -944,20 +1071,19 @@ function StepEditor({
   onRemove: () => void;
 }) {
   return (
-    <GlassCard className="step-editor">
-      <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 6 }}>
-        <Badge tone="info">{index + 1}</Badge>
-        <strong style={{ textTransform: "capitalize" }}>{step.kind}</strong>
+    <GlassCard className="or-step">
+      <div className="or-step-head">
+        <Badge tone="accent">{index + 1}</Badge>
+        <strong className="or-step-title">{step.kind}</strong>
         {step.promoted_variant && (
           <Badge tone="ok">variant {step.promoted_variant.toUpperCase()} promoted</Badge>
         )}
-        <span style={{ flex: 1 }} />
         <Button variant="ghost" onClick={onRemove}>
           Remove
         </Button>
       </div>
       {step.kind === "message" && (
-        <div className="form-grid">
+        <div className="or-form">
           <Field label="Message (variant A)">
             <textarea
               rows={2}
@@ -985,7 +1111,7 @@ function StepEditor({
         </Field>
       )}
       {step.kind === "condition" && (
-        <div className="form-grid">
+        <div className="or-form">
           <Field label="If they replied">
             <select
               value={step.on_true ?? "exit"}
@@ -1036,6 +1162,14 @@ function ProspectsPanel({
   }, [clientId]);
   useEffect(refresh, [refresh]);
 
+  const guard = useDirtyGuard(
+    importing,
+    JSON.stringify({ handles, vertical, importClient, sequenceId }),
+  );
+  const close = () => {
+    if (guard()) setImporting(false);
+  };
+
   const doImport = async () => {
     const list = handles
       .split(/[\s,\n]+/)
@@ -1062,6 +1196,15 @@ function ProspectsPanel({
     }
   };
 
+  const remove = (p: OutreachProspect) => {
+    deleteOutreachProspect(p.id)
+      .then(() => {
+        toast("Prospect removed", "ok");
+        refresh();
+      })
+      .catch((e) => toast(e instanceof Error ? e.message : "Failed", "error"));
+  };
+
   const columns: Column<OutreachProspect>[] = [
     { key: "username", header: "Handle", render: (p) => `@${p.username}`, sortValue: (p) => p.username },
     { key: "vertical", header: "Vertical", render: (p) => p.vertical || "—", sortValue: (p) => p.vertical ?? "" },
@@ -1069,7 +1212,7 @@ function ProspectsPanel({
       key: "status",
       header: "Status",
       render: (p) => (
-        <Badge tone={p.status === "engaged" ? "ok" : ""}>{p.status}</Badge>
+        <Badge tone={p.status === "engaged" ? "ok" : "neutral"}>{p.status}</Badge>
       ),
       sortValue: (p) => p.status,
     },
@@ -1096,7 +1239,10 @@ function ProspectsPanel({
             onClick={() =>
               enrichOutreachProspect(p.id)
                 .then((r) => {
-                  toast(r.status === "ok" ? "Validated via API" : "Handle not found", r.status === "ok" ? "ok" : "error");
+                  toast(
+                    r.status === "ok" ? "Validated via API" : "Handle not found",
+                    r.status === "ok" ? "ok" : "error",
+                  );
                   refresh();
                 })
                 .catch((e) => toast(e instanceof Error ? e.message : "Failed", "error"))
@@ -1104,10 +1250,7 @@ function ProspectsPanel({
           >
             Validate
           </Button>
-          <Button
-            variant="danger"
-            onClick={() => deleteOutreachProspect(p.id).then(refresh).catch(() => {})}
-          >
+          <Button variant="danger-outline" onClick={() => remove(p)}>
             Remove
           </Button>
         </>
@@ -1117,14 +1260,15 @@ function ProspectsPanel({
 
   return (
     <div>
-      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 12 }}>
-        <p className="page-sub" style={{ margin: 0 }}>
+      <div className="or-head">
+        <p className="or-sub">
           A watch list, not a cold-DM list: Instagram's API can't message
           someone who hasn't engaged. Prospects auto-enroll in their sequence
           the moment they DM, comment, or mention you — pair this list with
           organic engagement or ads to spark that first touch.
         </p>
         <Button variant="primary" onClick={() => setImporting(true)}>
+          <Plus size={16} />
           Import handles
         </Button>
       </div>
@@ -1136,58 +1280,61 @@ function ProspectsPanel({
         initialSort="-username"
         emptyMessage="No prospects yet — import a handle list or let trigger rules capture business engagers."
       />
-      {importing && (
-        <div className="modal-backdrop" onClick={() => setImporting(false)}>
-          <div className="modal" onClick={(e) => e.stopPropagation()}>
-            <h3>Import prospect handles</h3>
-            <div className="form-grid">
-              <Field label="Client">
-                <select value={importClient} onChange={(e) => setImportClient(e.target.value)}>
-                  <option value="">—</option>
-                  {clients.map((c) => (
-                    <option key={c.id} value={c.id}>
-                      {c.name}
-                    </option>
-                  ))}
-                </select>
-              </Field>
-              <Field label="Handles (one per line or comma-separated)">
-                <textarea
-                  rows={5}
-                  value={handles}
-                  onChange={(e) => setHandles(e.target.value)}
-                  placeholder={"@desertplumbingaz\n@valleyhvac"}
-                />
-              </Field>
-              <Field label="Business vertical" optional>
-                <input
-                  value={vertical}
-                  onChange={(e) => setVertical(e.target.value)}
-                  placeholder="hvac / plumbing / electrical"
-                />
-              </Field>
-              <Field label="Auto-enroll in sequence on engagement" optional>
-                <select value={sequenceId} onChange={(e) => setSequenceId(e.target.value)}>
-                  <option value="">—</option>
-                  {sequences.map((s) => (
-                    <option key={s.id} value={s.id}>
-                      {s.name}
-                    </option>
-                  ))}
-                </select>
-              </Field>
-            </div>
-            <div className="modal-actions">
-              <Button variant="ghost" onClick={() => setImporting(false)}>
-                Cancel
-              </Button>
-              <Button variant="primary" onClick={doImport}>
-                Import
-              </Button>
-            </div>
-          </div>
+
+      <Dialog
+        open={importing}
+        onClose={close}
+        closeOnScrim={false}
+        title="Import prospect handles"
+        footer={
+          <>
+            <Button variant="ghost" onClick={close}>
+              Cancel
+            </Button>
+            <Button variant="primary" onClick={doImport}>
+              Import
+            </Button>
+          </>
+        }
+      >
+        <div className="or-form">
+          <Field label="Client">
+            <select value={importClient} onChange={(e) => setImportClient(e.target.value)}>
+              <option value="">—</option>
+              {clients.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.name}
+                </option>
+              ))}
+            </select>
+          </Field>
+          <Field label="Handles (one per line or comma-separated)">
+            <textarea
+              rows={5}
+              value={handles}
+              onChange={(e) => setHandles(e.target.value)}
+              placeholder={"@desertplumbingaz\n@valleyhvac"}
+            />
+          </Field>
+          <Field label="Business vertical" optional>
+            <input
+              value={vertical}
+              onChange={(e) => setVertical(e.target.value)}
+              placeholder="hvac / plumbing / electrical"
+            />
+          </Field>
+          <Field label="Auto-enroll in sequence on engagement" optional>
+            <select value={sequenceId} onChange={(e) => setSequenceId(e.target.value)}>
+              <option value="">—</option>
+              {sequences.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.name}
+                </option>
+              ))}
+            </select>
+          </Field>
         </div>
-      )}
+      </Dialog>
     </div>
   );
 }
@@ -1204,9 +1351,9 @@ function AnalyticsPanel({ clientId }: { clientId: string }) {
     outreachAnalytics(clientId || undefined, days).then(setData).catch(() => {});
   }, [clientId, days]);
 
-  if (data === null) return <SkeletonText lines={6} />;
+  const loading = data === null;
+  const h = data?.headline;
 
-  const h = data.headline;
   const seqColumns: Column<OutreachAnalytics["sequences"][number]>[] = [
     { key: "name", header: "Sequence", render: (s) => s.name, sortValue: (s) => s.name },
     { key: "enrolled", header: "Enrolled", align: "right", render: (s) => s.enrolled, sortValue: (s) => s.enrolled },
@@ -1229,7 +1376,7 @@ function AnalyticsPanel({ clientId }: { clientId: string }) {
           ? s.variants
               .map(
                 (v) =>
-                  `#${v.step_position + 1} A ${v.a.replies}/${v.a.sent} vs B ${v.b.replies}/${v.b.sent}${v.promoted ? ` → ${v.promoted.toUpperCase()}` : ""}`
+                  `#${v.step_position + 1} A ${v.a.replies}/${v.a.sent} vs B ${v.b.replies}/${v.b.sent}${v.promoted ? ` → ${v.promoted.toUpperCase()}` : ""}`,
               )
               .join("; ")
           : "—",
@@ -1255,59 +1402,96 @@ function AnalyticsPanel({ clientId }: { clientId: string }) {
     },
   ];
 
+  const avgReply =
+    h?.avg_reply_seconds == null
+      ? "—"
+      : h.avg_reply_seconds < 3600
+        ? `${Math.round(h.avg_reply_seconds / 60)}m`
+        : `${(h.avg_reply_seconds / 3600).toFixed(1)}h`;
+
   return (
     <div>
-      <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 12 }}>
-        <select value={days} onChange={(e) => setDays(Number(e.target.value))}>
-          <option value={7}>Last 7 days</option>
-          <option value={30}>Last 30 days</option>
-          <option value={90}>Last 90 days</option>
-        </select>
-        <span style={{ flex: 1 }} />
+      <div className="or-analytics-bar">
+        <Segmented
+          ariaLabel="Analytics date range"
+          value={String(days)}
+          onChange={(v) => setDays(Number(v))}
+          options={[
+            { value: "7", label: "7 days" },
+            { value: "30", label: "30 days" },
+            { value: "90", label: "90 days" },
+          ]}
+        />
         <Button
           onClick={() =>
             downloadCsv(outreachAuditExportUrl(clientId || undefined), "outreach-audit.csv").catch(
-              (e) => toast(e instanceof Error ? e.message : "Export failed", "error")
+              (e) => toast(e instanceof Error ? e.message : "Export failed", "error"),
             )
           }
         >
           Export audit CSV
         </Button>
       </div>
-      <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 16 }}>
-        {[
-          ["Messages sent", String(h.sent)],
-          ["Replies received", String(h.received)],
-          ["Reply rate", `${Math.round(h.reply_rate * 100)}%`],
-          ["Active enrollments", String(h.active_enrollments)],
-          [
-            "Avg time to reply",
-            h.avg_reply_seconds == null
-              ? "—"
-              : h.avg_reply_seconds < 3600
-                ? `${Math.round(h.avg_reply_seconds / 60)}m`
-                : `${(h.avg_reply_seconds / 3600).toFixed(1)}h`,
-          ],
-        ].map(([label, value]) => (
-          <GlassCard key={label} className="stat-tile">
-            <small>{label}</small>
-            <div style={{ fontSize: "1.6rem", fontWeight: 700 }}>{value}</div>
-          </GlassCard>
-        ))}
+
+      <div className="or-kpis">
+        <KpiGrid>
+          {loading || !h ? (
+            <>
+              <KpiSkeleton />
+              <KpiSkeleton />
+              <KpiSkeleton />
+              <KpiSkeleton />
+              <KpiSkeleton />
+            </>
+          ) : (
+            <>
+              <Kpi label="Messages sent" value={h.sent.toLocaleString()} />
+              <Kpi label="Replies received" value={h.received.toLocaleString()} />
+              <Kpi label="Reply rate" value={`${Math.round(h.reply_rate * 100)}%`} />
+              <Kpi label="Active enrollments" value={h.active_enrollments.toLocaleString()} />
+              <Kpi label="Avg time to reply" value={avgReply} />
+            </>
+          )}
+        </KpiGrid>
       </div>
-      <section>
-        <h3>Sequence funnel</h3>
-        <DataTable columns={seqColumns} rows={data.sequences} rowKey={(s) => s.sequence_id} emptyMessage="No sequence activity in this window." />
-      </section>
-      <section>
-        <h3>Trigger rules</h3>
-        <DataTable columns={ruleColumns} rows={data.rules} rowKey={(r) => r.rule_id} emptyMessage="No rule activity in this window." />
-      </section>
-      <section>
-        <h3>Business verticals</h3>
-        <DataTable columns={vertColumns} rows={data.verticals} rowKey={(v) => v.vertical} emptyMessage="Tag prospects with a vertical to see the breakdown." />
-      </section>
+
+      <Section title="Sequence funnel">
+        <DataTable
+          columns={seqColumns}
+          rows={data?.sequences ?? []}
+          rowKey={(s) => s.sequence_id}
+          loading={loading}
+          emptyMessage="No sequence activity in this window."
+        />
+      </Section>
+      <Section title="Trigger rules">
+        <DataTable
+          columns={ruleColumns}
+          rows={data?.rules ?? []}
+          rowKey={(r) => r.rule_id}
+          loading={loading}
+          emptyMessage="No rule activity in this window."
+        />
+      </Section>
+      <Section title="Business verticals">
+        <DataTable
+          columns={vertColumns}
+          rows={data?.verticals ?? []}
+          rowKey={(v) => v.vertical}
+          loading={loading}
+          emptyMessage="Tag prospects with a vertical to see the breakdown."
+        />
+      </Section>
     </div>
+  );
+}
+
+function Section({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <section className="or-section">
+      <h3 className="or-section-title">{title}</h3>
+      {children}
+    </section>
   );
 }
 
@@ -1326,6 +1510,11 @@ function AccountsPanel({
 }) {
   const toast = useToast();
   const [connectClient, setConnectClient] = useState(clientId);
+  const [disconnecting, setDisconnecting] = useState<IgAccount | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  // Keep the connect dropdown in sync with the global client filter.
+  useEffect(() => setConnectClient(clientId), [clientId]);
 
   const connect = async () => {
     if (!connectClient) {
@@ -1339,6 +1528,31 @@ function AccountsPanel({
       toast(e instanceof Error ? e.message : "Could not start OAuth", "error");
     }
   };
+
+  const confirmDisconnect = async () => {
+    if (!disconnecting) return;
+    setBusy(true);
+    try {
+      await disconnectIgAccount(disconnecting.id);
+      toast("Disconnected", "ok");
+      setDisconnecting(null);
+      onChanged();
+    } catch (e) {
+      toast(e instanceof Error ? e.message : "Disconnect failed", "error");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const disconnectRows: ReceiptRow[] = disconnecting
+    ? [
+        {
+          field: `@${disconnecting.username || disconnecting.ig_user_id}`,
+          oldValue: "connected",
+          newValue: "disconnected",
+        },
+      ]
+    : [];
 
   const columns: Column<IgAccount>[] = [
     {
@@ -1359,7 +1573,7 @@ function AccountsPanel({
         a.status === "active" ? (
           <Badge tone="ok">connected</Badge>
         ) : (
-          <Badge tone="error">reconnect needed</Badge>
+          <Badge tone="danger">reconnect needed</Badge>
         ),
       sortValue: (a) => a.status,
     },
@@ -1368,11 +1582,12 @@ function AccountsPanel({
       header: "Daily send cap",
       render: (a) => (
         <input
+          className="input or-cap-input"
           type="number"
           min={1}
           max={1000}
           defaultValue={a.daily_send_cap}
-          style={{ width: 90 }}
+          aria-label={`Daily send cap for @${a.username || a.ig_user_id}`}
           onBlur={(e) => {
             const v = Number(e.target.value);
             if (v && v !== a.daily_send_cap)
@@ -1390,14 +1605,14 @@ function AccountsPanel({
       key: "automation",
       header: "Automation",
       render: (a) => (
-        <label style={{ display: "flex", gap: 6, alignItems: "center" }}>
+        <label className="or-automation">
           <input
             type="checkbox"
             checked={!a.automation_paused}
             onChange={(e) =>
               updateIgAccount(a.id, { automation_paused: !e.target.checked })
                 .then(onChanged)
-                .catch(() => {})
+                .catch((err) => toast(err instanceof Error ? err.message : "Failed", "error"))
             }
           />
           {a.automation_paused ? "paused" : "running"}
@@ -1409,17 +1624,7 @@ function AccountsPanel({
       header: "",
       align: "right",
       render: (a) => (
-        <Button
-          variant="danger"
-          onClick={() =>
-            disconnectIgAccount(a.id)
-              .then(() => {
-                toast("Disconnected", "ok");
-                onChanged();
-              })
-              .catch(() => {})
-          }
-        >
+        <Button variant="danger-outline" onClick={() => setDisconnecting(a)}>
           Disconnect
         </Button>
       ),
@@ -1428,15 +1633,20 @@ function AccountsPanel({
 
   return (
     <div>
-      <GlassCard heavy>
-        <h3>Connect an Instagram professional account</h3>
-        <p className="page-sub">
+      <GlassCard className="or-connect">
+        <h3 className="or-connect-title">Connect an Instagram professional account</h3>
+        <p className="or-sub">
           OAuth through Meta — the account authorizes Salescale's app; tokens
           stay server-side. Requires an Instagram Business/Creator account
           linked to a Facebook Page the client manages.
         </p>
-        <div style={{ display: "flex", gap: 8 }}>
-          <select value={connectClient} onChange={(e) => setConnectClient(e.target.value)}>
+        <div className="or-connect-row">
+          <select
+            className="select or-select"
+            aria-label="Client to connect under"
+            value={connectClient}
+            onChange={(e) => setConnectClient(e.target.value)}
+          >
             <option value="">Choose client…</option>
             {clients.map((c) => (
               <option key={c.id} value={c.id}>
@@ -1449,14 +1659,29 @@ function AccountsPanel({
           </Button>
         </div>
       </GlassCard>
-      <div style={{ marginTop: 16 }}>
-        <DataTable
-          columns={columns}
-          rows={accounts}
-          rowKey={(a) => a.id}
-          emptyMessage="No Instagram accounts connected yet."
-        />
-      </div>
+
+      <DataTable
+        columns={columns}
+        rows={accounts}
+        rowKey={(a) => a.id}
+        emptyMessage="No Instagram accounts connected yet."
+      />
+
+      <ConfirmDialog
+        open={disconnecting != null}
+        onCancel={() => setDisconnecting(null)}
+        onConfirm={confirmDisconnect}
+        rows={disconnectRows}
+        tone="danger"
+        title="Disconnect account"
+        confirmLabel="Disconnect"
+        cancelLabel="Keep connected"
+        busy={busy}
+      >
+        <p className="or-muted">
+          Automated sequences on this account stop until it is reconnected.
+        </p>
+      </ConfirmDialog>
     </div>
   );
 }

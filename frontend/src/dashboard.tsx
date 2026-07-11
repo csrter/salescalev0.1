@@ -1,19 +1,27 @@
 /**
- * Phase 4 customizable dashboard.
+ * Phase 4 customizable dashboard (UI-revamp).
  *
  * A real widget system, not a fixed grid: widgets are addable, removable,
- * resizable (drag the corner handle, in 12-col × row units), and
- * rearrangeable (drag the widget header), and the resulting layout is
- * saved per user per client view via /api/dashboard/layout. No saved
- * layout means the role default below.
+ * resizable (drag the corner handle, in 12-col × row units), and rearrangeable
+ * (drag the 6-dot grip in the widget header). The resulting layout is saved per
+ * user per client view via /api/dashboard/layout. No saved layout means the
+ * role default below.
  *
- * The platform filter is owned by the page (one toggle governs every
- * widget) and passed down; see widgets.tsx for how each widget honors it.
+ * PERSISTENCE INVARIANT (do not change): the round-trip shape is
+ * `{ widgets: WidgetSlot[] }` where WidgetSlot = { type, w, h }. Drag reorder
+ * splices the slot array; pointer resize snaps to 12-col × 120px-row units read
+ * off grid.clientWidth; keyboard Arrange mode mutates the same array and PUTs
+ * the identical shape. COLS/ROW_PX/GAP_PX below are shared by the resize math
+ * and the CSS grid (.dash-grid) — keep them in lockstep.
+ *
+ * The platform filter is owned by the page (one toggle governs every widget)
+ * and passed down; see widgets.tsx for how each widget honors it.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, TEAM_ROLES, type Session } from "./api";
-import { EmptyState, Skeleton } from "./components/ui";
+import { Button, EmptyState, Skeleton } from "./components/ui";
+import { GripVertical, Plus, RefreshCw, X } from "./components/icons";
 import {
   BenchmarkWidget,
   CampaignTableWidget,
@@ -30,6 +38,7 @@ import {
   type PlatformFilter,
   type WidgetProps,
 } from "./widgets";
+import "./styles/views/dashboard.css";
 
 interface WidgetSlot {
   type: string;
@@ -46,81 +55,18 @@ interface WidgetDef {
 }
 
 export const WIDGET_REGISTRY: Record<string, WidgetDef> = {
-  overview: {
-    title: "Blended performance",
-    component: OverviewWidget,
-    minW: 6,
-    minH: 1,
-  },
-  channel_mix: {
-    title: "Channel mix",
-    component: ChannelMixWidget,
-    minW: 5,
-    minH: 2,
-  },
-  spend_pacing: {
-    title: "Spend & pacing",
-    component: SpendPacingWidget,
-    minW: 4,
-    minH: 2,
-  },
-  funnel_tiers: {
-    title: "Funnel tiers",
-    component: FunnelTiersWidget,
-    minW: 4,
-    minH: 2,
-  },
-  guarantee: {
-    title: "Guarantee tracker",
-    component: GuaranteeWidget,
-    minW: 4,
-    minH: 2,
-  },
-  fatigue: {
-    title: "Creative fatigue (Meta)",
-    component: FatigueWidget,
-    minW: 4,
-    minH: 1,
-  },
-  quality: {
-    title: "Quality alerts (Google)",
-    component: QualityWidget,
-    minW: 4,
-    minH: 1,
-  },
-  reconciliation: {
-    title: "Attribution discrepancies",
-    component: ReconciliationWidget,
-    minW: 4,
-    minH: 2,
-  },
-  campaigns: {
-    title: "Campaigns (all platforms)",
-    component: CampaignTableWidget,
-    minW: 6,
-    minH: 2,
-  },
-  benchmark: {
-    title: "Vertical benchmark",
-    component: BenchmarkWidget,
-    teamOnly: true,
-    minW: 4,
-    minH: 1,
-  },
-  conversion_health: {
-    title: "Conversion tracking (server-side)",
-    component: ConversionHealthWidget,
-    teamOnly: true,
-    minW: 6,
-    minH: 2,
-  },
-  utm_builder: {
-    title: "UTM builder",
-    component: UtmBuilderWidget,
-    teamOnly: true,
-    minW: 6,
-    minH: 2,
-  },
+  overview: { title: "Blended performance", component: OverviewWidget, minW: 6, minH: 1 },
+  channel_mix: { title: "Channel mix", component: ChannelMixWidget, minW: 5, minH: 2 },
+  spend_pacing: { title: "Spend & pacing", component: SpendPacingWidget, minW: 4, minH: 2 },
+  funnel_tiers: { title: "Funnel tiers", component: FunnelTiersWidget, minW: 4, minH: 2 },
+  guarantee: { title: "Guarantee tracker", component: GuaranteeWidget, minW: 4, minH: 2 },
+  fatigue: { title: "Creative fatigue (Meta)", component: FatigueWidget, minW: 4, minH: 1 },
+  quality: { title: "Quality alerts (Google)", component: QualityWidget, minW: 4, minH: 1 },
+  reconciliation: { title: "Attribution discrepancies", component: ReconciliationWidget, minW: 4, minH: 2 },
+  campaigns: { title: "Campaigns (all platforms)", component: CampaignTableWidget, minW: 6, minH: 2 },
+  benchmark: { title: "Vertical benchmark", component: BenchmarkWidget, teamOnly: true, minW: 4, minH: 1 },
+  conversion_health: { title: "Conversion tracking (server-side)", component: ConversionHealthWidget, teamOnly: true, minW: 6, minH: 2 },
+  utm_builder: { title: "UTM builder", component: UtmBuilderWidget, teamOnly: true, minW: 6, minH: 2 },
 };
 
 const TEAM_DEFAULT: WidgetSlot[] = [
@@ -152,6 +98,9 @@ const ROW_PX = 120;
 const GAP_PX = 12;
 const MAX_H = 6;
 
+const clamp = (v: number, lo: number, hi: number) =>
+  Math.min(Math.max(v, lo), hi);
+
 export function Dashboard({
   clientId,
   session,
@@ -163,17 +112,17 @@ export function Dashboard({
 }) {
   const isTeam = TEAM_ROLES.includes(session.role);
   const allowed = Object.entries(WIDGET_REGISTRY).filter(
-    ([, def]) => isTeam || !def.teamOnly
+    ([, def]) => isTeam || !def.teamOnly,
   );
   const [widgets, setWidgets] = useState<WidgetSlot[] | null>(null);
-  const [saveState, setSaveState] = useState<"saved" | "saving" | "error">(
-    "saved"
-  );
+  const [saveState, setSaveState] = useState<"saved" | "saving" | "error">("saved");
   const [refresh, setRefresh] = useState(0);
   const [syncing, setSyncing] = useState(false);
   const [syncNote, setSyncNote] = useState<string | null>(null);
-  // Which widget is mid-drag; live-updated as it passes over siblings so
-  // the reorder animates in place (standard sortable pattern).
+  const [arrange, setArrange] = useState(false);
+  const [announce, setAnnounce] = useState("");
+  // Which widget is mid-drag; live-updated as it passes over siblings so the
+  // reorder animates in place (standard sortable pattern).
   const [dragIndex, setDragIndex] = useState<number | null>(null);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const gridRef = useRef<HTMLDivElement>(null);
@@ -181,14 +130,14 @@ export function Dashboard({
   useEffect(() => {
     setWidgets(null);
     api<{ widgets: WidgetSlot[] | null }>(
-      `/api/dashboard/layout?client_id=${clientId}`
+      `/api/dashboard/layout?client_id=${clientId}`,
     )
       .then((r) =>
         setWidgets(
           (r.widgets ?? (isTeam ? TEAM_DEFAULT : CLIENT_DEFAULT)).filter(
-            (w) => w.type in WIDGET_REGISTRY
-          )
-        )
+            (w) => w.type in WIDGET_REGISTRY,
+          ),
+        ),
       )
       .catch(() => setWidgets(isTeam ? TEAM_DEFAULT : CLIENT_DEFAULT));
   }, [clientId, isTeam]);
@@ -206,7 +155,7 @@ export function Dashboard({
           .catch(() => setSaveState("error"));
       }, 500);
     },
-    [clientId]
+    [clientId],
   );
 
   const update = (next: WidgetSlot[]) => {
@@ -220,7 +169,7 @@ export function Dashboard({
     try {
       const resp = await api<{ results: any[] }>(
         `/api/insights/sync?client_id=${clientId}`,
-        { method: "POST" }
+        { method: "POST" },
       );
       const failures = resp.results.filter((r) => !r.ok);
       setSyncNote(
@@ -228,7 +177,7 @@ export function Dashboard({
           ? `Synced with issues: ${failures
               .map((f) => `${f.platform}: ${f.error}`)
               .join("; ")}`
-          : `Synced ${resp.results.length} account(s)`
+          : `Synced ${resp.results.length} account(s)`,
       );
       setRefresh((b) => b + 1);
     } catch (e) {
@@ -238,19 +187,54 @@ export function Dashboard({
     }
   };
 
+  // Keyboard Arrange mode: mutate the SAME slot array and persist the identical
+  // shape. Left/Up move a widget earlier, Right/Down later; Shift+←/→ resize
+  // width, Shift+↑/↓ resize height.
+  const arrangeKey = (e: React.KeyboardEvent, i: number) => {
+    if (!widgets) return;
+    if (e.key === "Escape") {
+      setArrange(false);
+      return;
+    }
+    const def = WIDGET_REGISTRY[widgets[i].type];
+    const arrows = ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"];
+    if (!arrows.includes(e.key)) return;
+    e.preventDefault();
+    if (e.shiftKey) {
+      const slot = widgets[i];
+      let { w, h } = slot;
+      if (e.key === "ArrowLeft") w = clamp(w - 1, def.minW, COLS);
+      if (e.key === "ArrowRight") w = clamp(w + 1, def.minW, COLS);
+      if (e.key === "ArrowUp") h = clamp(h - 1, def.minH, MAX_H);
+      if (e.key === "ArrowDown") h = clamp(h + 1, def.minH, MAX_H);
+      const next = widgets.map((s, j) => (j === i ? { ...s, w, h } : s));
+      update(next);
+      setAnnounce(`${def.title} resized to ${w} by ${h}`);
+    } else {
+      const delta =
+        e.key === "ArrowLeft" || e.key === "ArrowUp" ? -1 : 1;
+      const j = clamp(i + delta, 0, widgets.length - 1);
+      if (j === i) return;
+      const next = [...widgets];
+      const [moved] = next.splice(i, 1);
+      next.splice(j, 0, moved);
+      update(next);
+      setAnnounce(`${def.title} moved to position ${j + 1} of ${next.length}`);
+    }
+  };
+
   if (widgets === null)
     return (
-      <section className="dashboard">
-        <div className="widget-grid">
+      <section className="dash">
+        <div className="dash-grid">
           {[12, 5, 7, 7, 5].map((w, i) => (
             <div
               key={i}
-              className="widget-card"
+              className="card dash-widget"
               style={{ gridColumn: `span ${w}`, gridRow: "span 2" }}
             >
-              <div className="widget-body">
+              <div className="dash-widget-body">
                 <Skeleton height="0.8em" width="40%" />
-                <div style={{ height: 12 }} />
                 <Skeleton height="2.2em" />
               </div>
             </div>
@@ -263,23 +247,36 @@ export function Dashboard({
   const addable = allowed.filter(([type]) => !present.has(type));
 
   return (
-    <section className="dashboard">
+    <section className="dash">
       <div className="dash-toolbar">
         <h3>Dashboard</h3>
-        <span className={`save-state ${saveState}`}>
+        <span className={`dash-status ${saveState === "error" ? "dash-status--error" : ""}`.trim()} aria-live="polite">
           {saveState === "saving"
             ? "saving layout…"
             : saveState === "error"
               ? "layout save failed"
               : "layout saved"}
         </span>
-        {syncNote && <span className="muted">{syncNote}</span>}
+        {syncNote && <span className="dash-note">{syncNote}</span>}
         <span className="dash-actions">
           {isTeam && (
-            <button onClick={sync} disabled={syncing}>
-              {syncing ? "Syncing…" : "Sync insights"}
-            </button>
+            <Button variant="ghost" size="sm" onClick={sync} busy={syncing}>
+              <RefreshCw size={16} aria-hidden="true" /> Sync insights
+            </Button>
           )}
+          <Button
+            variant={arrange ? "primary" : "default"}
+            size="sm"
+            aria-pressed={arrange}
+            onClick={() => {
+              setArrange((a) => !a);
+              setAnnounce(
+                arrange ? "Arrange mode off" : "Arrange mode on — use arrows to move, Shift+arrows to resize",
+              );
+            }}
+          >
+            {arrange ? "Done" : "Arrange"}
+          </Button>
           <AddWidgetMenu
             addable={addable}
             onAdd={(type) => {
@@ -292,15 +289,28 @@ export function Dashboard({
           />
         </span>
       </div>
-      <div className="widget-grid" ref={gridRef}>
+      {arrange && (
+        <p className="dash-arrange-hint">
+          Arrange mode: focus a widget, then arrows to reorder, Shift+arrows to
+          resize, Esc to exit.
+        </p>
+      )}
+      <div
+        className={`dash-grid ${arrange ? "dash-grid--arrange" : ""}`.trim()}
+        ref={gridRef}
+      >
         {widgets.map((slot, i) => {
           const Body = WIDGET_REGISTRY[slot.type].component;
           return (
             <WidgetCard
               key={slot.type}
               slot={slot}
+              index={i}
+              count={widgets.length}
+              arrange={arrange}
               dragging={dragIndex === i}
               gridRef={gridRef}
+              onArrangeKey={(e) => arrangeKey(e, i)}
               onDragStart={() => setDragIndex(i)}
               onDragEnter={() => {
                 if (dragIndex === null || dragIndex === i) return;
@@ -315,9 +325,7 @@ export function Dashboard({
                 persist(widgets);
               }}
               onResize={(w, h, done) => {
-                const next = widgets.map((s, j) =>
-                  j === i ? { ...s, w, h } : s
-                );
+                const next = widgets.map((s, j) => (j === i ? { ...s, w, h } : s));
                 setWidgets(next);
                 if (done) persist(next);
               }}
@@ -334,11 +342,14 @@ export function Dashboard({
         })}
       </div>
       {widgets.length === 0 && (
-        <EmptyState title="An empty canvas">
+        <EmptyState title="An empty canvas" hero>
           Use “Add widget” above to build this view — every widget is
           drag-to-rearrange and resizable, and the layout saves per user.
         </EmptyState>
       )}
+      <div className="visually-hidden" aria-live="polite">
+        {announce}
+      </div>
     </section>
   );
 }
@@ -351,17 +362,44 @@ function AddWidgetMenu({
   onAdd: (type: string) => void;
 }) {
   const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLSpanElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("mousedown", onDoc);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDoc);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+
   return (
-    <span className="add-widget">
-      <button onClick={() => setOpen(!open)} disabled={!addable.length}>
-        + Add widget
-      </button>
+    <span className="dash-add" ref={ref}>
+      <Button
+        variant="default"
+        size="sm"
+        disabled={!addable.length}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        onClick={() => setOpen((o) => !o)}
+      >
+        <Plus size={16} aria-hidden="true" /> Add widget
+      </Button>
       {open && (
-        <div className="add-widget-menu">
+        <div className="dash-add-menu" role="menu">
           {addable.map(([type, def]) => (
             <button
               key={type}
-              className="link"
+              type="button"
+              role="menuitem"
+              className="dash-add-item"
               onClick={() => {
                 setOpen(false);
                 onAdd(type);
@@ -378,8 +416,12 @@ function AddWidgetMenu({
 
 function WidgetCard({
   slot,
+  index,
+  count,
+  arrange,
   dragging,
   gridRef,
+  onArrangeKey,
   onDragStart,
   onDragEnter,
   onDragEnd,
@@ -388,8 +430,12 @@ function WidgetCard({
   children,
 }: {
   slot: WidgetSlot;
+  index: number;
+  count: number;
+  arrange: boolean;
   dragging: boolean;
   gridRef: React.RefObject<HTMLDivElement | null>;
+  onArrangeKey: (e: React.KeyboardEvent) => void;
   onDragStart: () => void;
   onDragEnter: () => void;
   onDragEnd: () => void;
@@ -409,15 +455,13 @@ function WidgetCard({
     const startY = e.clientY;
     const startW = slot.w;
     const startH = slot.h;
-    const clamp = (v: number, lo: number, hi: number) =>
-      Math.min(Math.max(v, lo), hi);
     const move = (ev: PointerEvent) => {
       const dw = Math.round((ev.clientX - startX) / (cellW + GAP_PX));
       const dh = Math.round((ev.clientY - startY) / (ROW_PX + GAP_PX));
       onResize(
         clamp(startW + dw, def.minW, COLS),
         clamp(startH + dh, def.minH, MAX_H),
-        false
+        false,
       );
     };
     const up = (ev: PointerEvent) => {
@@ -426,7 +470,7 @@ function WidgetCard({
       onResize(
         clamp(startW + dw, def.minW, COLS),
         clamp(startH + dh, def.minH, MAX_H),
-        true
+        true,
       );
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", up);
@@ -437,8 +481,23 @@ function WidgetCard({
 
   return (
     <div
-      className={`widget-card ${dragging ? "dragging" : ""}`}
-      style={{ gridColumn: `span ${slot.w}`, gridRow: `span ${slot.h}` }}
+      className={[
+        "card",
+        "dash-widget",
+        dragging ? "dragging" : "",
+        arrange ? "dash-widget--arrange" : "",
+      ]
+        .filter(Boolean)
+        .join(" ")}
+      style={{ gridColumn: `span ${slot.w}`, gridRow: `span ${slot.h}`, position: "relative" }}
+      tabIndex={arrange ? 0 : undefined}
+      role={arrange ? "button" : undefined}
+      aria-label={
+        arrange
+          ? `${def.title}, position ${index + 1} of ${count}, ${slot.w} by ${slot.h}. Arrows move, Shift+arrows resize.`
+          : undefined
+      }
+      onKeyDown={arrange ? onArrangeKey : undefined}
       onDragOver={(e) => e.preventDefault()}
       onDragEnter={(e) => {
         e.preventDefault();
@@ -447,8 +506,8 @@ function WidgetCard({
       onDrop={(e) => e.preventDefault()}
     >
       <div
-        className="widget-head"
-        draggable
+        className="dash-widget-head"
+        draggable={!arrange}
         onDragStart={(e) => {
           e.dataTransfer.effectAllowed = "move";
           e.dataTransfer.setData("text/plain", slot.type);
@@ -457,24 +516,30 @@ function WidgetCard({
         onDragEnd={onDragEnd}
         title="Drag to rearrange"
       >
-        <span className="drag-dots" aria-hidden>
-          ⠿
+        <span className="dash-grip" aria-hidden="true">
+          <GripVertical size={16} />
         </span>
         <h4>{def.title}</h4>
-        <button
-          className="widget-remove"
+        <Button
+          className="dash-widget-remove"
+          variant="ghost"
+          size="sm"
+          aria-label={`Remove ${def.title}`}
           title="Remove widget"
           onClick={onRemove}
         >
-          ×
-        </button>
+          <X size={16} aria-hidden="true" />
+        </Button>
       </div>
-      <div className="widget-body">{children}</div>
+      <div className="dash-widget-body">{children}</div>
       <div
-        className="resize-handle"
+        className="dash-resize"
         title="Drag to resize"
+        aria-hidden="true"
         onPointerDown={startResize}
-      />
+      >
+        <GripVertical size={12} />
+      </div>
     </div>
   );
 }

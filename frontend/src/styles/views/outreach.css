@@ -1,1 +1,472 @@
-/* outreach.css — .or-* layout/composition only (spec §3.3, §7). Owner: outreach view agent. */
+/* ==========================================================================
+   outreach.css — .or-* layout/composition only (spec §3.3, §7).
+   Owner: outreach view agent. Primitives (.card, .btn, .badge, .tabs, .kpi,
+   .table, .dialog, .field, .alert, .empty) live in components/ui.css.
+   Tokens only — no color/size/duration/z-index literals (grep gate §3.4).
+   ========================================================================== */
+
+/* ---- shell: banner + subnav --------------------------------------------- */
+
+.or-banner {
+  margin-bottom: var(--space-4);
+}
+
+.or-banner .btn--link {
+  margin-left: var(--space-2);
+}
+
+.or-subnav {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+  margin-bottom: var(--space-5);
+}
+
+/* Filter select is a value picker, not a full-width form control. */
+.or-subnav .or-select {
+  width: auto;
+  min-width: 180px;
+}
+
+/* ---- section header row (Rules / Sequences / Prospects) ------------------ */
+
+.or-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+  margin-bottom: var(--space-4);
+}
+
+.or-sub {
+  margin: 0;
+  max-width: 68ch;
+  font-size: var(--text-sm);
+  color: var(--ink-soft);
+}
+
+/* ==========================================================================
+   Inbox — three-pane: conversations | thread | context
+   ========================================================================== */
+
+.or-inbox {
+  display: grid;
+  grid-template-columns: 320px minmax(0, 1fr) 280px;
+  gap: var(--space-4);
+  align-items: start;
+}
+
+@media (max-width: 1180px) {
+  .or-inbox {
+    grid-template-columns: 300px minmax(0, 1fr);
+  }
+  .or-context {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 820px) {
+  .or-inbox {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ---- conversation list pane --------------------------------------------- */
+
+.or-convos {
+  padding: var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  max-height: 72vh;
+  overflow-y: auto;
+}
+
+.or-search {
+  margin-bottom: var(--space-2);
+}
+
+.or-convo {
+  appearance: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  width: 100%;
+  text-align: left;
+  padding: var(--space-2) var(--space-3);
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--ink);
+  cursor: pointer;
+  transition: background-color var(--dur-fast) var(--ease-out);
+}
+
+.or-convo:hover {
+  background: var(--accent-ghost);
+}
+
+.or-convo--active {
+  background: var(--accent-soft);
+}
+
+.or-convo:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.or-convo-top {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.or-convo-name {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+}
+
+.or-convo-name > span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.or-convo-time {
+  flex: none;
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  color: var(--ink-faint);
+}
+
+.or-convo-preview {
+  font-size: var(--text-xs);
+  color: var(--ink-soft);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---- thread pane -------------------------------------------------------- */
+
+.or-thread {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-height: 420px;
+}
+
+.or-thread-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.or-thread-title {
+  margin: 0;
+  font-size: var(--text-lg);
+  font-weight: var(--weight-semibold);
+  color: var(--ink);
+}
+
+.or-badges {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.or-messages {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  flex: 1;
+  min-height: 240px;
+  max-height: 56vh;
+  overflow-y: auto;
+  padding-block: var(--space-1);
+}
+
+.or-msg {
+  max-width: 76%;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-md);
+  font-size: var(--text-sm);
+}
+
+.or-msg--out {
+  align-self: flex-end;
+  background: var(--accent);
+  color: var(--ink-on-accent);
+}
+
+.or-msg--in {
+  align-self: flex-start;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--ink);
+}
+
+.or-msg--muted {
+  opacity: 0.6;
+}
+
+.or-msg-meta {
+  display: block;
+  margin-top: var(--space-1);
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+}
+
+.or-msg--in .or-msg-meta {
+  color: var(--ink-faint);
+}
+
+.or-msg--out .or-msg-meta {
+  color: color-mix(in srgb, var(--ink-on-accent) 78%, transparent);
+}
+
+/* ---- composer ----------------------------------------------------------- */
+
+.or-composer {
+  margin-top: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.or-composer-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.or-composer-actions .btn {
+  margin-left: auto;
+}
+
+/* ---- context pane ------------------------------------------------------- */
+
+.or-context {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.or-context-title {
+  margin: 0;
+  font-size: var(--text-2xs);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-caps);
+  color: var(--ink-faint);
+  font-weight: var(--weight-semibold);
+}
+
+.or-chips {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  align-items: flex-start;
+}
+
+.or-enrollment {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+}
+
+.or-enrollment .btn {
+  margin-left: auto;
+}
+
+.or-muted {
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--ink-soft);
+}
+
+/* ==========================================================================
+   Sequences — pending review + step editor
+   ========================================================================== */
+
+.or-pending {
+  margin-bottom: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.or-pending-title {
+  margin: 0;
+  font-size: var(--text-lg);
+  font-weight: var(--weight-semibold);
+  color: var(--ink);
+}
+
+.or-pending-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.or-pending-text {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--text-sm);
+}
+
+.or-step {
+  margin-bottom: var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.or-step-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.or-step-title {
+  font-weight: var(--weight-semibold);
+  text-transform: capitalize;
+}
+
+.or-step-head .btn {
+  margin-left: auto;
+}
+
+.or-step-add {
+  display: flex;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  margin: var(--space-3) 0;
+}
+
+.or-tokens {
+  margin: 0 0 var(--space-3);
+  font-size: var(--text-sm);
+  color: var(--ink-soft);
+}
+
+.or-tokens code {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  padding: 1px 5px;
+  border-radius: var(--radius-xs);
+  background: var(--surface);
+  color: var(--ink);
+}
+
+/* ==========================================================================
+   Dialog form scaffold (replaces legacy .form-grid) + fieldset
+   ========================================================================== */
+
+.or-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.or-fieldset {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.or-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-4);
+}
+
+.or-check {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-sm);
+  color: var(--ink);
+}
+
+/* ==========================================================================
+   Analytics
+   ========================================================================== */
+
+.or-analytics-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  margin-bottom: var(--space-4);
+}
+
+.or-kpis {
+  margin-bottom: var(--space-5);
+}
+
+.or-section {
+  margin-top: var(--space-6);
+}
+
+.or-section-title {
+  margin: 0 0 var(--space-3);
+  font-size: var(--text-lg);
+  font-weight: var(--weight-semibold);
+  color: var(--ink);
+}
+
+/* ==========================================================================
+   Accounts (settings)
+   ========================================================================== */
+
+.or-connect {
+  margin-bottom: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.or-connect-title {
+  margin: 0;
+  font-size: var(--text-lg);
+  font-weight: var(--weight-semibold);
+  color: var(--ink);
+}
+
+.or-connect-row {
+  display: flex;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.or-connect-row .or-select {
+  width: auto;
+  min-width: 220px;
+}
+
+.or-cap-input.input {
+  width: 6rem;
+  min-height: 32px;
+}
+
+.or-automation {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-sm);
+  color: var(--ink);
+}

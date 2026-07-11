@@ -20,9 +20,40 @@ import {
   type Session,
   type SessionInfo,
 } from "./api";
-import { SkeletonText } from "./components/ui";
+import { DataTable, type Column } from "./components/DataTable";
+import { ConfirmDialog } from "./components/Dialog";
+import {
+  Alert,
+  Badge,
+  Button,
+  Field,
+  Kpi,
+  KpiGrid,
+  SkeletonText,
+} from "./components/ui";
+import "./styles/views/security.css";
 
 type Flow = "idle" | "totp" | "email" | "sms";
+
+function CopyButton({ text, label = "Copy" }: { text: string; label?: string }) {
+  const [done, setDone] = useState(false);
+  return (
+    <Button
+      size="sm"
+      onClick={async () => {
+        try {
+          await navigator.clipboard.writeText(text);
+          setDone(true);
+          setTimeout(() => setDone(false), 1500);
+        } catch {
+          /* clipboard unavailable — the value stays selectable inline */
+        }
+      }}
+    >
+      {done ? "Copied" : label}
+    </Button>
+  );
+}
 
 export function TwoFactorSettings({ session }: { session: Session }) {
   const [status, setStatus] = useState<MfaStatus | null>(null);
@@ -93,111 +124,134 @@ export function TwoFactorSettings({ session }: { session: Session }) {
 
   if (!status)
     return (
-      <div className="settings mfa-settings">
+      <div className="sec-page">
         <SkeletonText lines={4} />
       </div>
     );
 
   return (
-    <div className="settings mfa-settings">
-      <h2>Two-factor authentication</h2>
-      <p className="muted">
-        Add a second step at login so a password alone isn't enough to get in.
-      </p>
-      {error && <p className="error">{error}</p>}
+    <div className="sec-page">
+      <div className="sec-head">
+        <h2>Two-factor authentication</h2>
+        <p className="sec-sub">
+          Add a second step at login so a password alone isn't enough to get in.
+        </p>
+      </div>
+
+      {error && <Alert tone="danger">{error}</Alert>}
 
       {backupCodes && (
-        <div className="card notice">
-          <h3>Save your backup codes</h3>
+        <Alert tone="warn" title="Save your backup codes">
           <p>
             Each code works once if you lose access to your device. Store them
-            somewhere safe — they won't be shown again.
+            somewhere safe — <strong>they won't be shown again</strong>.
           </p>
-          <ul className="backup-codes">
+          <ul className="sec-backup-grid">
             {backupCodes.map((c) => (
               <li key={c}>
                 <code>{c}</code>
               </li>
             ))}
           </ul>
-        </div>
+          <CopyButton text={backupCodes.join("\n")} label="Copy all codes" />
+        </Alert>
       )}
 
       {status.method ? (
-        <div className="card">
+        <div className="card sec-method">
           <p>
             <strong>Two-factor is on</strong> — method: <strong>{status.method}</strong>
             {status.phone_hint ? ` (${status.phone_hint})` : ""}.
           </p>
-          <p className="muted">{status.backup_codes_remaining} backup codes remaining.</p>
-          <label>
-            Confirm your password to turn it off
+          <KpiGrid>
+            <Kpi label="Backup codes remaining" value={status.backup_codes_remaining} />
+          </KpiGrid>
+          <Field label="Confirm your password to turn it off">
             <input
+              className="input"
               type="password"
               value={disablePw}
               onChange={(e) => setDisablePw(e.target.value)}
             />
-          </label>
-          <button className="danger" onClick={disable} disabled={!disablePw}>
+          </Field>
+          <Button variant="danger" onClick={disable} disabled={!disablePw}>
             Disable two-factor
-          </button>
+          </Button>
         </div>
       ) : flow === "idle" ? (
-        <div className="mfa-methods">
-          <div className="card">
+        <div className="sec-methods">
+          <div className="card sec-method">
             <h3>Authenticator app</h3>
-            <p className="muted">Google Authenticator, Authy, 1Password, and similar.</p>
-            <button onClick={startTotp}>Set up</button>
+            <p className="sec-sub">Google Authenticator, Authy, 1Password, and similar.</p>
+            <Button onClick={startTotp}>Set up</Button>
           </div>
-          <div className="card">
+          <div className="card sec-method">
             <h3>Email code</h3>
-            <p className="muted">We email a code to your account address at login.</p>
-            <button onClick={startEmail}>Set up</button>
+            <p className="sec-sub">We email a code to your account address at login.</p>
+            <Button onClick={startEmail}>Set up</Button>
           </div>
-          <div className="card">
+          <div className="card sec-method">
             <h3>Text message (SMS)</h3>
-            <p className="muted">We text a code to your phone at login.</p>
-            <input
-              placeholder="+1 555 555 0123"
-              value={phone}
-              onChange={(e) => setPhone(e.target.value)}
-            />
-            <button onClick={startSms} disabled={!phone}>
+            <p className="sec-sub">We text a code to your phone at login.</p>
+            <Field label="Phone number">
+              <input
+                className="input"
+                placeholder="+1 555 555 0123"
+                value={phone}
+                onChange={(e) => setPhone(e.target.value)}
+              />
+            </Field>
+            <Button onClick={startSms} disabled={!phone}>
               Send code
-            </button>
+            </Button>
           </div>
         </div>
       ) : flow === "totp" ? (
-        <div className="card">
+        <div className="card sec-method">
           <h3>Scan with your authenticator app</h3>
-          {qr && <img src={qr} alt="Authenticator QR code" width={180} height={180} />}
-          <p className="muted">
+          {qr && (
+            <img className="sec-qr" src={qr} alt="Authenticator QR code" width={180} height={180} />
+          )}
+          <div className="sec-secret">
             Or enter this key manually: <code>{secret}</code>
-          </p>
-          <label>
-            Enter the 6-digit code to confirm
-            <input inputMode="numeric" value={code} onChange={(e) => setCode(e.target.value)} />
-          </label>
-          <button onClick={enable} disabled={!code}>
-            Enable
-          </button>
-          <button type="button" className="link" onClick={reset}>
-            Cancel
-          </button>
+            <CopyButton text={secret} label="Copy key" />
+          </div>
+          <Field label="Enter the 6-digit code to confirm">
+            <input
+              className="input"
+              inputMode="numeric"
+              value={code}
+              onChange={(e) => setCode(e.target.value)}
+            />
+          </Field>
+          <div className="sec-method-actions">
+            <Button variant="primary" onClick={enable} disabled={!code}>
+              Enable
+            </Button>
+            <Button variant="link" onClick={reset}>
+              Cancel
+            </Button>
+          </div>
         </div>
       ) : (
-        <div className="card">
+        <div className="card sec-method">
           <h3>Enter the code we sent</h3>
-          <label>
-            Verification code
-            <input inputMode="numeric" value={code} onChange={(e) => setCode(e.target.value)} />
-          </label>
-          <button onClick={enable} disabled={!code}>
-            Enable
-          </button>
-          <button type="button" className="link" onClick={reset}>
-            Cancel
-          </button>
+          <Field label="Verification code">
+            <input
+              className="input"
+              inputMode="numeric"
+              value={code}
+              onChange={(e) => setCode(e.target.value)}
+            />
+          </Field>
+          <div className="sec-method-actions">
+            <Button variant="primary" onClick={enable} disabled={!code}>
+              Enable
+            </Button>
+            <Button variant="link" onClick={reset}>
+              Cancel
+            </Button>
+          </div>
         </div>
       )}
 
@@ -220,6 +274,9 @@ function _device(ua: string | null): string {
 function SessionsPanel() {
   const [list, setList] = useState<SessionInfo[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [confirmAll, setConfirmAll] = useState(false);
+  const [busy, setBusy] = useState(false);
+
   const load = () => getSessions().then(setList).catch((e) => setError(e.message));
   useEffect(() => {
     load();
@@ -234,6 +291,7 @@ function SessionsPanel() {
     }
   };
   const logoutAll = async () => {
+    setBusy(true);
     try {
       await logoutEverywhere();
       // This session is now revoked too — drop it and return to login.
@@ -241,34 +299,88 @@ function SessionsPanel() {
       window.location.reload();
     } catch (e) {
       setError((e as Error).message);
+      setBusy(false);
+      setConfirmAll(false);
     }
   };
+
+  const columns: Column<SessionInfo>[] = [
+    {
+      key: "device",
+      header: "Device",
+      render: (s) => (
+        <span className="sec-session-device">
+          <strong>{_device(s.user_agent)}</strong>
+          {s.current && <Badge tone="ok">This device</Badge>}
+        </span>
+      ),
+    },
+    { key: "ip", header: "IP", render: (s) => s.ip ?? "—" },
+    {
+      key: "last",
+      header: "Last active",
+      render: (s) => new Date(s.last_seen_at).toLocaleString(),
+      sortValue: (s) => s.last_seen_at,
+    },
+    {
+      key: "actions",
+      header: "Actions",
+      render: (s) =>
+        s.current ? (
+          <span className="sec-sub">—</span>
+        ) : (
+          <Button size="sm" variant="danger-outline" onClick={() => revoke(s.id)}>
+            Revoke
+          </Button>
+        ),
+    },
+  ];
+
   return (
-    <section className="mfa-block">
-      <h2>Active sessions</h2>
-      <p className="muted">Devices currently signed in to your account.</p>
-      {error && <p className="error">{error}</p>}
-      <ul className="sessions">
-        {(list ?? []).map((s) => (
-          <li key={s.id} className="card session-row">
-            <div>
-              <strong>{_device(s.user_agent)}</strong>
-              {s.current && <span className="badge current">This device</span>}
-              <div className="muted">
-                {s.ip ?? "—"} · last active {new Date(s.last_seen_at).toLocaleString()}
-              </div>
-            </div>
-            {!s.current && (
-              <button className="link danger" onClick={() => revoke(s.id)}>
-                Revoke
-              </button>
-            )}
-          </li>
-        ))}
-      </ul>
-      <button className="danger" onClick={logoutAll}>
-        Log out everywhere
-      </button>
+    <section className="sec-block">
+      <h3>Active sessions</h3>
+      <p className="sec-sub">Devices currently signed in to your account.</p>
+      {error && <Alert tone="danger">{error}</Alert>}
+      {list && list.length > 0 && (
+        <KpiGrid>
+          <Kpi label="Active sessions" value={list.length} />
+        </KpiGrid>
+      )}
+      <DataTable<SessionInfo>
+        rows={list ?? []}
+        rowKey={(s) => s.id}
+        loading={list == null}
+        initialSort="-last"
+        emptyMessage="No active sessions."
+        columns={columns}
+      />
+      <div>
+        <Button variant="danger" onClick={() => setConfirmAll(true)}>
+          Log out everywhere
+        </Button>
+      </div>
+      <ConfirmDialog
+        open={confirmAll}
+        onCancel={() => setConfirmAll(false)}
+        onConfirm={logoutAll}
+        rows={[
+          {
+            field: "All other sessions",
+            oldValue: "signed in",
+            newValue: "signed out",
+          },
+        ]}
+        title="Log out everywhere"
+        tone="danger"
+        confirmLabel="Log out everywhere"
+        cancelLabel="Cancel"
+        busy={busy}
+      >
+        <p className="sec-sub">
+          This signs out every device, including this one. You'll need to sign in
+          again.
+        </p>
+      </ConfirmDialog>
     </section>
   );
 }
@@ -282,8 +394,9 @@ function OrgPolicyPanel({ session }: { session: Session }) {
       .then((o) => setRequired(o.require_mfa))
       .catch((e) => setError(e.message));
   }, []);
-  if (!isOwner || required === null) return null;
+  if (!isOwner) return null;
   const toggle = async () => {
+    if (required == null) return;
     setError(null);
     try {
       const o = await setRequireMfa(!required);
@@ -293,21 +406,26 @@ function OrgPolicyPanel({ session }: { session: Session }) {
     }
   };
   return (
-    <section className="mfa-block">
-      <h2>Organization policy</h2>
-      <div className="card policy-row">
-        <div>
+    <section className="sec-block">
+      <h3>Organization policy</h3>
+      {error && <Alert tone="danger">{error}</Alert>}
+      <div className="card sec-policy">
+        <div className="sec-policy-copy">
           <strong>Require two-factor for all team members</strong>
-          <div className="muted">
+          <p className="sec-policy-desc">
             When on, team members without 2FA must set it up before they can use
             the app.
-          </div>
+          </p>
         </div>
-        <button className={required ? "danger" : "primary"} onClick={toggle}>
-          {required ? "Turn off" : "Turn on"}
-        </button>
+        {required != null && (
+          <Button
+            variant={required ? "danger-outline" : "primary"}
+            onClick={toggle}
+          >
+            {required ? "Turn off" : "Turn on"}
+          </Button>
+        )}
       </div>
-      {error && <p className="error">{error}</p>}
     </section>
   );
 }

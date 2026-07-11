@@ -1,22 +1,42 @@
 /**
- * Phase 4 widget components. Each widget receives the client, the session,
- * the active platform filter, and a refresh counter (bumped by the
- * dashboard's "Sync insights" button) — and is responsible for respecting
- * the filter: blended totals refetch with ?platforms=, per-platform tables
- * filter client-side, and platform-specific widgets (fatigue, quality
- * score) say so when the filter excludes their platform.
+ * Phase 4 widget components (UI-revamp). Each widget receives the client, the
+ * session, the active platform filter, and a refresh counter (bumped by the
+ * dashboard's "Sync insights" button) — and is responsible for respecting the
+ * filter: blended totals refetch with ?platforms=, per-platform tables filter
+ * client-side, and platform-specific widgets (fatigue, quality score) say so
+ * when the filter excludes their platform.
+ *
+ * Everything renders on the shared primitives (§4): KPIs on .kpi tiles, tables
+ * on DataTable, the spend chart on charts.tsx LineChart, forms on Field, status
+ * on Badge tones, platform identity on the neutral PlatformChip. No per-platform
+ * brand/chart colors and no literal colors — platform identity is the label.
  */
 
 import { useEffect, useState } from "react";
 import {
   ADMIN_ROLES,
   api,
+  getPlatforms,
   TEAM_ROLES,
   type Campaign,
+  type Platform,
   type Session,
 } from "./api";
 import { useManage } from "./manage";
-import { SkeletonText } from "./components/ui";
+import {
+  Alert,
+  Badge,
+  Button,
+  Field,
+  Kpi,
+  KpiGrid,
+  PlatformChip,
+  Segmented,
+  SkeletonText,
+  toneForStatus,
+} from "./components/ui";
+import { DataTable, type Column } from "./components/DataTable";
+import { LineChart, type ChartSeries } from "./components/charts";
 
 // "all" (blended) or a specific platform id from the registry
 // (GET /api/platforms). Not a fixed union so new platforms need no edit here.
@@ -29,9 +49,26 @@ export interface WidgetProps {
   refresh: number;
 }
 
+// --- formatting -----------------------------------------------------------
+
+const usd = (v: number) =>
+  new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(
+    v,
+  );
+const usdCompact = (v: number) =>
+  new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD",
+    notation: "compact",
+    maximumFractionDigits: 1,
+  }).format(v);
+
+/** Spend/CPL values arrive in micros. */
 const $ = (micros?: number | null) =>
-  micros == null ? "—" : `$${(micros / 1_000_000).toFixed(2)}`;
-const money = (v?: number | null) => (v == null ? "—" : `$${v.toFixed(2)}`);
+  micros == null ? "—" : usd(micros / 1_000_000);
+const $compact = (micros?: number | null) =>
+  micros == null ? "—" : usdCompact(micros / 1_000_000);
+const money = (v?: number | null) => (v == null ? "—" : usd(v));
 const pct = (v?: number | null) =>
   v == null ? "—" : `${(v * 100).toFixed(0)}%`;
 
@@ -73,281 +110,279 @@ function WidgetBody({
   empty?: string | null;
   children: React.ReactNode;
 }) {
-  if (error) return <p className="error">{error}</p>;
+  if (error) return <Alert tone="danger">{error}</Alert>;
   if (loading) return <SkeletonText lines={3} />;
-  if (empty) return <p className="muted">{empty}</p>;
+  if (empty) return <p className="dash-muted">{empty}</p>;
   return <>{children}</>;
 }
 
 /** Note shown when the platform filter excludes a single-platform widget. */
 function FilteredOut({ widget }: { widget: string }) {
   return (
-    <p className="muted filtered-note">
+    <p className="dash-muted">
       {widget} is a single-platform widget — hidden by the current platform
       filter.
     </p>
   );
 }
 
-// --- Blended overview ---
+// --- Blended overview -----------------------------------------------------
 
 export function OverviewWidget({ clientId, platforms, refresh }: WidgetProps) {
   const { data, error, loading } = useWidgetData<any>(
     `/api/metrics/blended?client_id=${clientId}${filterParam(platforms)}`,
-    [clientId, platforms, refresh]
+    [clientId, platforms, refresh],
   );
   const lqa = useWidgetData<any>(
     `/api/metrics/lead-quality-adjusted-cpl?client_id=${clientId}${filterParam(platforms)}`,
-    [clientId, platforms, refresh]
+    [clientId, platforms, refresh],
   );
   return (
     <WidgetBody error={error} loading={loading} empty={null}>
       {data && (
-        <div className="metric-cards">
-          <div className="metric-card">
-            <span className="metric-label">Spend (30d)</span>
-            <strong>{$(data.total_spend_micros)}</strong>
-            <span className="muted">{data.total_tracked_leads} tracked leads</span>
-          </div>
-          <div className="metric-card">
-            <span className="metric-label">Blended CPL</span>
-            <strong>{money(data.blended_cpl)}</strong>
-            <span className="muted">
-              {data.unattributed_leads > 0
-                ? `incl. ${data.unattributed_leads} unattributed`
-                : "all leads attributed"}
-            </span>
-          </div>
-          <div className="metric-card">
-            <span className="metric-label">Blended CAC</span>
-            <strong>{money(data.blended_cac)}</strong>
-            <span className="muted">{data.won_deals_from_paid} won from paid</span>
-          </div>
-          <div className="metric-card">
-            <span className="metric-label">Blended ROAS</span>
-            <strong>{data.blended_roas ?? "—"}</strong>
-            <span className="muted">won-deal revenue / spend</span>
-          </div>
-          <div className="metric-card">
-            <span className="metric-label">LQA-CPL</span>
-            <strong>
-              {money(lqa.data?.blended_lead_quality_adjusted_cpl)}
-            </strong>
-            <span className="muted">
-              {lqa.data?.total_qualified_leads ?? "—"} qualified
-            </span>
-          </div>
-        </div>
+        <KpiGrid>
+          {/* The one hero tile per view: blended spend. Spend up is not "good"
+              on its own, so upIsGood={false} (deltas are informational-only —
+              the metrics endpoints expose no prior period yet). */}
+          <Kpi
+            hero
+            label="Spend (30d)"
+            value={$compact(data.total_spend_micros)}
+            upIsGood={false}
+          />
+          <Kpi label="Blended CPL" value={money(data.blended_cpl)} upIsGood={false} />
+          <Kpi label="Blended CAC" value={money(data.blended_cac)} upIsGood={false} />
+          <Kpi label="Blended ROAS" value={data.blended_roas ?? "—"} />
+          <Kpi
+            label="LQA-CPL"
+            value={money(lqa.data?.blended_lead_quality_adjusted_cpl)}
+            upIsGood={false}
+          />
+        </KpiGrid>
       )}
     </WidgetBody>
   );
 }
 
-// --- Channel mix table ---
+// --- Channel mix table ----------------------------------------------------
+
+interface ChannelRow {
+  platform: string;
+  spend_micros: number;
+  spend_share: number;
+  tracked_leads: number;
+  tracked_cpl: number | null;
+  platform_cpl: number | null;
+  lqa_cpl: number | null;
+}
 
 export function ChannelMixWidget({ clientId, platforms, refresh }: WidgetProps) {
   const { data, error, loading } = useWidgetData<any>(
     `/api/metrics/blended?client_id=${clientId}${filterParam(platforms)}`,
-    [clientId, platforms, refresh]
+    [clientId, platforms, refresh],
   );
   const lqa = useWidgetData<any>(
     `/api/metrics/lead-quality-adjusted-cpl?client_id=${clientId}${filterParam(platforms)}`,
-    [clientId, platforms, refresh]
+    [clientId, platforms, refresh],
   );
-  const rows = Object.entries(data?.per_platform ?? {});
+  const rows: ChannelRow[] = Object.entries(data?.per_platform ?? {}).map(
+    ([platform, v]: [string, any]) => ({
+      platform,
+      spend_micros: v.spend_micros,
+      spend_share: v.spend_share,
+      tracked_leads: v.tracked_leads,
+      tracked_cpl: v.tracked_cpl,
+      platform_cpl: v.platform_cpl,
+      lqa_cpl: lqa.data?.per_platform?.[platform]?.lead_quality_adjusted_cpl ?? null,
+    }),
+  );
+  const columns: Column<ChannelRow>[] = [
+    {
+      key: "platform",
+      header: "Platform",
+      render: (r) => <PlatformChip name={r.platform} />,
+      sortValue: (r) => r.platform,
+    },
+    { key: "spend", header: "Spend", align: "right", render: (r) => $(r.spend_micros), sortValue: (r) => r.spend_micros },
+    { key: "share", header: "Share", align: "right", render: (r) => pct(r.spend_share), sortValue: (r) => r.spend_share },
+    { key: "leads", header: "Leads", align: "right", render: (r) => r.tracked_leads, sortValue: (r) => r.tracked_leads },
+    { key: "tcpl", header: "Tracked CPL", align: "right", render: (r) => money(r.tracked_cpl) },
+    { key: "pcpl", header: "Platform CPL*", align: "right", render: (r) => money(r.platform_cpl) },
+    { key: "lqacpl", header: "LQA-CPL", align: "right", render: (r) => money(r.lqa_cpl) },
+  ];
   return (
     <WidgetBody
       error={error}
       loading={loading}
       empty={data && rows.length === 0 ? "No spend recorded yet — sync insights." : null}
     >
-      <table className="compact">
-        <thead>
-          <tr>
-            <th>Platform</th>
-            <th>Spend</th>
-            <th>Share</th>
-            <th>Leads</th>
-            <th>Tracked CPL</th>
-            <th>Platform CPL*</th>
-            <th>LQA-CPL</th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map(([platform, v]: [string, any]) => (
-            <tr key={platform}>
-              <td>
-                <span className={`platform ${platform}`}>{platform}</span>
-              </td>
-              <td>{$(v.spend_micros)}</td>
-              <td>{pct(v.spend_share)}</td>
-              <td>{v.tracked_leads}</td>
-              <td>{money(v.tracked_cpl)}</td>
-              <td>{money(v.platform_cpl)}</td>
-              <td>
-                {money(
-                  lqa.data?.per_platform?.[platform]?.lead_quality_adjusted_cpl
-                )}
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-      <p className="muted footnote">
-        *Platform CPL uses the platform's own conversion claim; Tracked CPL
-        uses UTM/click-id-attributed Salescale leads.
+      <DataTable
+        columns={columns}
+        rows={rows}
+        rowKey={(r) => r.platform}
+        caption="Channel mix by platform"
+        initialSort="-spend"
+      />
+      <p className="dash-footnote">
+        *Platform CPL uses the platform's own conversion claim; Tracked CPL uses
+        UTM/click-id-attributed Salescale leads.
       </p>
     </WidgetBody>
   );
 }
 
-// --- Spend / pacing chart ---
+// --- Spend / pacing chart -------------------------------------------------
 
-const PLATFORM_COLORS: Record<string, string> = {
-  meta: "var(--cobalt)",
-  google: "var(--amber)",
-};
+interface SpendDayRow {
+  day: string;
+  [platform: string]: string | number;
+}
 
 export function SpendPacingWidget({ clientId, platforms, refresh }: WidgetProps) {
   const { data, error, loading } = useWidgetData<any>(
     `/api/metrics/spend-daily?client_id=${clientId}${filterParam(platforms)}`,
-    [clientId, platforms, refresh]
+    [clientId, platforms, refresh],
   );
-  const series = Object.entries(data?.per_platform ?? {}) as [string, any][];
+  const [mode, setMode] = useState<"chart" | "table">("chart");
+
+  const perPlatform = Object.entries(data?.per_platform ?? {}) as [string, any][];
   const days: string[] = data?.days ?? [];
-  const max = Math.max(
-    1,
-    ...series.flatMap(([, s]) => s.daily_spend_micros as number[])
-  );
-  const W = 600;
-  const H = 180;
-  const PAD = 6;
-  const x = (i: number) =>
-    days.length > 1 ? PAD + (i * (W - 2 * PAD)) / (days.length - 1) : W / 2;
-  const y = (v: number) => H - PAD - (v / max) * (H - 2 * PAD);
+
+  // Dollars (not micros) so the chart's y-axis and tooltip read in currency.
+  const series: ChartSeries[] = perPlatform.map(([platform, s]) => ({
+    name: platform,
+    data: (s.daily_spend_micros as number[]).map((v) => v / 1_000_000),
+  }));
 
   return (
     <WidgetBody
       error={error}
       loading={loading}
-      empty={data && series.length === 0 ? "No spend recorded yet — sync insights." : null}
+      empty={data && perPlatform.length === 0 ? "No spend recorded yet — sync insights." : null}
     >
-      <div className="chart-legend">
-        {series.map(([platform, s]) => {
-          const daily = s.daily_spend_micros as number[];
-          const last7 = daily.slice(-7);
-          const avg = last7.reduce((a, b) => a + b, 0) / Math.max(last7.length, 1);
-          return (
-            <span key={platform} className="legend-item">
-              <i style={{ background: PLATFORM_COLORS[platform] ?? "#888" }} />
-              {platform} · {$(s.total_spend_micros)} total · {$(Math.round(avg))}
-              /day (7d)
-            </span>
-          );
-        })}
+      <div className="dash-chart-toolbar">
+        <Segmented
+          ariaLabel="Spend view"
+          value={mode}
+          onChange={setMode}
+          options={[
+            { value: "chart", label: "Chart" },
+            { value: "table", label: "Table" },
+          ]}
+        />
       </div>
-      <svg
-        className="pacing-chart"
-        viewBox={`0 0 ${W} ${H}`}
-        preserveAspectRatio="none"
-        role="img"
-        aria-label="Daily spend by platform"
-      >
-        {[0.25, 0.5, 0.75].map((f) => (
-          <line
-            key={f}
-            x1={PAD}
-            x2={W - PAD}
-            y1={y(max * f)}
-            y2={y(max * f)}
-            className="gridline"
-          />
-        ))}
-        {series.map(([platform, s]) => {
-          const daily = s.daily_spend_micros as number[];
-          const pts = daily.map((v, i) => `${x(i)},${y(v)}`).join(" ");
-          return (
-            <g key={platform}>
-              <polygon
-                points={`${x(0)},${y(0)} ${pts} ${x(daily.length - 1)},${y(0)}`}
-                fill={PLATFORM_COLORS[platform] ?? "#888"}
-                opacity="0.12"
-              />
-              <polyline
-                points={pts}
-                fill="none"
-                stroke={PLATFORM_COLORS[platform] ?? "#888"}
-                strokeWidth="2"
-                vectorEffect="non-scaling-stroke"
-              />
-            </g>
-          );
-        })}
-      </svg>
-      <div className="chart-axis">
-        <span>{days[0]}</span>
-        <span className="muted">daily spend, max {$(max)}</span>
-        <span>{days[days.length - 1]}</span>
-      </div>
+      {mode === "chart" ? (
+        <LineChart
+          labels={days}
+          series={series}
+          height={190}
+          area
+          formatValue={(v) => usdCompact(v)}
+          ariaLabel={`Daily spend by platform over ${days.length} days`}
+        />
+      ) : (
+        <SpendTable days={days} perPlatform={perPlatform} />
+      )}
     </WidgetBody>
   );
 }
 
-// --- Funnel tiers ---
+/** Screen-reader / "view as table" twin of the spend chart. */
+function SpendTable({
+  days,
+  perPlatform,
+}: {
+  days: string[];
+  perPlatform: [string, any][];
+}) {
+  const rows: SpendDayRow[] = days.map((day, i) => {
+    const row: SpendDayRow = { day };
+    for (const [platform, s] of perPlatform) {
+      row[platform] = (s.daily_spend_micros as number[])[i] ?? 0;
+    }
+    return row;
+  });
+  const columns: Column<SpendDayRow>[] = [
+    { key: "day", header: "Day", render: (r) => r.day, sortValue: (r) => r.day },
+    ...perPlatform.map(
+      ([platform]): Column<SpendDayRow> => ({
+        key: platform,
+        header: platform,
+        align: "right",
+        render: (r) => $(r[platform] as number),
+        sortValue: (r) => r[platform] as number,
+      }),
+    ),
+  ];
+  return (
+    <DataTable
+      columns={columns}
+      rows={rows}
+      rowKey={(r) => r.day}
+      caption="Daily spend by platform"
+    />
+  );
+}
+
+// --- Funnel tiers ---------------------------------------------------------
+
+interface FunnelRow {
+  platform: string;
+  tier: string;
+  spend_micros: number;
+  conversions: number;
+  cpl: number | null;
+}
 
 export function FunnelTiersWidget({ clientId, platforms, refresh }: WidgetProps) {
   const { data, error, loading } = useWidgetData<any>(
     `/api/metrics/funnel-tiers?client_id=${clientId}`,
-    [clientId, refresh]
+    [clientId, refresh],
   );
-  const rows = Object.entries(data ?? {})
+  const rows: FunnelRow[] = Object.entries(data ?? {})
     .filter(([platform]) => keepPlatform(platforms, platform))
     .flatMap(([platform, tiers]: [string, any]) =>
-      Object.entries(tiers).map(([tier, v]) => ({ platform, tier, ...(v as any) }))
+      Object.entries(tiers).map(([tier, v]: [string, any]) => ({
+        platform,
+        tier,
+        spend_micros: v.spend_micros,
+        conversions: v.conversions,
+        cpl: v.cpl,
+      })),
     );
+  const columns: Column<FunnelRow>[] = [
+    { key: "platform", header: "Platform", render: (r) => <PlatformChip name={r.platform} />, sortValue: (r) => r.platform },
+    { key: "tier", header: "Tier", render: (r) => r.tier.replace(/_/g, " "), sortValue: (r) => r.tier },
+    { key: "spend", header: "Spend", align: "right", render: (r) => $(r.spend_micros), sortValue: (r) => r.spend_micros },
+    { key: "conv", header: "Conv.", align: "right", render: (r) => r.conversions, sortValue: (r) => r.conversions },
+    { key: "cpl", header: "CPL", align: "right", render: (r) => money(r.cpl) },
+  ];
   return (
     <WidgetBody
       error={error}
       loading={loading}
       empty={data && rows.length === 0 ? "No tiered spend in range." : null}
     >
-      <table className="compact">
-        <thead>
-          <tr>
-            <th>Platform</th>
-            <th>Tier</th>
-            <th>Spend</th>
-            <th>Conv.</th>
-            <th>CPL</th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((r) => (
-            <tr key={`${r.platform}-${r.tier}`}>
-              <td>
-                <span className={`platform ${r.platform}`}>{r.platform}</span>
-              </td>
-              <td>{r.tier.replace("_", " ")}</td>
-              <td>{$(r.spend_micros)}</td>
-              <td>{r.conversions}</td>
-              <td>{money(r.cpl)}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+      <DataTable
+        columns={columns}
+        rows={rows}
+        rowKey={(r) => `${r.platform}-${r.tier}`}
+        caption="Funnel tier performance"
+        initialSort="-spend"
+      />
     </WidgetBody>
   );
 }
 
-// --- Creative fatigue (Meta) ---
+// --- Creative fatigue (Meta) ----------------------------------------------
 
 export function FatigueWidget({ clientId, platforms, refresh }: WidgetProps) {
+  const active = keepPlatform(platforms, "meta");
   const { data, error, loading } = useWidgetData<any>(
-    `/api/metrics/creative-fatigue?client_id=${clientId}`,
-    [clientId, refresh]
+    active ? `/api/metrics/creative-fatigue?client_id=${clientId}` : null,
+    [clientId, refresh, active],
   );
-  if (!keepPlatform(platforms, "meta"))
-    return <FilteredOut widget="Creative fatigue (Meta)" />;
+  if (!active) return <FilteredOut widget="Creative fatigue (Meta)" />;
   const flagged = data?.flagged ?? [];
   return (
     <WidgetBody
@@ -359,12 +394,12 @@ export function FatigueWidget({ clientId, platforms, refresh }: WidgetProps) {
           : null
       }
     >
-      <ul className="alert-list">
+      <ul className="dash-flags">
         {flagged.map((a: any) => (
-          <li key={a.ad_external_id}>
-            <span className="badge warn">fatigue {a.fatigue_score}</span>
+          <li key={a.ad_external_id} className="dash-flag">
+            <Badge tone="warn">fatigue {a.fatigue_score}</Badge>
             <strong>{a.ad_name}</strong>
-            <span className="muted">
+            <span className="dash-flag-sub">
               CTR {(a.recent_ctr * 100).toFixed(2)}% vs baseline{" "}
               {(a.baseline_ctr * 100).toFixed(2)}%
             </span>
@@ -375,15 +410,15 @@ export function FatigueWidget({ clientId, platforms, refresh }: WidgetProps) {
   );
 }
 
-// --- Quality Score / ad strength (Google) ---
+// --- Quality Score / ad strength (Google) ---------------------------------
 
 export function QualityWidget({ clientId, platforms, refresh }: WidgetProps) {
+  const active = keepPlatform(platforms, "google");
   const { data, error, loading } = useWidgetData<any>(
-    `/api/metrics/quality-trends?client_id=${clientId}`,
-    [clientId, refresh]
+    active ? `/api/metrics/quality-trends?client_id=${clientId}` : null,
+    [clientId, refresh, active],
   );
-  if (!keepPlatform(platforms, "google"))
-    return <FilteredOut widget="Quality Score alerts (Google)" />;
+  if (!active) return <FilteredOut widget="Quality Score alerts (Google)" />;
   const flagged = data?.flagged ?? [];
   return (
     <WidgetBody
@@ -395,14 +430,14 @@ export function QualityWidget({ clientId, platforms, refresh }: WidgetProps) {
           : null
       }
     >
-      <ul className="alert-list">
+      <ul className="dash-flags">
         {flagged.map((e: any) => (
-          <li key={`${e.metric}-${e.entity_external_id}`}>
-            <span className="badge warn">
+          <li key={`${e.metric}-${e.entity_external_id}`} className="dash-flag">
+            <Badge tone="warn">
               {e.metric === "quality_score" ? "QS" : "ad strength"} {e.delta}
-            </span>
+            </Badge>
             <strong>{e.entity_name}</strong>
-            <span className="muted">
+            <span className="dash-flag-sub">
               {e.first} → {e.latest}
               {e.latest_label ? ` (${e.latest_label})` : ""} since {e.first_date}
             </span>
@@ -413,7 +448,7 @@ export function QualityWidget({ clientId, platforms, refresh }: WidgetProps) {
   );
 }
 
-// --- Guarantee / goal tracker ---
+// --- Guarantee / goal tracker ---------------------------------------------
 
 export function GuaranteeWidget({
   clientId,
@@ -424,67 +459,75 @@ export function GuaranteeWidget({
   const [bump, setBump] = useState(0);
   const { data, error, loading } = useWidgetData<any>(
     `/api/metrics/guarantee?client_id=${clientId}${filterParam(platforms)}`,
-    [clientId, platforms, refresh, bump]
+    [clientId, platforms, refresh, bump],
   );
   const isAdmin = ADMIN_ROLES.includes(session.role);
   const [editing, setEditing] = useState(false);
 
   if (data && !data.configured && !isAdmin)
     return (
-      <p className="muted">No performance guarantee configured for this client.</p>
+      <p className="dash-muted">
+        No performance guarantee configured for this client.
+      </p>
     );
 
   return (
     <WidgetBody error={error} loading={loading} empty={null}>
       {data?.configured && !editing && (
-        <div className="guarantee">
-          <div className="guarantee-head">
-            <strong>{data.name}</strong>
-            <span className={`badge ${data.met ? "ok" : data.on_pace ? "ok" : "warn"}`}>
+        <div className="dash-guarantee">
+          <div className="dash-guarantee-head">
+            <span className="dash-guarantee-name">{data.name}</span>
+            <Badge tone={data.met || data.on_pace ? "ok" : "warn"}>
               {data.met ? "met" : data.on_pace ? "on pace" : "behind pace"}
-            </span>
+            </Badge>
             {isAdmin && (
-              <button className="link" onClick={() => setEditing(true)}>
+              <Button variant="link" size="sm" onClick={() => setEditing(true)}>
                 Edit
-              </button>
+              </Button>
             )}
           </div>
-          <div className="progress-track">
+          <div
+            className="dash-progress"
+            role="progressbar"
+            aria-valuenow={Math.round((data.pct_of_target ?? 0) * 100)}
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-label={`${data.progress} of ${data.target} ${String(
+              data.metric,
+            ).replace(/_/g, " ")}`}
+          >
             <div
-              className={`progress-fill ${data.met || data.on_pace ? "" : "behind"}`}
+              className={`dash-progress-fill ${
+                data.met || data.on_pace ? "" : "dash-progress-fill--behind"
+              }`.trim()}
               style={{ width: `${Math.min(data.pct_of_target * 100, 100)}%` }}
             />
             <div
-              className="progress-expected"
+              className="dash-progress-pace"
               style={{
                 left: `${Math.min((data.expected_by_now / data.target) * 100, 100)}%`,
               }}
               title={`straight-line pace: ${data.expected_by_now} by today`}
             />
           </div>
-          <div className="guarantee-numbers">
+          <div className="dash-guarantee-numbers">
             <strong>
               {data.progress} / {data.target}
             </strong>{" "}
-            {data.metric.replace(/_/g, " ")}
-            <span className="muted">
+            {String(data.metric).replace(/_/g, " ")}
+            <span className="dash-muted">
               {" · "}
               {data.window.days_remaining} day
               {data.window.days_remaining === 1 ? "" : "s"} left of{" "}
               {data.window.days_total}
             </span>
           </div>
-          <div className="guarantee-platforms">
+          <div className="dash-legend">
             {Object.entries(data.per_platform).map(([p, n]) => (
-              <span key={p} className="legend-item">
-                <i
-                  style={{ background: PLATFORM_COLORS[p] ?? "var(--ink-faint)" }}
-                />
-                {p}: {n as number}
-              </span>
+              <PlatformChip key={p} name={`${p}: ${n as number}`} />
             ))}
             {Object.keys(data.per_platform).length === 0 && (
-              <span className="muted">no contributions yet</span>
+              <span className="dash-muted">no contributions yet</span>
             )}
           </div>
         </div>
@@ -519,50 +562,66 @@ function GuaranteeConfigForm({
   const [metric, setMetric] = useState(existing?.metric ?? "qualified_leads");
   const [target, setTarget] = useState(existing ? String(existing.target) : "");
   const [windowDays, setWindowDays] = useState(
-    existing ? String(existing.window.days_total) : "30"
+    existing ? String(existing.window.days_total) : "30",
   );
   const [startDate, setStartDate] = useState(existing?.window?.start ?? "");
   const [error, setError] = useState<string | null>(null);
   return (
-    <div className="inline-form column">
-      <span className="muted">
-        {existing ? "Edit guarantee terms" : "Set up a performance guarantee"}{" "}
-        (Organization-configured — e.g. a trial-sprint lead promise)
-      </span>
-      <input
-        placeholder="Guarantee name (e.g. 14-Day Trial Sprint)"
-        value={name}
-        onChange={(e) => setName(e.target.value)}
-      />
-      <div className="inline-form">
-        <select value={metric} onChange={(e) => setMetric(e.target.value)}>
-          <option value="qualified_leads">qualified leads</option>
-          <option value="tracked_leads">tracked leads</option>
-          <option value="won_deals">won deals</option>
-        </select>
+    <div className="dash-form">
+      <p className="dash-note">
+        {existing ? "Edit guarantee terms" : "Set up a performance guarantee"} —
+        Organization-configured (e.g. a trial-sprint lead promise).
+      </p>
+      <Field label="Guarantee name">
         <input
-          placeholder="Target #"
-          type="number"
-          min="1"
-          value={target}
-          onChange={(e) => setTarget(e.target.value)}
+          className="input"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          placeholder="e.g. 14-Day Trial Sprint"
         />
-        <input
-          placeholder="Window (days)"
-          type="number"
-          min="1"
-          value={windowDays}
-          onChange={(e) => setWindowDays(e.target.value)}
-        />
-        <input
-          type="date"
-          title="Start date (blank = rolling window)"
-          value={startDate}
-          onChange={(e) => setStartDate(e.target.value)}
-        />
+      </Field>
+      <div className="dash-form-row">
+        <Field label="Metric">
+          <select
+            className="select"
+            value={metric}
+            onChange={(e) => setMetric(e.target.value)}
+          >
+            <option value="qualified_leads">qualified leads</option>
+            <option value="tracked_leads">tracked leads</option>
+            <option value="won_deals">won deals</option>
+          </select>
+        </Field>
+        <Field label="Target #">
+          <input
+            className="input"
+            type="number"
+            min="1"
+            value={target}
+            onChange={(e) => setTarget(e.target.value)}
+          />
+        </Field>
+        <Field label="Window (days)">
+          <input
+            className="input"
+            type="number"
+            min="1"
+            value={windowDays}
+            onChange={(e) => setWindowDays(e.target.value)}
+          />
+        </Field>
+        <Field label="Start date" optional description="Blank = rolling window">
+          <input
+            className="input"
+            type="date"
+            value={startDate}
+            onChange={(e) => setStartDate(e.target.value)}
+          />
+        </Field>
       </div>
-      <div className="inline-form">
-        <button
+      <div className="dash-form-row">
+        <Button
+          variant="primary"
           disabled={!name || !target || !windowDays}
           onClick={() =>
             api(`/api/clients/${clientId}/guarantee`, {
@@ -580,19 +639,27 @@ function GuaranteeConfigForm({
           }
         >
           Save guarantee
-        </button>
+        </Button>
         {onCancel && (
-          <button className="link" onClick={onCancel}>
+          <Button variant="ghost" onClick={onCancel}>
             Cancel
-          </button>
+          </Button>
         )}
       </div>
-      {error && <p className="error">{error}</p>}
+      {error && <Alert tone="danger">{error}</Alert>}
     </div>
   );
 }
 
-// --- Attribution discrepancy alerts ---
+// --- Attribution discrepancy alerts ---------------------------------------
+
+interface ReconRow {
+  platform: string;
+  platform_reported: number;
+  utm_confirmed: number;
+  discrepancy: number;
+  flagged: boolean;
+}
 
 export function ReconciliationWidget({
   clientId,
@@ -601,55 +668,59 @@ export function ReconciliationWidget({
 }: WidgetProps) {
   const { data, error, loading } = useWidgetData<any>(
     `/api/metrics/reconciliation?client_id=${clientId}`,
-    [clientId, refresh]
+    [clientId, refresh],
   );
-  const rows = Object.entries(data?.per_platform ?? {}).filter(([p]) =>
-    keepPlatform(platforms, p)
-  );
+  const rows: ReconRow[] = Object.entries(data?.per_platform ?? {})
+    .filter(([p]) => keepPlatform(platforms, p))
+    .map(([platform, v]: [string, any]) => ({
+      platform,
+      platform_reported: v.platform_reported,
+      utm_confirmed: v.utm_confirmed,
+      discrepancy: v.discrepancy,
+      flagged: v.flagged,
+    }));
   const flags = (data?.flags ?? []).filter(
-    (f: any) => f.platform === null || keepPlatform(platforms, f.platform)
+    (f: any) => f.platform === null || keepPlatform(platforms, f.platform),
   );
+  const columns: Column<ReconRow>[] = [
+    { key: "platform", header: "Platform", render: (r) => <PlatformChip name={r.platform} />, sortValue: (r) => r.platform },
+    { key: "reported", header: "Reported", align: "right", render: (r) => r.platform_reported, sortValue: (r) => r.platform_reported },
+    { key: "confirmed", header: "UTM-confirmed", align: "right", render: (r) => r.utm_confirmed, sortValue: (r) => r.utm_confirmed },
+    {
+      key: "delta",
+      header: "Δ",
+      align: "right",
+      render: (r) => (
+        <span className={r.flagged ? "dash-flag-sub" : undefined}>
+          {r.discrepancy > 0 ? "+" : ""}
+          {r.discrepancy}
+        </span>
+      ),
+      sortValue: (r) => r.discrepancy,
+    },
+  ];
   return (
     <WidgetBody
       error={error}
       loading={loading}
       empty={data && rows.length === 0 ? "No platform-reported conversions in range." : null}
     >
-      <table className="compact">
-        <thead>
-          <tr>
-            <th>Platform</th>
-            <th>Reported</th>
-            <th>UTM-confirmed</th>
-            <th>Δ</th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map(([platform, v]: [string, any]) => (
-            <tr key={platform} className={v.flagged ? "negative" : ""}>
-              <td>
-                <span className={`platform ${platform}`}>{platform}</span>
-              </td>
-              <td>{v.platform_reported}</td>
-              <td>{v.utm_confirmed}</td>
-              <td>
-                {v.discrepancy > 0 ? "+" : ""}
-                {v.discrepancy} {v.flagged ? "⚑" : ""}
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+      <DataTable
+        columns={columns}
+        rows={rows}
+        rowKey={(r) => r.platform}
+        caption="Attribution reconciliation by platform"
+      />
       {flags.map((f: any, i: number) => (
-        <p key={i} className="warning">
-          ⚑ {f.detail}
-        </p>
+        <Alert key={i} tone="warn">
+          {f.detail}
+        </Alert>
       ))}
     </WidgetBody>
   );
 }
 
-// --- Raw campaign table (power-user editing) ---
+// --- Raw campaign table (power-user editing) ------------------------------
 
 export function CampaignTableWidget({
   clientId,
@@ -661,22 +732,55 @@ export function CampaignTableWidget({
   const [bump, setBump] = useState(0);
   const { data, error, loading } = useWidgetData<Campaign[]>(
     `/api/campaigns?client_id=${clientId}`,
-    [clientId, refresh, bump]
+    [clientId, refresh, bump],
   );
   const [actionError, setActionError] = useState<string | null>(null);
   const canManage = TEAM_ROLES.includes(session.role);
   const rows = (data ?? []).filter((c) => keepPlatform(platforms, c.platform));
 
-  const stageAction = (c: any, action: string) =>
+  const stageAction = (c: Campaign, action: string) =>
     stage(
       {
-        ad_account_id: c.ad_account_id,
+        ad_account_id: (c as any).ad_account_id,
         entity_type: "campaign",
         action,
         entity_id: c.id,
       },
-      () => setBump((b) => b + 1)
+      () => setBump((b) => b + 1),
     ).catch((e) => setActionError((e as Error).message));
+
+  const columns: Column<Campaign>[] = [
+    { key: "name", header: "Campaign", render: (c) => c.name, sortValue: (c) => c.name },
+    { key: "platform", header: "Platform", render: (c) => <PlatformChip name={c.platform} />, sortValue: (c) => c.platform },
+    {
+      key: "status",
+      header: "Status",
+      render: (c) => <Badge tone={toneForStatus(c.status ?? "unknown")}>{c.status ?? "—"}</Badge>,
+      sortValue: (c) => c.status ?? "",
+    },
+    { key: "budget", header: "Daily budget", align: "right", render: (c) => $(c.daily_budget_micros), sortValue: (c) => c.daily_budget_micros ?? -1 },
+    { key: "objective", header: "Objective", render: (c) => c.objective ?? "—" },
+    ...(canManage
+      ? [
+          {
+            key: "actions",
+            header: "",
+            render: (c: Campaign) => {
+              const paused = c.status?.toUpperCase() === "PAUSED";
+              return (
+                <Button
+                  variant="link"
+                  size="sm"
+                  onClick={() => stageAction(c, paused ? "resume" : "pause")}
+                >
+                  {paused ? "Resume" : "Pause"}
+                </Button>
+              );
+            },
+          } satisfies Column<Campaign>,
+        ]
+      : []),
+  ];
 
   return (
     <WidgetBody
@@ -688,51 +792,16 @@ export function CampaignTableWidget({
           : null
       }
     >
-      {actionError && <p className="error">{actionError}</p>}
-      <table className="compact">
-        <thead>
-          <tr>
-            <th>Campaign</th>
-            <th>Platform</th>
-            <th>Status</th>
-            <th>Daily budget</th>
-            <th>Objective</th>
-            {canManage && <th />}
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((c: any) => {
-            const paused = c.status?.toUpperCase() === "PAUSED";
-            return (
-              <tr key={c.id}>
-                <td>{c.name}</td>
-                <td>
-                  <span className={`platform ${c.platform}`}>{c.platform}</span>
-                </td>
-                <td>
-                  <span className={`badge ${c.status?.toLowerCase()}`}>
-                    {c.status ?? "—"}
-                  </span>
-                </td>
-                <td>{$(c.daily_budget_micros)}</td>
-                <td className="muted">{c.objective ?? "—"}</td>
-                {canManage && (
-                  <td>
-                    <button
-                      className="link"
-                      onClick={() => stageAction(c, paused ? "resume" : "pause")}
-                    >
-                      {paused ? "Resume" : "Pause"}
-                    </button>
-                  </td>
-                )}
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
+      {actionError && <Alert tone="danger">{actionError}</Alert>}
+      <DataTable
+        columns={columns}
+        rows={rows}
+        rowKey={(c) => c.id}
+        caption="Campaigns across all platforms"
+        initialSort="name"
+      />
       {canManage && (
-        <p className="muted footnote">
+        <p className="dash-footnote">
           Pause/resume stages a change for confirmation — nothing touches the
           live account until you confirm it.
         </p>
@@ -741,12 +810,12 @@ export function CampaignTableWidget({
   );
 }
 
-// --- Vertical benchmark (team-only) ---
+// --- Vertical benchmark (team-only) ---------------------------------------
 
 export function BenchmarkWidget({ clientId, refresh }: WidgetProps) {
   const { data, error, loading } = useWidgetData<any>(
     `/api/metrics/benchmark?client_id=${clientId}`,
-    [clientId, refresh]
+    [clientId, refresh],
   );
   return (
     <WidgetBody
@@ -755,85 +824,126 @@ export function BenchmarkWidget({ clientId, refresh }: WidgetProps) {
       empty={data && !data.vertical ? "Client has no vertical set." : null}
     >
       {data?.vertical && (
-        <div className="metric-cards">
-          <div className="metric-card">
-            <span className="metric-label">
-              vs. {data.vertical} book ({data.peers} clients)
-            </span>
-            <strong>
-              {data.vs_median_pct == null
+        <KpiGrid>
+          <Kpi
+            label={`vs. ${data.vertical} book (${data.peers} clients)`}
+            value={
+              data.vs_median_pct == null
                 ? "—"
-                : `${data.vs_median_pct > 0 ? "+" : ""}${data.vs_median_pct}% CPL`}
-            </strong>
-            <span className="muted">
-              median {money(data.vertical_median_blended_cpl)} · this client{" "}
-              {money(data.client_blended_cpl)}
-            </span>
-          </div>
-        </div>
+                : `${data.vs_median_pct > 0 ? "+" : ""}${data.vs_median_pct}% CPL`
+            }
+            delta={data.vs_median_pct ?? null}
+            deltaLabel="vs vertical median"
+            upIsGood={false}
+          />
+        </KpiGrid>
+      )}
+      {data?.vertical && (
+        <p className="dash-footnote">
+          Median {money(data.vertical_median_blended_cpl)} · this client{" "}
+          {money(data.client_blended_cpl)}
+        </p>
       )}
     </WidgetBody>
   );
 }
 
-// --- UTM builder (team tool) ---
+// --- UTM builder (team tool) ----------------------------------------------
 
 export function UtmBuilderWidget({ clientId }: WidgetProps) {
+  const [catalog, setCatalog] = useState<Platform[]>([]);
   const [platform, setPlatform] = useState("meta");
   const [campaign, setCampaign] = useState("");
   const [content, setContent] = useState("");
   const [landing, setLanding] = useState("");
   const [result, setResult] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
   const [violations, setViolations] = useState<any | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  // Registry-driven platform list — a newly-registered platform appears with
+  // no edit here (mirrors the shell's GET /api/platforms usage).
+  useEffect(() => {
+    getPlatforms()
+      .then((ps) => {
+        const connectable = ps.filter((p) => p.connectable);
+        setCatalog(connectable.length ? connectable : ps);
+        if (connectable.length && !connectable.some((p) => p.id === "meta"))
+          setPlatform(connectable[0].id);
+      })
+      .catch(() => {});
+  }, []);
+
+  const copy = () => {
+    if (!result) return;
+    navigator.clipboard?.writeText(result);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1500);
+  };
+
   return (
-    <div>
-      <div className="inline-form">
-        <select value={platform} onChange={(e) => setPlatform(e.target.value)}>
-          <option value="meta">Meta</option>
-          <option value="google">Google</option>
-        </select>
-        <input
-          placeholder="Campaign name"
-          value={campaign}
-          onChange={(e) => setCampaign(e.target.value)}
-        />
-        <input
-          placeholder="Ad / content (optional)"
-          value={content}
-          onChange={(e) => setContent(e.target.value)}
-        />
+    <div className="dash-form">
+      <div className="dash-form-row">
+        <Field label="Platform">
+          <select
+            className="select"
+            value={platform}
+            onChange={(e) => setPlatform(e.target.value)}
+          >
+            {catalog.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name}
+              </option>
+            ))}
+          </select>
+        </Field>
+        <Field label="Campaign name">
+          <input
+            className="input"
+            value={campaign}
+            onChange={(e) => setCampaign(e.target.value)}
+          />
+        </Field>
+        <Field label="Ad / content" optional>
+          <input
+            className="input"
+            value={content}
+            onChange={(e) => setContent(e.target.value)}
+          />
+        </Field>
       </div>
-      <div className="inline-form">
-        <input
-          placeholder="Landing page URL (optional)"
-          value={landing}
-          onChange={(e) => setLanding(e.target.value)}
-        />
-        <button
+      <div className="dash-form-row">
+        <Field label="Landing page URL" optional>
+          <input
+            className="input"
+            value={landing}
+            onChange={(e) => setLanding(e.target.value)}
+          />
+        </Field>
+        <Button
+          variant="primary"
           disabled={!campaign}
           onClick={() =>
             api<{ query_string: string }>(
               `/api/utm/build?client_id=${clientId}&platform=${platform}` +
                 `&campaign_name=${encodeURIComponent(campaign)}` +
-                (content ? `&content=${encodeURIComponent(content)}` : "")
+                (content ? `&content=${encodeURIComponent(content)}` : ""),
             )
               .then((r) => {
                 setError(null);
                 setResult(
                   landing
                     ? `${landing}${landing.includes("?") ? "&" : "?"}${r.query_string}`
-                    : `?${r.query_string}`
+                    : `?${r.query_string}`,
                 );
               })
               .catch((e) => setError((e as Error).message))
           }
         >
           Build URL
-        </button>
-        <button
-          className="link"
+        </Button>
+        <Button
+          variant="ghost"
           onClick={() =>
             api<any>(`/api/utm/violations?client_id=${clientId}`)
               .then(setViolations)
@@ -841,35 +951,45 @@ export function UtmBuilderWidget({ clientId }: WidgetProps) {
           }
         >
           Check convention violations
-        </button>
+        </Button>
       </div>
-      {error && <p className="error">{error}</p>}
+      {error && <Alert tone="danger">{error}</Alert>}
       {result && (
-        <code
-          className="utm-result"
-          title="Click to copy"
-          onClick={() => navigator.clipboard?.writeText(result)}
-        >
-          {result}
-        </code>
+        <div className="dash-result">
+          <code>{result}</code>
+          <Button variant="default" size="sm" onClick={copy}>
+            {copied ? "Copied" : "Copy"}
+          </Button>
+        </div>
       )}
       {violations && (
-        <p className={violations.violations.length ? "warning" : "muted"}>
+        <Alert tone={violations.violations.length ? "warn" : "info"}>
           {violations.violations.length} violation(s) in {violations.checked}{" "}
           recent landing events
           {violations.violations
             .slice(0, 5)
             .map((v: any) => ` · ${v.problems[0]}`)}
-        </p>
+        </Alert>
       )}
     </div>
   );
 }
 
-// --- Phase 5: server-side conversion tracking health (team-only) ---
+// --- Phase 5: server-side conversion tracking health (team-only) ----------
 // Event Match Quality per event for the client's Meta dataset, plus the
 // dispatch log for every server-side send. Admins configure each platform's
 // destination (Meta dataset / Google conversion action) inline.
+
+interface LogRow {
+  id: string;
+  when: string;
+  event_name: string;
+  is_test: boolean;
+  platform: string;
+  status: string;
+  detail: string | null;
+  match_keys: string[];
+}
 
 export function ConversionHealthWidget({
   clientId,
@@ -882,36 +1002,58 @@ export function ConversionHealthWidget({
   const [configuring, setConfiguring] = useState(false);
   const configs = useWidgetData<any[]>(
     `/api/clients/${clientId}/conversion-configs`,
-    [clientId, refresh, bump]
+    [clientId, refresh, bump],
   );
   const log = useWidgetData<any[]>(
     `/api/conversions/log?client_id=${clientId}&limit=20`,
-    [clientId, refresh, bump]
+    [clientId, refresh, bump],
   );
   const metaConfigured = (configs.data ?? []).some(
-    (c) => c.platform === "meta" && c.enabled
+    (c) => c.platform === "meta" && c.enabled,
   );
   const emq = useWidgetData<any>(
     metaConfigured && keepPlatform(platforms, "meta")
       ? `/api/conversions/emq?client_id=${clientId}`
       : null,
-    [clientId, metaConfigured, platforms, refresh, bump]
+    [clientId, metaConfigured, platforms, refresh, bump],
   );
-  const logRows = (log.data ?? []).filter((e) =>
-    keepPlatform(platforms, e.dispatch.platform)
-  );
+  const logRows: LogRow[] = (log.data ?? [])
+    .filter((e) => keepPlatform(platforms, e.dispatch.platform))
+    .map((e) => ({
+      id: e.dispatch.id,
+      when: new Date(e.dispatch.attempted_at).toLocaleString(),
+      event_name: e.event_name + (e.dispatch.is_test ? " (test)" : ""),
+      is_test: e.dispatch.is_test,
+      platform: e.dispatch.platform,
+      status: e.dispatch.status,
+      detail: e.dispatch.detail ?? null,
+      match_keys: e.dispatch.match_keys ?? [],
+    }));
+
+  const columns: Column<LogRow>[] = [
+    { key: "when", header: "When", render: (r) => r.when, sortValue: (r) => r.when },
+    { key: "event", header: "Event", render: (r) => r.event_name },
+    { key: "platform", header: "Platform", render: (r) => <PlatformChip name={r.platform} /> },
+    {
+      key: "status",
+      header: "Status",
+      render: (r) => <Badge tone={toneForStatus(r.status)}>{r.status}</Badge>,
+      sortValue: (r) => r.status,
+    },
+    { key: "matched", header: "Matched on", render: (r) => r.match_keys.join(", ") || "—" },
+  ];
 
   return (
     <WidgetBody error={configs.error} loading={configs.loading} empty={null}>
       {configs.data && configs.data.length === 0 && !configuring && (
-        <p className="muted">
-          Server-side conversion tracking isn’t set up for this client.
+        <p className="dash-muted">
+          Server-side conversion tracking isn't set up for this client.
           {isAdmin && (
             <>
               {" "}
-              <button className="link" onClick={() => setConfiguring(true)}>
+              <Button variant="link" size="sm" onClick={() => setConfiguring(true)}>
                 Configure
-              </button>
+              </Button>
             </>
           )}
         </p>
@@ -919,99 +1061,43 @@ export function ConversionHealthWidget({
       {configs.data && configs.data.length > 0 && (
         <>
           {metaConfigured && keepPlatform(platforms, "meta") && (
-            <div className="emq-row">
-              <span className="metric-label">Meta Event Match Quality</span>
-              {emq.loading && <span className="muted"> loading…</span>}
-              {emq.error && (
-                <span className="warning"> unavailable: {emq.error}</span>
-              )}
+            <div className="dash-emq">
+              <span className="dash-emq-label">Meta Event Match Quality</span>
+              {emq.loading && <span className="dash-muted">loading…</span>}
+              {emq.error && <Badge tone="warn">unavailable</Badge>}
               {emq.data &&
                 (emq.data.events.length === 0 ? (
-                  <span className="muted"> no scored events yet</span>
+                  <span className="dash-muted">no scored events yet</span>
                 ) : (
                   emq.data.events.map((e: any) => (
-                    <span
+                    <Badge
                       key={e.event_name}
-                      className={`badge ${
+                      tone={
                         e.composite_score == null
-                          ? ""
+                          ? "neutral"
                           : e.composite_score >= 6
                             ? "ok"
                             : "warn"
-                      }`}
-                      title={(e.match_keys ?? [])
-                        .map(
-                          (k: any) => `${k.identifier}: ${k.coverage_pct}%`
-                        )
-                        .join(" · ")}
+                      }
                     >
                       {e.event_name}: {e.composite_score ?? "—"}/10
-                    </span>
+                    </Badge>
                   ))
                 ))}
             </div>
           )}
-          <table className="compact">
-            <thead>
-              <tr>
-                <th>When</th>
-                <th>Event</th>
-                <th>Platform</th>
-                <th>Status</th>
-                <th>Matched on</th>
-              </tr>
-            </thead>
-            <tbody>
-              {logRows.map((e: any) => (
-                <tr
-                  key={e.dispatch.id}
-                  className={e.dispatch.status === "failed" ? "negative" : ""}
-                >
-                  <td className="muted">
-                    {new Date(e.dispatch.attempted_at).toLocaleString()}
-                  </td>
-                  <td>
-                    {e.event_name}
-                    {e.dispatch.is_test ? " (test)" : ""}
-                  </td>
-                  <td>
-                    <span className={`platform ${e.dispatch.platform}`}>
-                      {e.dispatch.platform}
-                    </span>
-                  </td>
-                  <td>
-                    <span
-                      className={`badge ${
-                        e.dispatch.status === "sent"
-                          ? "ok"
-                          : e.dispatch.status === "failed"
-                            ? "warn"
-                            : ""
-                      }`}
-                      title={e.dispatch.detail ?? ""}
-                    >
-                      {e.dispatch.status}
-                    </span>
-                  </td>
-                  <td className="muted">
-                    {(e.dispatch.match_keys ?? []).join(", ") || "—"}
-                  </td>
-                </tr>
-              ))}
-              {logRows.length === 0 && (
-                <tr>
-                  <td colSpan={5} className="muted">
-                    No server-side sends yet.
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
+          <DataTable
+            columns={columns}
+            rows={logRows}
+            rowKey={(r) => r.id}
+            caption="Server-side conversion dispatch log"
+            emptyMessage="No server-side sends yet."
+          />
           {isAdmin && !configuring && (
-            <p className="muted footnote">
-              <button className="link" onClick={() => setConfiguring(true)}>
+            <p className="dash-footnote">
+              <Button variant="link" size="sm" onClick={() => setConfiguring(true)}>
                 Tracking settings
-              </button>
+              </Button>
             </p>
           )}
         </>
@@ -1042,14 +1128,10 @@ function ConversionConfigForm({
   const meta = configs.find((c) => c.platform === "meta");
   const google = configs.find((c) => c.platform === "google");
   const [datasetId, setDatasetId] = useState(meta?.settings?.dataset_id ?? "");
-  const [testCode, setTestCode] = useState(
-    meta?.settings?.test_event_code ?? ""
-  );
-  const [customerId, setCustomerId] = useState(
-    google?.settings?.customer_id ?? ""
-  );
+  const [testCode, setTestCode] = useState(meta?.settings?.test_event_code ?? "");
+  const [customerId, setCustomerId] = useState(google?.settings?.customer_id ?? "");
   const [actionId, setActionId] = useState(
-    google?.settings?.conversion_action_id ?? ""
+    google?.settings?.conversion_action_id ?? "",
   );
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -1108,7 +1190,7 @@ function ConversionConfigForm({
               (platform === "meta" && r.status === "sent"
                 ? " (check Events Manager → Test Events)"
                 : "")
-          : `${platform}: no result`
+          : `${platform}: no result`,
       );
     } catch (e) {
       setStatus((e as Error).message);
@@ -1116,25 +1198,29 @@ function ConversionConfigForm({
   };
 
   return (
-    <div className="inline-form column">
-      <span className="muted">
-        Per-client destinations — each client sends to its own Meta dataset
-        and Google conversion action.
-      </span>
-      <div className="inline-form">
-        <input
-          placeholder="Meta dataset / pixel ID"
-          value={datasetId}
-          onChange={(e) => setDatasetId(e.target.value)}
-        />
-        <input
-          placeholder="Test event code (Events Manager)"
-          value={testCode}
-          onChange={(e) => setTestCode(e.target.value)}
-        />
+    <div className="dash-form">
+      <p className="dash-note">
+        Per-client destinations — each client sends to its own Meta dataset and
+        Google conversion action.
+      </p>
+      <div className="dash-form-row">
+        <Field label="Meta dataset / pixel ID">
+          <input
+            className="input"
+            value={datasetId}
+            onChange={(e) => setDatasetId(e.target.value)}
+          />
+        </Field>
+        <Field label="Test event code" description="Events Manager">
+          <input
+            className="input"
+            value={testCode}
+            onChange={(e) => setTestCode(e.target.value)}
+          />
+        </Field>
         {meta && (
-          <button
-            className="link"
+          <Button
+            variant="ghost"
             disabled={!testCode}
             title={
               testCode
@@ -1144,36 +1230,44 @@ function ConversionConfigForm({
             onClick={() => testSend("meta")}
           >
             Send Meta test
-          </button>
+          </Button>
         )}
       </div>
-      <div className="inline-form">
-        <input
-          placeholder="Google Ads customer ID"
-          value={customerId}
-          onChange={(e) => setCustomerId(e.target.value)}
-        />
-        <input
-          placeholder="Conversion action ID (type UPLOAD_CLICKS)"
-          value={actionId}
-          onChange={(e) => setActionId(e.target.value)}
-        />
+      <div className="dash-form-row">
+        <Field label="Google Ads customer ID">
+          <input
+            className="input"
+            value={customerId}
+            onChange={(e) => setCustomerId(e.target.value)}
+          />
+        </Field>
+        <Field label="Conversion action ID" description="Type UPLOAD_CLICKS">
+          <input
+            className="input"
+            value={actionId}
+            onChange={(e) => setActionId(e.target.value)}
+          />
+        </Field>
         {google && (
-          <button className="link" onClick={() => testSend("google")}>
+          <Button variant="ghost" onClick={() => testSend("google")}>
             Send Google test
-          </button>
+          </Button>
         )}
       </div>
-      <div className="inline-form">
-        <button disabled={!datasetId && !(customerId && actionId)} onClick={save}>
+      <div className="dash-form-row">
+        <Button
+          variant="primary"
+          disabled={!datasetId && !(customerId && actionId)}
+          onClick={save}
+        >
           Save tracking settings
-        </button>
-        <button className="link" onClick={onDone}>
+        </Button>
+        <Button variant="ghost" onClick={onDone}>
           Close
-        </button>
+        </Button>
       </div>
-      {status && <p className="muted">{status}</p>}
-      {error && <p className="error">{error}</p>}
+      {status && <p className="dash-note">{status}</p>}
+      {error && <Alert tone="danger">{error}</Alert>}
     </div>
   );
 }

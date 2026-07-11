@@ -1,1 +1,466 @@
-/* crm.css — .crm-* layout/composition only (spec §3.3, §7). Owner: CRM view agent. */
+/* crm.css — .crm-* layout/composition only (spec §3.3, §7). Owner: CRM view
+   agent. Colors/sizes come from theme.css tokens; kanban/table/badge/field
+   internals live in components/ui.css and are used, never restyled here. */
+
+.crm {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+}
+
+/* ---- toolbars & headings ---------------------------------------------- */
+
+.crm-toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
+
+.crm-toolbar-spacer {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.crm-subhead {
+  margin: 0;
+  font-size: var(--text-xl);
+  font-weight: var(--weight-semibold);
+  color: var(--ink);
+  letter-spacing: var(--tracking-tight);
+}
+
+.crm-subhead--sm {
+  font-size: var(--text-lg);
+}
+
+.crm-overline {
+  margin: 0;
+  font-size: var(--text-2xs);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-caps);
+  font-weight: var(--weight-semibold);
+  color: var(--ink-faint);
+}
+
+.crm-count {
+  font-size: var(--text-sm);
+  color: var(--ink-soft);
+}
+
+.crm-muted {
+  color: var(--ink-soft);
+  font-size: var(--text-sm);
+}
+
+.crm-note {
+  margin: 0;
+  font-size: var(--text-xs);
+  color: var(--ink-soft);
+  line-height: var(--leading-normal);
+}
+
+.crm-alert-body {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.crm-form-error {
+  font-size: var(--text-xs);
+  color: var(--danger);
+}
+
+.crm-time {
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  color: var(--ink-faint);
+  white-space: nowrap;
+}
+
+/* ---- kanban board (lanes/cards = ui.css primitives) ------------------- */
+
+.crm-board-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.crm-board {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  overflow-x: auto;
+  padding-bottom: var(--space-2);
+}
+
+.crm-board .kanban-lane {
+  flex: 1 1 0;
+  min-width: 220px;
+}
+
+.crm-lane-count {
+  margin-left: auto;
+}
+
+.crm-lane-empty {
+  margin: 0;
+  padding: var(--space-2);
+  font-size: var(--text-xs);
+  color: var(--ink-faint);
+}
+
+/* card composition on top of .kanban-card */
+
+.crm-card-open {
+  appearance: none;
+  width: 100%;
+  padding: 0;
+  border: none;
+  background: transparent;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.crm-card-open:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+  border-radius: var(--radius-xs);
+}
+
+.crm-card-line {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.crm-card-sub {
+  font-size: var(--text-xs);
+  color: var(--ink-soft);
+}
+
+.crm-card-badges {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+
+.crm-age {
+  display: inline-flex;
+  align-items: center;
+}
+
+.crm-card-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  margin-top: var(--space-1);
+}
+
+.crm-card-actions-spacer {
+  flex: 1;
+}
+
+/* ---- move-to-stage popover -------------------------------------------- */
+
+.crm-menu {
+  position: relative;
+}
+
+.crm-menu-pop {
+  position: absolute;
+  top: calc(100% + var(--space-1));
+  left: 0;
+  z-index: var(--z-dropdown);
+  min-width: 180px;
+  padding: var(--space-1);
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-pop);
+  display: flex;
+  flex-direction: column;
+}
+
+.crm-menu-label {
+  margin: 0;
+  padding: var(--space-2) var(--space-3) var(--space-1);
+  font-size: var(--text-2xs);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-caps);
+  font-weight: var(--weight-semibold);
+  color: var(--ink-faint);
+}
+
+.crm-menu-item {
+  appearance: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  width: 100%;
+  padding: var(--space-2) var(--space-3);
+  border: none;
+  background: transparent;
+  border-radius: var(--radius-sm);
+  font: inherit;
+  font-size: var(--text-sm);
+  color: var(--ink);
+  text-align: left;
+  cursor: pointer;
+}
+
+.crm-menu-item:hover:not(:disabled),
+.crm-menu-item:focus-visible:not(:disabled) {
+  outline: none;
+  background: var(--accent-ghost);
+  color: var(--accent-ink);
+}
+
+.crm-menu-item:disabled {
+  color: var(--ink-faint);
+  cursor: default;
+}
+
+.crm-menu-here {
+  font-size: var(--text-2xs);
+  color: var(--ink-faint);
+}
+
+/* ---- attribution chips ------------------------------------------------ */
+
+.crm-attr {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+
+.crm-attr-empty {
+  padding: 2px 8px;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-full);
+  font-size: var(--text-xs);
+  color: var(--ink-faint);
+}
+
+/* ---- forms ------------------------------------------------------------ */
+
+.crm-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--space-3);
+}
+
+.crm-form .field {
+  flex: 1 1 150px;
+  min-width: 0;
+}
+
+.crm-form-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.crm-check {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-sm);
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.crm-check input {
+  accent-color: var(--accent);
+  width: 16px;
+  height: 16px;
+  flex: none;
+}
+
+/* ---- leads ------------------------------------------------------------ */
+
+.crm-leadlist {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+/* ---- contact drawer (floating glass layer) ---------------------------- */
+
+.crm-drawer-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-drawer);
+  background: var(--scrim);
+  display: flex;
+  justify-content: flex-end;
+}
+
+.crm-drawer {
+  position: relative;
+  top: auto;
+  width: min(440px, 100%);
+  height: 100%;
+  overflow-y: auto;
+  padding: var(--space-5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  background: var(--glass-bg-heavy);
+  -webkit-backdrop-filter: blur(var(--glass-blur));
+  backdrop-filter: blur(var(--glass-blur));
+  border-left: 1px solid var(--glass-border);
+  box-shadow: var(--shadow-lg), var(--glass-highlight);
+  transition: transform var(--dur-med) var(--ease-out);
+}
+
+@starting-style {
+  .crm-drawer {
+    transform: translateX(100%);
+  }
+}
+
+.crm-drawer:focus-visible {
+  outline: none;
+}
+
+.crm-drawer-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.crm-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+/* deals list inside the drawer */
+
+.crm-deal-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.crm-deal-list li {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  font-size: var(--text-sm);
+  color: var(--ink);
+}
+
+/* activity + task timeline */
+
+.crm-timeline {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.crm-timeline li {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  padding-bottom: var(--space-3);
+  border-bottom: 1px solid var(--border);
+  font-size: var(--text-sm);
+  color: var(--ink);
+}
+
+.crm-timeline li:last-child {
+  padding-bottom: 0;
+  border-bottom: none;
+}
+
+.crm-ti-body {
+  flex-basis: 100%;
+  color: var(--ink);
+}
+
+.crm-task--done {
+  color: var(--ink-faint);
+}
+
+.crm-task--done .crm-check span {
+  text-decoration: line-through;
+}
+
+/* ---- qualification panel ---------------------------------------------- */
+
+.crm-qualify {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-4);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+
+.crm-qualify-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+/* ---- admin setup ------------------------------------------------------ */
+
+.crm-setup {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+}
+
+.crm-setup-block {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-5);
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-xs);
+}
+
+.crm-setup-block code {
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  word-break: break-all;
+}
+
+/* ---- responsive: drawer goes full-screen on narrow viewports ---------- */
+
+@media (max-width: 900px) {
+  .crm-drawer {
+    width: 100%;
+  }
+
+  .crm-board .kanban-lane {
+    flex: 0 0 260px;
+  }
+}

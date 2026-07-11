@@ -1,1 +1,173 @@
-/* security.css — .sec-* layout/composition only (spec §3.3, §7). Owner: security view agent. */
+/* ==========================================================================
+   security.css — .sec-* layout/composition for the 2FA / sessions / org-policy
+   surface (DESIGN.md §7 "Security", §3.3). This view also renders inside the
+   pre-auth MfaGate, so every rule here is self-contained — it never assumes a
+   view-shell wrapper. Primitives (.card, .kpi, .table, .alert, .badge, .btn,
+   .field) live in components/ui.css. Tokens only, no color literals.
+   ========================================================================== */
+
+/* ---- page container & rhythm --------------------------------------------- */
+
+.sec-page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+}
+
+.sec-head h2 {
+  margin: 0;
+  font-size: var(--text-2xl);
+  font-weight: var(--weight-bold);
+  letter-spacing: var(--tracking-tight);
+  color: var(--ink);
+}
+
+.sec-sub {
+  margin: var(--space-1) 0 0;
+  color: var(--ink-soft);
+  font-size: var(--text-sm);
+}
+
+/* ---- sections ------------------------------------------------------------ */
+
+.sec-block {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.sec-block h3 {
+  margin: 0;
+  font-size: var(--text-xl);
+  font-weight: var(--weight-semibold);
+  color: var(--ink);
+}
+
+/* ---- MFA method chooser (cards heal on the .card primitive) --------------- */
+
+.sec-methods {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: var(--space-4);
+}
+
+/* A method card / enrollment card: vertical stack, action pinned to the end. */
+.sec-method {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-3);
+}
+
+.sec-method h3 {
+  margin: 0;
+  font-size: var(--text-lg);
+  font-weight: var(--weight-semibold);
+  color: var(--ink);
+}
+
+.sec-method p {
+  margin: 0;
+}
+
+.sec-method .field {
+  width: 100%;
+}
+
+/* Buttons row inside an enrollment card. */
+.sec-method-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+/* ---- TOTP secret + QR ----------------------------------------------------- */
+
+/* The QR PNG carries its own quiet-zone/white background (functional colors,
+   allowlisted at the source) — no CSS color needed, just sizing. */
+.sec-qr {
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+}
+
+.sec-secret {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  font-size: var(--text-sm);
+  color: var(--ink-soft);
+}
+
+.sec-secret code {
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-xs);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--ink);
+  user-select: all;
+}
+
+/* ---- backup codes callout (inside a warn Alert) --------------------------- */
+
+.sec-backup-grid {
+  list-style: none;
+  margin: var(--space-3) 0 var(--space-3);
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  gap: var(--space-2);
+}
+
+.sec-backup-grid code {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  text-align: center;
+  padding: var(--space-2);
+  border-radius: var(--radius-xs);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--ink);
+  user-select: all;
+}
+
+/* ---- active sessions ------------------------------------------------------ */
+
+.sec-session-device {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.sec-session-device strong {
+  font-weight: var(--weight-semibold);
+  color: var(--ink);
+}
+
+/* ---- org MFA policy ------------------------------------------------------- */
+
+.sec-policy {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+}
+
+.sec-policy-copy strong {
+  display: block;
+  font-weight: var(--weight-semibold);
+  color: var(--ink);
+}
+
+.sec-policy-copy .sec-policy-desc {
+  margin: var(--space-1) 0 0;
+  font-size: var(--text-sm);
+  color: var(--ink-soft);
+  max-width: 52ch;
+}

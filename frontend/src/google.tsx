@@ -9,7 +9,8 @@ import { useCallback, useEffect, useState } from "react";
 import { api, type AssetGroup, type Keyword, type SearchTerm } from "./api";
 import { useManage } from "./manage";
 import { DataTable } from "./components/DataTable";
-import { SkeletonText } from "./components/ui";
+import { Alert, Badge, Button, Field, Segmented, toneForStatus } from "./components/ui";
+import "./styles/views/manage.css";
 
 const MATCH_TYPES = ["EXACT", "PHRASE", "BROAD"] as const;
 
@@ -34,7 +35,8 @@ export function KeywordsPanel({
   }, [adGroupId]);
   useEffect(load, [load]);
 
-  const addKeyword = () =>
+  const addKeyword = () => {
+    if (!text) return;
     stage(
       {
         ad_account_id: adAccountId,
@@ -48,6 +50,7 @@ export function KeywordsPanel({
         load();
       }
     ).catch((e) => setError((e as Error).message));
+  };
 
   const removeKeyword = (kw: Keyword) =>
     stage(
@@ -61,67 +64,90 @@ export function KeywordsPanel({
       load
     ).catch((e) => setError((e as Error).message));
 
-  if (error) return <p className="error">{error}</p>;
-  if (keywords === null)
-    return (
-      <div className="subpanel">
-        <SkeletonText lines={3} />
-      </div>
-    );
+  if (error) return <Alert tone="danger">{error}</Alert>;
   return (
-    <div className="subpanel">
-      <table className="compact">
-        <thead>
-          <tr>
-            <th>Keyword</th>
-            <th>Match</th>
-            <th>Status</th>
-            <th></th>
-          </tr>
-        </thead>
-        <tbody>
-          {keywords.map((k) => (
-            <tr key={k.criterion_id} className={k.negative ? "negative" : ""}>
-              <td>
-                {k.negative ? "− " : ""}
+    <div className="mg-panel">
+      <DataTable<Keyword>
+        loading={keywords === null}
+        rows={keywords ?? []}
+        rowKey={(k) => k.criterion_id}
+        emptyMessage="No keywords in this ad group yet."
+        columns={[
+          {
+            key: "text",
+            header: "Keyword",
+            render: (k) => (
+              <span className="mg-cell-inline">
+                {k.negative && <Badge tone="neutral">Negative</Badge>}
                 {k.text}
-              </td>
-              <td>{k.match_type}</td>
-              <td>{k.status ?? "—"}</td>
-              <td>
-                <button className="link" onClick={() => removeKeyword(k)}>
+              </span>
+            ),
+            sortValue: (k) => k.text,
+          },
+          {
+            key: "match",
+            header: "Match",
+            render: (k) => k.match_type,
+            sortValue: (k) => k.match_type,
+          },
+          {
+            key: "status",
+            header: "Status",
+            render: (k) =>
+              k.status ? <Badge tone={toneForStatus(k.status)}>{k.status}</Badge> : "—",
+            sortValue: (k) => k.status ?? "",
+          },
+          {
+            key: "actions",
+            header: "",
+            render: (k) => (
+              <span className="mg-row-actions">
+                <Button variant="danger-outline" size="sm" onClick={() => removeKeyword(k)}>
                   Remove
-                </button>
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-      <div className="inline-form">
-        <input
-          placeholder="New keyword"
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-        />
-        <select value={matchType} onChange={(e) => setMatchType(e.target.value)}>
-          {MATCH_TYPES.map((m) => (
-            <option key={m} value={m}>
-              {m}
-            </option>
-          ))}
-        </select>
-        <label>
+                </Button>
+              </span>
+            ),
+          },
+        ]}
+      />
+      <form
+        className="mg-form"
+        onSubmit={(e) => {
+          e.preventDefault();
+          addKeyword();
+        }}
+      >
+        <div className="mg-form-cell">
+          <Field label="New keyword">
+            <input
+              placeholder="e.g. emergency furnace repair"
+              value={text}
+              onChange={(e) => setText(e.target.value)}
+            />
+          </Field>
+        </div>
+        <Field label="Match type">
+          <Segmented<string>
+            ariaLabel="Match type"
+            options={MATCH_TYPES.map((m) => ({ value: m, label: m }))}
+            value={matchType}
+            onChange={setMatchType}
+          />
+        </Field>
+        <label className="mg-check">
           <input
             type="checkbox"
             checked={negative}
             onChange={(e) => setNegative(e.target.checked)}
           />
-          negative
+          Negative
         </label>
-        <button disabled={!text} onClick={addKeyword}>
-          Stage add
-        </button>
-      </div>
+        <div className="mg-form-actions">
+          <Button type="submit" variant="primary" disabled={!text}>
+            Stage add
+          </Button>
+        </div>
+      </form>
     </div>
   );
 }
@@ -135,7 +161,7 @@ export function SearchTermsPanel({
 }) {
   const { stage } = useManage();
   const [terms, setTerms] = useState<SearchTerm[] | null>(null);
-  const [days, setDays] = useState(30);
+  const [days, setDays] = useState("30");
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -153,20 +179,19 @@ export function SearchTermsPanel({
       payload: { campaign_id: campaignId, text: term, match_type: "EXACT" },
     }).catch((e) => setError((e as Error).message));
 
-  if (error) return <p className="error">{error}</p>;
+  if (error) return <Alert tone="danger">{error}</Alert>;
   return (
-    <div className="subpanel">
-      <div className="toggle">
-        {[7, 14, 30].map((d) => (
-          <button
-            key={d}
-            className={days === d ? "active" : ""}
-            onClick={() => setDays(d)}
-          >
-            Last {d} days
-          </button>
-        ))}
-      </div>
+    <div className="mg-panel">
+      <Segmented<string>
+        ariaLabel="Search-term date range"
+        options={[
+          { value: "7", label: "Last 7 days" },
+          { value: "14", label: "Last 14 days" },
+          { value: "30", label: "Last 30 days" },
+        ]}
+        value={days}
+        onChange={setDays}
+      />
       <DataTable<SearchTerm>
         loading={terms === null}
         rows={terms ?? []}
@@ -212,9 +237,11 @@ export function SearchTermsPanel({
             key: "actions",
             header: "",
             render: (t) => (
-              <button className="link" onClick={() => addNegative(t.search_term)}>
-                Add as negative
-              </button>
+              <span className="mg-row-actions">
+                <Button variant="ghost" size="sm" onClick={() => addNegative(t.search_term)}>
+                  Add as negative
+                </Button>
+              </span>
             ),
           },
         ]}
@@ -253,36 +280,46 @@ export function AssetGroupsPanel({
       load
     ).catch((e) => setError((e as Error).message));
 
-  if (error) return <p className="error">{error}</p>;
-  if (groups === null)
-    return (
-      <div className="subpanel">
-        <SkeletonText lines={3} />
-      </div>
-    );
+  if (error) return <Alert tone="danger">{error}</Alert>;
   return (
-    <div className="subpanel">
-      {groups.length === 0 && (
-        <p className="muted">No asset groups (not a Performance Max campaign?).</p>
-      )}
-      <table className="compact">
-        <tbody>
-          {groups.map((g) => (
-            <tr key={g.external_id}>
-              <td>{g.name}</td>
-              <td>
-                <span className={`badge ${g.status.toLowerCase()}`}>{g.status}</span>
-              </td>
-              <td className="muted">{g.ad_strength ?? ""}</td>
-              <td>
-                <button className="link" onClick={() => toggle(g)}>
+    <div className="mg-panel">
+      <DataTable<AssetGroup>
+        loading={groups === null}
+        rows={groups ?? []}
+        rowKey={(g) => g.external_id}
+        emptyMessage="No asset groups (not a Performance Max campaign?)."
+        columns={[
+          {
+            key: "name",
+            header: "Asset group",
+            render: (g) => g.name,
+            sortValue: (g) => g.name,
+          },
+          {
+            key: "status",
+            header: "Status",
+            render: (g) => <Badge tone={toneForStatus(g.status)}>{g.status}</Badge>,
+            sortValue: (g) => g.status,
+          },
+          {
+            key: "strength",
+            header: "Ad strength",
+            render: (g) => g.ad_strength ?? "—",
+            sortValue: (g) => g.ad_strength ?? "",
+          },
+          {
+            key: "actions",
+            header: "",
+            render: (g) => (
+              <span className="mg-row-actions">
+                <Button variant="ghost" size="sm" onClick={() => toggle(g)}>
                   {g.status === "PAUSED" ? "Resume" : "Pause"}
-                </button>
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+                </Button>
+              </span>
+            ),
+          },
+        ]}
+      />
     </div>
   );
 }

@@ -1,1 +1,138 @@
-/* admin.css — .adm-* layout/composition only (spec §3.3, §7). Owner: admin view agent. */
+/* ==========================================================================
+   admin.css — .adm-* layout/composition for the platform super-admin console
+   and org team management (DESIGN.md §7 "Admin", §3.3). Layout and
+   composition only — primitives (.card, .kpi, .table, .badge, .btn, .alert,
+   .dialog) live in components/ui.css. Tokens only, no color literals.
+   ========================================================================== */
+
+/* ---- page head ----------------------------------------------------------- */
+
+.adm-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--space-4);
+  margin: 0 0 var(--space-6);
+}
+
+.adm-head h2 {
+  margin: 0;
+  font-size: var(--text-2xl);
+  font-weight: var(--weight-bold);
+  letter-spacing: var(--tracking-tight);
+  color: var(--ink);
+}
+
+.adm-sub {
+  margin: var(--space-1) 0 0;
+  color: var(--ink-soft);
+  font-size: var(--text-sm);
+}
+
+/* ---- vertical rhythm between console sections ---------------------------- */
+
+.adm-view > * + * {
+  margin-top: var(--space-6);
+}
+
+.adm-section-title {
+  margin: 0 0 var(--space-3);
+  font-size: var(--text-xl);
+  font-weight: var(--weight-semibold);
+  color: var(--ink);
+}
+
+/* ---- signup chart card --------------------------------------------------- */
+
+.adm-chart-cap {
+  margin: var(--space-3) 0 0;
+  font-size: var(--text-xs);
+  color: var(--ink-soft);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---- org detail ---------------------------------------------------------- */
+
+.adm-back {
+  margin: 0 0 var(--space-4);
+}
+
+.adm-org-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  margin: 0 0 var(--space-5);
+}
+
+.adm-org-head h2 {
+  margin: 0;
+  font-size: var(--text-2xl);
+  font-weight: var(--weight-bold);
+  letter-spacing: var(--tracking-tight);
+  color: var(--ink);
+}
+
+/* Plan picker sits inline in the org header; keep it compact. */
+.adm-plan-field {
+  margin-left: auto;
+  min-width: 160px;
+}
+
+/* ---- table action cells -------------------------------------------------- */
+
+.adm-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+/* ---- temp-password reveal (Alert body) ----------------------------------- */
+
+.adm-secret {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  margin-top: var(--space-2);
+}
+
+.adm-secret code {
+  font-family: var(--font-mono);
+  font-size: var(--text-md);
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-xs);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--ink);
+  user-select: all;
+}
+
+/* ---- invite a team member (card form) ------------------------------------ */
+
+.adm-invite {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.adm-invite-title {
+  margin: 0;
+  font-size: var(--text-lg);
+  font-weight: var(--weight-semibold);
+  color: var(--ink);
+}
+
+.adm-invite-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: var(--space-4);
+}
+
+.adm-invite-foot {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}

@@ -1,106 +1,220 @@
-import { useEffect, useState } from "react";
+/**
+ * Org-level "bring your own app" credential page. The set of platforms is
+ * driven by the backend registry (GET /api/platforms) rather than hardcoded:
+ * Meta and Google support per-org app credentials today; every other
+ * registered platform renders as a neutral "coming soon" card until its
+ * adapter ships. Platform identity is a neutral monogram chip — never a brand
+ * color (DESIGN.md §4.8, §7).
+ */
+
+import { useCallback, useEffect, useState } from "react";
 import {
   deleteIntegration,
+  getPlatforms,
   listIntegrations,
   setGoogleCreds,
   setMetaCreds,
   type IntegrationStatus,
+  type Platform,
 } from "./api";
+import { ConfirmDialog } from "./components/Dialog";
+import { useToast } from "./components/Toast";
+import {
+  Alert,
+  Badge,
+  type BadgeTone,
+  Button,
+  Field,
+  PlatformChip,
+  SkeletonText,
+} from "./components/ui";
+import "./styles/views/manage.css";
 
-const STATUS_LABEL: Record<IntegrationStatus["source"], string> = {
-  organization: "Connected",
-  global: "Using shared app",
-  none: "Not configured",
-};
-
-const STATUS_CLASS: Record<IntegrationStatus["source"], string> = {
-  organization: "active",
-  global: "warn",
-  none: "none",
+const STATUS: Record<
+  IntegrationStatus["source"],
+  { label: string; tone: BadgeTone }
+> = {
+  organization: { label: "Connected", tone: "ok" },
+  global: { label: "Using shared app", tone: "info" },
+  none: { label: "Not configured", tone: "neutral" },
 };
 
 export function Integrations() {
   const [statuses, setStatuses] = useState<IntegrationStatus[]>([]);
+  const [platforms, setPlatforms] = useState<Platform[] | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const load = () =>
-    listIntegrations().then(setStatuses).catch((e) => setError(e.message));
+  const loadStatuses = useCallback(() => {
+    listIntegrations()
+      .then(setStatuses)
+      .catch((e) => setError(e.message));
+  }, []);
   useEffect(() => {
-    load();
+    loadStatuses();
+  }, [loadStatuses]);
+  useEffect(() => {
+    getPlatforms()
+      .then(setPlatforms)
+      .catch((e) => setError(e.message));
   }, []);
 
-  const meta = statuses.find((s) => s.provider === "meta");
-  const google = statuses.find((s) => s.provider === "google");
+  const statusFor = (id: string) => statuses.find((s) => s.provider === id);
 
   return (
-    <div>
-      <div className="page-head">
-        <div>
-          <h2>Integrations</h2>
-          <p className="page-sub">
-            Connect your own Meta and Google Ads apps so you can link your
-            clients' ad accounts.
-          </p>
-        </div>
-      </div>
-      {error && <p className="error">{error}</p>}
-
-      <MetaCard status={meta} onChange={load} />
-      <GoogleCard status={google} onChange={load} />
-    </div>
-  );
-}
-
-function StatusBadge({ status }: { status?: IntegrationStatus }) {
-  if (!status) return null;
-  return (
-    <span className={`badge ${STATUS_CLASS[status.source]}`}>
-      {STATUS_LABEL[status.source]}
-    </span>
-  );
-}
-
-function ProviderShell({
-  title,
-  desc,
-  status,
-  children,
-  onRemove,
-}: {
-  title: string;
-  desc: string;
-  status?: IntegrationStatus;
-  children: React.ReactNode;
-  onRemove: () => void;
-}) {
-  return (
-    <div className="integration-card">
-      <div className="integration-head">
-        <div>
-          <strong>{title}</strong>
-          <p className="page-sub">{desc}</p>
-        </div>
-        <StatusBadge status={status} />
-      </div>
-      {children}
-      {status?.source === "organization" && (
-        <div className="integration-foot">
-          <span className="page-sub">
-            App ID: <code>{status.public_id}</code>
-          </span>
-          <button className="danger" onClick={onRemove}>
-            Remove
-          </button>
+    <div className="mg-view">
+      <header className="mg-head">
+        <h2>Integrations</h2>
+        <p className="mg-sub">
+          Connect your own Meta and Google Ads apps so you can link your
+          clients' ad accounts. More platforms are on the way.
+        </p>
+      </header>
+      {error && <Alert tone="danger">{error}</Alert>}
+      {platforms === null ? (
+        <SkeletonText lines={4} />
+      ) : (
+        <div className="mg-integrations">
+          {platforms.map((p) =>
+            p.id === "meta" ? (
+              <MetaCard
+                key={p.id}
+                platform={p}
+                status={statusFor("meta")}
+                onChange={loadStatuses}
+              />
+            ) : p.id === "google" ? (
+              <GoogleCard
+                key={p.id}
+                platform={p}
+                status={statusFor("google")}
+                onChange={loadStatuses}
+              />
+            ) : (
+              <ComingSoonCard key={p.id} platform={p} />
+            )
+          )}
         </div>
       )}
     </div>
   );
 }
 
+function StatusBadge({ status }: { status?: IntegrationStatus }) {
+  if (!status) return null;
+  const s = STATUS[status.source];
+  return <Badge tone={s.tone}>{s.label}</Badge>;
+}
+
+function ComingSoonCard({ platform }: { platform: Platform }) {
+  return (
+    <div className="card mg-integration">
+      <div className="mg-integration-head">
+        <div className="mg-integration-title">
+          <PlatformChip name={platform.name} />
+        </div>
+        <Badge tone="info">Coming soon</Badge>
+      </div>
+      <p className="mg-sub">
+        Bring-your-own-app credentials for {platform.name} unlock when its
+        adapter ships.
+      </p>
+    </div>
+  );
+}
+
+function ProviderShell({
+  platform,
+  provider,
+  desc,
+  status,
+  children,
+  onChange,
+}: {
+  platform: Platform;
+  provider: "meta" | "google";
+  desc: string;
+  status?: IntegrationStatus;
+  children: React.ReactNode;
+  onChange: () => void;
+}) {
+  const [confirming, setConfirming] = useState(false);
+  const [removing, setRemoving] = useState(false);
+  const toast = useToast();
+
+  const remove = async () => {
+    setRemoving(true);
+    try {
+      await deleteIntegration(provider);
+      toast(`${platform.name} disconnected`, "info");
+      onChange();
+      setConfirming(false);
+    } catch (e) {
+      toast((e as Error).message, "error");
+    } finally {
+      setRemoving(false);
+    }
+  };
+
+  return (
+    <div className="card mg-integration">
+      <div className="mg-integration-head">
+        <div className="mg-integration-title">
+          <PlatformChip name={platform.name} />
+          <p className="mg-sub">{desc}</p>
+        </div>
+        <StatusBadge status={status} />
+      </div>
+      {children}
+      {status?.source === "organization" && (
+        <div className="mg-integration-foot">
+          <span className="mg-appid">
+            App ID: <code>{status.public_id}</code>
+          </span>
+          <Button
+            variant="danger-outline"
+            size="sm"
+            onClick={() => setConfirming(true)}
+          >
+            Remove
+          </Button>
+        </div>
+      )}
+      <ConfirmDialog
+        open={confirming}
+        tone="danger"
+        title={`Remove ${platform.name} integration`}
+        confirmLabel="Remove integration"
+        cancelLabel="Keep connected"
+        busy={removing}
+        rows={[
+          {
+            field: "API credentials",
+            platform: platform.name,
+            oldValue: "Configured",
+            newValue: "Removed",
+            delta: null,
+          },
+        ]}
+        onCancel={() => {
+          if (!removing) setConfirming(false);
+        }}
+        onConfirm={remove}
+      >
+        <p className="mg-sub">
+          Client ad accounts linked through this app stop syncing until you
+          reconnect. Nothing is deleted inside {platform.name}.
+        </p>
+      </ConfirmDialog>
+    </div>
+  );
+}
+
 function MetaCard({
+  platform,
   status,
   onChange,
 }: {
+  platform: Platform;
   status?: IntegrationStatus;
   onChange: () => void;
 }) {
@@ -108,7 +222,9 @@ function MetaCard({
   const [appSecret, setAppSecret] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [saved, setSaved] = useState(false);
+  const toast = useToast();
+
+  const ready = Boolean(appId.trim() && appSecret.trim());
 
   const save = async () => {
     setSaving(true);
@@ -117,7 +233,7 @@ function MetaCard({
       await setMetaCreds({ app_id: appId.trim(), app_secret: appSecret.trim() });
       setAppId("");
       setAppSecret("");
-      setSaved(true);
+      toast("Meta credentials saved", "ok");
       onChange();
     } catch (e) {
       setError((e as Error).message);
@@ -128,45 +244,51 @@ function MetaCard({
 
   return (
     <ProviderShell
-      title="Meta (Facebook / Instagram Ads)"
+      platform={platform}
+      provider="meta"
       desc="From your Meta app: App ID and App Secret."
       status={status}
-      onRemove={() => deleteIntegration("meta").then(onChange)}
+      onChange={onChange}
     >
-      <div className="form-grid">
-        <label className="field">
-          <span>App ID</span>
-          <input value={appId} onChange={(e) => setAppId(e.target.value)} placeholder="e.g. 1234567890" />
-        </label>
-        <label className="field">
-          <span>App Secret</span>
+      <form
+        className="mg-form-grid"
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (ready) save();
+        }}
+      >
+        <Field label="App ID">
+          <input
+            value={appId}
+            onChange={(e) => setAppId(e.target.value)}
+            placeholder="e.g. 1234567890"
+          />
+        </Field>
+        <Field label="App Secret">
           <input
             type="password"
             value={appSecret}
             onChange={(e) => setAppSecret(e.target.value)}
             placeholder="••••••••"
           />
-        </label>
-        {error && <p className="error">{error}</p>}
-        {saved && <p className="notice">Saved.</p>}
-        <div>
-          <button
-            className="primary"
-            disabled={saving || !appId.trim() || !appSecret.trim()}
-            onClick={save}
-          >
-            {saving ? "Saving…" : status?.source === "organization" ? "Update" : "Save"}
-          </button>
+        </Field>
+        {error && <Alert tone="danger">{error}</Alert>}
+        <div className="mg-form-actions">
+          <Button type="submit" variant="primary" busy={saving} disabled={saving || !ready}>
+            {status?.source === "organization" ? "Update" : "Save"}
+          </Button>
         </div>
-      </div>
+      </form>
     </ProviderShell>
   );
 }
 
 function GoogleCard({
+  platform,
   status,
   onChange,
 }: {
+  platform: Platform;
   status?: IntegrationStatus;
   onChange: () => void;
 }) {
@@ -176,7 +298,9 @@ function GoogleCard({
   const [loginCustomerId, setLoginCustomerId] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [saved, setSaved] = useState(false);
+  const toast = useToast();
+
+  const ready = Boolean(clientId.trim() && clientSecret.trim() && devToken.trim());
 
   const save = async () => {
     setSaving(true);
@@ -192,7 +316,7 @@ function GoogleCard({
       setClientSecret("");
       setDevToken("");
       setLoginCustomerId("");
-      setSaved(true);
+      toast("Google Ads credentials saved", "ok");
       onChange();
     } catch (e) {
       setError((e as Error).message);
@@ -201,42 +325,54 @@ function GoogleCard({
     }
   };
 
-  const ready = clientId.trim() && clientSecret.trim() && devToken.trim();
-
   return (
     <ProviderShell
-      title="Google Ads"
+      platform={platform}
+      provider="google"
       desc="OAuth Client ID + Secret and your Google Ads developer token."
       status={status}
-      onRemove={() => deleteIntegration("google").then(onChange)}
+      onChange={onChange}
     >
-      <div className="form-grid">
-        <label className="field">
-          <span>OAuth Client ID</span>
+      <form
+        className="mg-form-grid"
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (ready) save();
+        }}
+      >
+        <Field label="OAuth Client ID">
           <input value={clientId} onChange={(e) => setClientId(e.target.value)} />
-        </label>
-        <label className="field">
-          <span>OAuth Client Secret</span>
-          <input type="password" value={clientSecret} onChange={(e) => setClientSecret(e.target.value)} placeholder="••••••••" />
-        </label>
-        <label className="field">
-          <span>Developer token</span>
-          <input type="password" value={devToken} onChange={(e) => setDevToken(e.target.value)} placeholder="••••••••" />
-        </label>
-        <label className="field">
-          <span>
-            Login customer ID <em className="opt">optional (MCC)</em>
-          </span>
-          <input value={loginCustomerId} onChange={(e) => setLoginCustomerId(e.target.value)} placeholder="1234567890" />
-        </label>
-        {error && <p className="error">{error}</p>}
-        {saved && <p className="notice">Saved.</p>}
-        <div>
-          <button className="primary" disabled={saving || !ready} onClick={save}>
-            {saving ? "Saving…" : status?.source === "organization" ? "Update" : "Save"}
-          </button>
+        </Field>
+        <Field label="OAuth Client Secret">
+          <input
+            type="password"
+            value={clientSecret}
+            onChange={(e) => setClientSecret(e.target.value)}
+            placeholder="••••••••"
+          />
+        </Field>
+        <Field label="Developer token">
+          <input
+            type="password"
+            value={devToken}
+            onChange={(e) => setDevToken(e.target.value)}
+            placeholder="••••••••"
+          />
+        </Field>
+        <Field label="Login customer ID" optional description="MCC accounts only">
+          <input
+            value={loginCustomerId}
+            onChange={(e) => setLoginCustomerId(e.target.value)}
+            placeholder="1234567890"
+          />
+        </Field>
+        {error && <Alert tone="danger">{error}</Alert>}
+        <div className="mg-form-actions">
+          <Button type="submit" variant="primary" busy={saving} disabled={saving || !ready}>
+            {status?.source === "organization" ? "Update" : "Save"}
+          </Button>
         </div>
-      </div>
+      </form>
     </ProviderShell>
   );
 }

@@ -8,7 +8,19 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { api, type CreativeRow } from "./api";
-import { SkeletonText } from "./components/ui";
+import { Dialog } from "./components/Dialog";
+import {
+  Alert,
+  Badge,
+  Button,
+  EmptyState,
+  Field,
+  Segmented,
+  Skeleton,
+  SkeletonText,
+} from "./components/ui";
+import { Eye, Megaphone } from "./components/icons";
+import "./styles/views/manage.css";
 
 interface Page {
   id: string;
@@ -16,7 +28,7 @@ interface Page {
 }
 
 export function CreativesPanel({ adAccountId }: { adAccountId: string }) {
-  const [creatives, setCreatives] = useState<CreativeRow[]>([]);
+  const [creatives, setCreatives] = useState<CreativeRow[] | null>(null);
   const [pages, setPages] = useState<Page[]>([]);
   const [showForm, setShowForm] = useState(false);
   const [preview, setPreview] = useState<CreativeRow | null>(null);
@@ -35,27 +47,61 @@ export function CreativesPanel({ adAccountId }: { adAccountId: string }) {
   }, [adAccountId]);
 
   return (
-    <div className="subpanel">
-      {error && <p className="error">{error}</p>}
-      <table className="compact">
-        <tbody>
-          {creatives.map((c) => (
-            <tr key={c.id}>
-              <td>{c.name ?? c.external_id}</td>
-              <td className="muted">{c.title ?? ""}</td>
-              <td>
-                <button className="link" onClick={() => setPreview(c)}>
-                  Preview placements
-                </button>
-              </td>
-            </tr>
+    <div className="mg-panel">
+      {error && <Alert tone="danger">{error}</Alert>}
+
+      {creatives === null ? (
+        <div className="mg-gallery" aria-hidden="true">
+          {Array.from({ length: 3 }, (_, i) => (
+            <div key={i} className="card mg-creative">
+              <Skeleton height="150px" />
+              <div className="mg-creative-body">
+                <Skeleton width="70%" />
+                <Skeleton width="45%" height="0.8em" />
+              </div>
+            </div>
           ))}
-        </tbody>
-      </table>
-      {creatives.length === 0 && <p className="muted">No creatives yet.</p>}
-      <button onClick={() => setShowForm(!showForm)}>
-        {showForm ? "Close" : "New creative"}
-      </button>
+        </div>
+      ) : creatives.length === 0 ? (
+        <EmptyState icon={<Megaphone />} title="No creatives yet">
+          Build a creative to preview how it renders across Meta placements
+          before attaching it to an ad.
+        </EmptyState>
+      ) : (
+        <div className="mg-gallery">
+          {creatives.map((c) => (
+            <div key={c.id} className="card mg-creative">
+              <div
+                className={`mg-creative-thumb${
+                  c.thumbnail_url ? "" : " mg-creative-thumb--empty"
+                }`}
+              >
+                {c.thumbnail_url ? (
+                  <img src={c.thumbnail_url} alt="" />
+                ) : (
+                  <Eye size={28} aria-hidden="true" />
+                )}
+                <div className="mg-creative-overlay">
+                  <Button variant="primary" size="sm" onClick={() => setPreview(c)}>
+                    Preview placements
+                  </Button>
+                </div>
+              </div>
+              <div className="mg-creative-body">
+                <span className="mg-creative-name">{c.name ?? c.external_id}</span>
+                {c.title && <span className="mg-creative-title">{c.title}</span>}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div className="mg-form-actions">
+        <Button variant={showForm ? "ghost" : "default"} onClick={() => setShowForm(!showForm)}>
+          {showForm ? "Close" : "New creative"}
+        </Button>
+      </div>
+
       {showForm && (
         <CreativeForm
           adAccountId={adAccountId}
@@ -137,38 +183,53 @@ function CreativeForm({
     }
   };
 
+  const ready = Boolean(name && pageId && message && link);
+
   return (
-    <div className="inline-form column">
-      <input placeholder="Creative name" value={name} onChange={(e) => setName(e.target.value)} />
-      <select value={pageId} onChange={(e) => setPageId(e.target.value)}>
-        {pages.length === 0 && <option value="">No pages available</option>}
-        {pages.map((p) => (
-          <option key={p.id} value={p.id}>
-            {p.name}
-          </option>
-        ))}
-      </select>
-      <textarea
-        placeholder="Primary text"
-        value={message}
-        onChange={(e) => setMessage(e.target.value)}
-      />
-      <input placeholder="Headline (optional)" value={title} onChange={(e) => setTitle(e.target.value)} />
-      <input placeholder="Destination URL" value={link} onChange={(e) => setLink(e.target.value)} />
-      <label>
-        Image:{" "}
+    <form
+      className="card mg-form mg-form--column"
+      onSubmit={(e) => {
+        e.preventDefault();
+        if (ready) create();
+      }}
+    >
+      <Field label="Creative name">
+        <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Internal name" />
+      </Field>
+      <Field label="Page">
+        <select value={pageId} onChange={(e) => setPageId(e.target.value)}>
+          {pages.length === 0 && <option value="">No pages available</option>}
+          {pages.map((p) => (
+            <option key={p.id} value={p.id}>
+              {p.name}
+            </option>
+          ))}
+        </select>
+      </Field>
+      <Field label="Primary text">
+        <textarea value={message} onChange={(e) => setMessage(e.target.value)} />
+      </Field>
+      <Field label="Headline" optional>
+        <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Shown under the image" />
+      </Field>
+      <Field label="Destination URL">
+        <input value={link} onChange={(e) => setLink(e.target.value)} placeholder="https://…" />
+      </Field>
+      <Field label="Image" optional>
         <input
           type="file"
           accept="image/*"
           onChange={(e) => e.target.files?.[0] && uploadImage(e.target.files[0])}
         />
-        {imageHash && <span className="badge success">uploaded</span>}
-      </label>
-      {error && <p className="error">{error}</p>}
-      <button disabled={busy || !name || !pageId || !message || !link} onClick={create}>
-        {busy ? "Working…" : "Create creative"}
-      </button>
-    </div>
+      </Field>
+      {imageHash && <Badge tone="ok">Image uploaded</Badge>}
+      {error && <Alert tone="danger">{error}</Alert>}
+      <div className="mg-form-actions">
+        <Button type="submit" variant="primary" busy={busy} disabled={busy || !ready}>
+          Create creative
+        </Button>
+      </div>
+    </form>
   );
 }
 
@@ -198,30 +259,34 @@ function PreviewModal({
   }, [creative.id, format]);
 
   return (
-    <div className="modal-backdrop">
-      <div className="modal wide">
-        <h3>Placement preview — {creative.name ?? creative.external_id}</h3>
-        <div className="toggle">
-          {formats.map((f) => (
-            <button
-              key={f}
-              className={format === f ? "active" : ""}
-              onClick={() => setFormat(f)}
-            >
-              {f.replaceAll("_", " ").toLowerCase()}
-            </button>
-          ))}
-        </div>
-        {error && <p className="error">{error}</p>}
-        {!html && !error && <SkeletonText lines={4} />}
-        {html && (
-          // Meta returns its own sandboxed iframe snippet for the placement.
-          <div className="preview-frame" dangerouslySetInnerHTML={{ __html: html }} />
-        )}
-        <div className="modal-actions">
-          <button onClick={onClose}>Close</button>
-        </div>
-      </div>
-    </div>
+    <Dialog
+      open
+      onClose={onClose}
+      size="lg"
+      title={`Placement preview — ${creative.name ?? creative.external_id}`}
+      footer={
+        <Button variant="ghost" onClick={onClose}>
+          Close
+        </Button>
+      }
+    >
+      {formats.length > 0 && (
+        <Segmented<string>
+          ariaLabel="Placement format"
+          options={formats.map((f) => ({
+            value: f,
+            label: f.replaceAll("_", " ").toLowerCase(),
+          }))}
+          value={format}
+          onChange={setFormat}
+        />
+      )}
+      {error && <Alert tone="danger">{error}</Alert>}
+      {!html && !error && <SkeletonText lines={4} />}
+      {html && (
+        // Meta returns its own sandboxed iframe snippet for the placement.
+        <div className="mg-preview-frame" dangerouslySetInnerHTML={{ __html: html }} />
+      )}
+    </Dialog>
   );
 }

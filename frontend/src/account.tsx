@@ -11,10 +11,14 @@ import {
   type Subscription,
 } from "./api";
 import { Logo } from "./logo";
+import { Alert, Button, Field, Kpi, KpiGrid, KpiSkeleton } from "./components/ui";
+import "./styles/views/settings.css";
 
 function Brand() {
   return <Logo auth />;
 }
+
+const cap = (s: string) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : s);
 
 /* ---- pre-auth: email verification (opened from the emailed link) ---- */
 
@@ -35,9 +39,9 @@ export function VerifyEmail({ token, onDone }: { token: string; onDone: () => vo
           <>
             <h1>Email verified</h1>
             <p className="auth-sub">You're all set — you can log in now.</p>
-            <button className="primary block" onClick={onDone}>
+            <Button variant="primary" block onClick={onDone}>
               Continue
-            </button>
+            </Button>
           </>
         )}
         {state === "error" && (
@@ -46,9 +50,9 @@ export function VerifyEmail({ token, onDone }: { token: string; onDone: () => vo
             <p className="auth-sub">
               This verification link is invalid or has expired. Log in and resend it.
             </p>
-            <button className="primary block" onClick={onDone}>
+            <Button variant="primary" block onClick={onDone}>
               Back to login
-            </button>
+            </Button>
           </>
         )}
       </div>
@@ -70,9 +74,9 @@ export function ResetPassword({ token, onDone }: { token: string; onDone: () => 
           <Brand />
           <h1>Password updated</h1>
           <p className="auth-sub">Log in with your new password.</p>
-          <button className="primary block" onClick={onDone}>
+          <Button variant="primary" block onClick={onDone}>
             Continue
-          </button>
+          </Button>
         </div>
       </div>
     );
@@ -94,8 +98,7 @@ export function ResetPassword({ token, onDone }: { token: string; onDone: () => 
       >
         <Brand />
         <h1>Set a new password</h1>
-        <label className="field">
-          <span>New password</span>
+        <Field label="New password">
           <input
             type="password"
             placeholder="At least 8 characters"
@@ -104,11 +107,11 @@ export function ResetPassword({ token, onDone }: { token: string; onDone: () => 
             minLength={8}
             required
           />
-        </label>
-        <button type="submit" className="primary block" disabled={password.length < 8}>
+        </Field>
+        <Button type="submit" variant="primary" block disabled={password.length < 8}>
           Update password
-        </button>
-        {error && <p className="error">{error}</p>}
+        </Button>
+        {error && <Alert tone="danger">{error}</Alert>}
       </form>
     </div>
   );
@@ -140,66 +143,77 @@ export function Billing({ session }: { session: Session }) {
 
   return (
     <div>
-      <div className="page-head">
+      <div className="set-page-head">
         <div>
           <h2>Billing</h2>
-          <p className="page-sub">Manage your subscription and plan.</p>
+          <p className="set-page-sub">Manage your subscription and plan.</p>
         </div>
       </div>
-      {error && <p className="error">{error}</p>}
+      {error && <Alert tone="danger">{error}</Alert>}
 
-      <div className="admin-stats">
-        <div className="stat">
-          <div className="stat-value" style={{ textTransform: "capitalize" }}>
-            {sub?.plan ?? "—"}
-          </div>
-          <div className="stat-label">Current plan</div>
-        </div>
-        <div className="stat">
-          <div className="stat-value">{sub?.status ?? "active"}</div>
-          <div className="stat-label">Status</div>
-        </div>
+      <div className="set-billing-kpis">
+        <KpiGrid>
+          {sub ? (
+            <>
+              <Kpi label="Current plan" value={cap(sub.plan)} />
+              <Kpi label="Status" value={sub.status ? cap(sub.status) : "—"} />
+            </>
+          ) : (
+            <>
+              <KpiSkeleton />
+              <KpiSkeleton />
+            </>
+          )}
+        </KpiGrid>
       </div>
 
       {sub && !sub.billing_enabled && (
-        <p className="notice">
+        <Alert tone="info">
           Billing isn't configured on this deployment yet. Plans are managed
           manually until Stripe keys are set.
-        </p>
+        </Alert>
       )}
 
       {sub && sub.billing_enabled && isOwner && (
         <>
           <h3>Change plan</h3>
-          <div className="client-grid">
-            {(ORG_PLANS.filter((p) => p !== "starter") as OrgPlan[]).map((plan) => (
-              <div key={plan} className="client-card" style={{ cursor: "default" }}>
-                <div className="client-info">
-                  <strong style={{ textTransform: "capitalize" }}>{plan}</strong>
-                  <span className="page-sub">
+          <div className="set-plans">
+            {(ORG_PLANS.filter((p) => p !== "starter") as OrgPlan[]).map((plan) => {
+              const current = sub.plan === plan;
+              return (
+                <div
+                  key={plan}
+                  className={current ? "set-plan set-plan--current" : "set-plan"}
+                >
+                  <div className="set-plan-label">
+                    Plan {current && <span className="set-plan-tag">current</span>}
+                  </div>
+                  <div className="set-plan-price">{plan}</div>
+                  <span className="set-plan-meta">
                     {plan === "pro" ? "25 clients · 15 seats" : "Unlimited"}
                   </span>
+                  <Button
+                    className="set-plan-cta"
+                    variant="primary"
+                    disabled={busy || current}
+                    onClick={() => go(() => startCheckout(plan))}
+                  >
+                    {current ? "Current plan" : "Upgrade"}
+                  </Button>
                 </div>
-                <button
-                  className="primary"
-                  disabled={busy || sub.plan === plan}
-                  onClick={() => go(() => startCheckout(plan))}
-                >
-                  {sub.plan === plan ? "Current" : "Upgrade"}
-                </button>
-              </div>
-            ))}
+              );
+            })}
           </div>
-          <p style={{ marginTop: "1.2rem" }}>
-            <button className="ghost" disabled={busy} onClick={() => go(openBillingPortal)}>
+          <div className="set-billing-portal">
+            <Button variant="ghost" disabled={busy} onClick={() => go(openBillingPortal)}>
               Manage billing &amp; invoices
-            </button>
-          </p>
+            </Button>
+          </div>
         </>
       )}
 
       {sub && sub.billing_enabled && !isOwner && (
-        <p className="page-sub">Only the organization owner can change the plan.</p>
+        <p className="set-note">Only the organization owner can change the plan.</p>
       )}
     </div>
   );

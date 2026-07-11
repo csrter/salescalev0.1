@@ -19,7 +19,51 @@ import {
   type Session,
   type TeamMember,
 } from "./api";
-import { DataTable } from "./components/DataTable";
+import { DataTable, type Column } from "./components/DataTable";
+import { ConfirmDialog, type ReceiptRow } from "./components/Dialog";
+import { LineChart } from "./components/charts";
+import { ChevronLeft } from "./components/icons";
+import {
+  Alert,
+  Badge,
+  Button,
+  Field,
+  Kpi,
+  KpiGrid,
+  KpiSkeleton,
+} from "./components/ui";
+import "./styles/views/admin.css";
+
+/* ---------------- shared helpers ---------------- */
+
+function CopyButton({ text, label = "Copy" }: { text: string; label?: string }) {
+  const [done, setDone] = useState(false);
+  return (
+    <Button
+      size="sm"
+      onClick={async () => {
+        try {
+          await navigator.clipboard.writeText(text);
+          setDone(true);
+          setTimeout(() => setDone(false), 1500);
+        } catch {
+          /* clipboard unavailable — the value stays selectable inline */
+        }
+      }}
+    >
+      {done ? "Copied" : label}
+    </Button>
+  );
+}
+
+/** Staged confirmation for a single admin action (rendered via ConfirmDialog). */
+interface AdminConfirm {
+  title: string;
+  tone: "warn" | "danger";
+  confirmLabel: string;
+  rows: ReceiptRow[];
+  run: () => Promise<unknown>;
+}
 
 /* ---------------- Platform super-admin (cross-tenant) ---------------- */
 
@@ -28,11 +72,16 @@ export function SuperAdmin() {
   const [orgs, setOrgs] = useState<AdminOrgRow[]>([]);
   const [signups, setSignups] = useState<AdminSignupPoint[]>([]);
   const [selected, setSelected] = useState<AdminOrgRow | null>(null);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   const load = () => {
+    setLoading(true);
     adminStats().then(setStats).catch((e) => setError(e.message));
-    adminOrgs().then(setOrgs).catch((e) => setError(e.message));
+    adminOrgs()
+      .then(setOrgs)
+      .catch((e) => setError(e.message))
+      .finally(() => setLoading(false));
     adminSignups(30).then(setSignups).catch((e) => setError(e.message));
   };
   useEffect(load, []);
@@ -56,140 +105,131 @@ export function SuperAdmin() {
     ["Signups (30d)", stats?.signups_last_30d],
   ];
 
+  const total = signups.reduce((s, p) => s + p.count, 0);
+
   return (
-    <div>
-      <h2>Platform admin</h2>
-      {error && <p className="error">{error}</p>}
-      <div className="admin-stats">
-        {cards.map(([label, value]) => (
-          <div key={label} className="stat">
-            <div className="stat-value">{value ?? "—"}</div>
-            <div className="stat-label">{label}</div>
-          </div>
-        ))}
+    <div className="adm-view">
+      <div className="adm-head">
+        <div>
+          <h2>Platform admin</h2>
+          <p className="adm-sub">Cross-tenant overview of every organization.</p>
+        </div>
       </div>
 
-      <h3>Signups — last 30 days</h3>
-      <SignupChart points={signups} />
+      {error && <Alert tone="danger">{error}</Alert>}
 
-      <h3>Organizations</h3>
-      <DataTable<AdminOrgRow>
-        rows={orgs}
-        rowKey={(o) => o.id}
-        onRowClick={(o) => setSelected(o)}
-        initialSort="-created"
-        emptyMessage="No organizations yet."
-        columns={[
-          {
-            key: "name",
-            header: "Organization",
-            render: (o) => o.name,
-            sortValue: (o) => o.name,
-          },
-          {
-            key: "plan",
-            header: "Plan",
-            render: (o) => <span className="badge">{o.plan}</span>,
-            sortValue: (o) => o.plan,
-          },
-          {
-            key: "status",
-            header: "Status",
-            render: (o) => (
-              <span className={`badge ${o.status === "active" ? "active" : "failed"}`}>
-                {o.status}
-              </span>
-            ),
-            sortValue: (o) => o.status,
-          },
-          {
-            key: "users",
-            header: "Users",
-            align: "right",
-            render: (o) => o.user_count,
-            sortValue: (o) => o.user_count,
-          },
-          {
-            key: "clients",
-            header: "Clients",
-            align: "right",
-            render: (o) => o.client_count,
-            sortValue: (o) => o.client_count,
-          },
-          {
-            key: "conns",
-            header: "Conns",
-            align: "right",
-            render: (o) => o.connection_count,
-            sortValue: (o) => o.connection_count,
-          },
-          {
-            key: "contacts",
-            header: "Contacts",
-            align: "right",
-            render: (o) => o.contact_count,
-            sortValue: (o) => o.contact_count,
-          },
-          {
-            key: "created",
-            header: "Created",
-            render: (o) => new Date(o.created_at).toLocaleDateString(),
-            sortValue: (o) => o.created_at,
-          },
-        ]}
-      />
-    </div>
-  );
-}
+      {stats ? (
+        <KpiGrid>
+          {cards.map(([label, value]) => (
+            <Kpi key={label} label={label} value={value ?? 0} />
+          ))}
+        </KpiGrid>
+      ) : (
+        <KpiGrid>
+          {cards.map(([label]) => (
+            <KpiSkeleton key={label} />
+          ))}
+        </KpiGrid>
+      )}
 
-function SignupChart({ points }: { points: AdminSignupPoint[] }) {
-  if (points.length === 0) return <p className="muted">No data yet.</p>;
-  const W = 720;
-  const H = 140;
-  const pad = 20;
-  const max = Math.max(1, ...points.map((p) => p.count));
-  const bw = (W - pad * 2) / points.length;
-  const total = points.reduce((s, p) => s + p.count, 0);
-  return (
-    <div className="signup-chart">
-      <svg viewBox={`0 0 ${W} ${H}`} width="100%" preserveAspectRatio="none">
-        {points.map((p, i) => {
-          const h = (p.count / max) * (H - pad * 2);
-          return (
-            <rect
-              key={p.date}
-              x={pad + i * bw + 1}
-              y={H - pad - h}
-              width={Math.max(1, bw - 2)}
-              height={h}
-              rx={2}
-              className="bar"
-            >
-              <title>
-                {p.date}: {p.count}
-              </title>
-            </rect>
-          );
-        })}
-        <line x1={pad} y1={H - pad} x2={W - pad} y2={H - pad} className="axis" />
-      </svg>
-      <div className="chart-caption">
-        {points[0].date} → {points[points.length - 1].date} · {total} total
+      <div>
+        <h3 className="adm-section-title">Signups — last 30 days</h3>
+        <div className="card">
+          {signups.length > 0 ? (
+            <>
+              <LineChart
+                labels={signups.map((p) => p.date)}
+                series={[{ name: "Signups", data: signups.map((p) => p.count) }]}
+                height={160}
+                ariaLabel={`Daily signups over the last ${signups.length} days`}
+              />
+              <p className="adm-chart-cap">
+                {signups[0].date} → {signups[signups.length - 1].date} · {total} total
+              </p>
+            </>
+          ) : (
+            <p className="adm-sub">No data yet.</p>
+          )}
+        </div>
+      </div>
+
+      <div>
+        <h3 className="adm-section-title">Organizations</h3>
+        <DataTable<AdminOrgRow>
+          rows={orgs}
+          rowKey={(o) => o.id}
+          onRowClick={(o) => setSelected(o)}
+          loading={loading}
+          initialSort="-created"
+          emptyMessage="No organizations yet."
+          columns={[
+            {
+              key: "name",
+              header: "Organization",
+              render: (o) => o.name,
+              sortValue: (o) => o.name,
+            },
+            {
+              key: "plan",
+              header: "Plan",
+              render: (o) => <Badge tone="neutral">{o.plan}</Badge>,
+              sortValue: (o) => o.plan,
+            },
+            {
+              key: "status",
+              header: "Status",
+              render: (o) => <Badge tone={o.status}>{o.status}</Badge>,
+              sortValue: (o) => o.status,
+            },
+            {
+              key: "users",
+              header: "Users",
+              align: "right",
+              render: (o) => o.user_count,
+              sortValue: (o) => o.user_count,
+            },
+            {
+              key: "clients",
+              header: "Clients",
+              align: "right",
+              render: (o) => o.client_count,
+              sortValue: (o) => o.client_count,
+            },
+            {
+              key: "conns",
+              header: "Conns",
+              align: "right",
+              render: (o) => o.connection_count,
+              sortValue: (o) => o.connection_count,
+            },
+            {
+              key: "contacts",
+              header: "Contacts",
+              align: "right",
+              render: (o) => o.contact_count,
+              sortValue: (o) => o.contact_count,
+            },
+            {
+              key: "created",
+              header: "Created",
+              render: (o) => new Date(o.created_at).toLocaleDateString(),
+              sortValue: (o) => o.created_at,
+            },
+          ]}
+        />
       </div>
     </div>
   );
 }
 
-function OrgDetail({
-  org,
-  onBack,
-}: {
-  org: AdminOrgRow;
-  onBack: () => void;
-}) {
+function OrgDetail({ org, onBack }: { org: AdminOrgRow; onBack: () => void }) {
   const [detail, setDetail] = useState<AdminOrgDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
+  const [secret, setSecret] = useState<{ email: string; password: string } | null>(
+    null,
+  );
+  const [confirm, setConfirm] = useState<AdminConfirm | null>(null);
+  const [busy, setBusy] = useState(false);
 
   const load = () =>
     adminOrg(org.id).then(setDetail).catch((e) => setError(e.message));
@@ -197,128 +237,196 @@ function OrgDetail({
     load();
   }, [org.id]);
 
-  const act = async (fn: () => Promise<unknown>) => {
+  const runConfirm = async () => {
+    if (!confirm) return;
     setError(null);
+    setBusy(true);
     try {
-      await fn();
-      await load();
+      await confirm.run();
+      setConfirm(null);
     } catch (e) {
       setError((e as Error).message);
-    }
-  };
-
-  const resetPw = async (userId: string) => {
-    setError(null);
-    setNotice(null);
-    try {
-      const r = await resetUserPassword(userId);
-      setNotice(
-        `Temporary password for ${r.email}: ${r.temporary_password} — share it securely; it won't be shown again.`
-      );
-    } catch (e) {
-      setError((e as Error).message);
+    } finally {
+      setBusy(false);
     }
   };
 
   const suspended = detail?.status === "suspended";
 
+  const askSuspend = () => {
+    if (!detail) return;
+    setConfirm({
+      title: suspended ? "Reactivate organization" : "Suspend organization",
+      tone: suspended ? "warn" : "danger",
+      confirmLabel: suspended ? "Reactivate org" : "Suspend org",
+      rows: [
+        {
+          field: `${org.name} · status`,
+          oldValue: detail.status,
+          newValue: suspended ? "active" : "suspended",
+        },
+      ],
+      run: async () => {
+        await updateOrg(org.id, { status: suspended ? "active" : "suspended" });
+        await load();
+      },
+    });
+  };
+
+  const askPlan = (next: OrgPlan) => {
+    if (!detail || next === detail.plan) return;
+    setConfirm({
+      title: "Change plan",
+      tone: "warn",
+      confirmLabel: `Change to ${next}`,
+      rows: [{ field: `${org.name} · plan`, oldValue: detail.plan, newValue: next }],
+      run: async () => {
+        await updateOrg(org.id, { plan: next });
+        await load();
+      },
+    });
+  };
+
+  const askReset = (user: { id: string; email: string }) => {
+    setSecret(null);
+    setConfirm({
+      title: "Reset password",
+      tone: "warn",
+      confirmLabel: "Reset password",
+      rows: [
+        {
+          field: `${user.email} · password`,
+          oldValue: "current",
+          newValue: "new temporary",
+        },
+      ],
+      run: async () => {
+        const r = await resetUserPassword(user.id);
+        setSecret({ email: r.email, password: r.temporary_password });
+      },
+    });
+  };
+
+  const userCols: Column<AdminOrgDetail["users"][number]>[] = [
+    { key: "name", header: "Name", render: (u) => u.full_name, sortValue: (u) => u.full_name },
+    { key: "email", header: "Email", render: (u) => u.email, sortValue: (u) => u.email },
+    { key: "role", header: "Role", render: (u) => <Badge tone="neutral">{u.role}</Badge> },
+    {
+      key: "status",
+      header: "Status",
+      render: (u) => (
+        <Badge tone={u.is_active ? "ok" : "neutral"}>
+          {u.is_active ? "active" : "inactive"}
+        </Badge>
+      ),
+    },
+    {
+      key: "actions",
+      header: "Actions",
+      render: (u) => (
+        <Button size="sm" onClick={() => askReset(u)}>
+          Reset password
+        </Button>
+      ),
+    },
+  ];
+
   return (
-    <div>
-      <button className="link" onClick={onBack}>
-        ← All organizations
-      </button>
-      <div className="org-head">
+    <div className="adm-view">
+      <div className="adm-back">
+        <Button variant="link" onClick={onBack}>
+          <ChevronLeft size={16} /> All organizations
+        </Button>
+      </div>
+
+      <div className="adm-org-head">
         <h2>{org.name}</h2>
         {detail && (
           <>
-            <span className={`badge ${suspended ? "failed" : "active"}`}>
-              {detail.status}
-            </span>
-            <label className="plan-select">
-              Plan:{" "}
-              <select
-                value={detail.plan}
-                onChange={(e) =>
-                  act(() => updateOrg(org.id, { plan: e.target.value as OrgPlan }))
-                }
-              >
-                {ORG_PLANS.map((p) => (
-                  <option key={p} value={p}>
-                    {p}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <button
-              className={suspended ? "" : "danger"}
-              onClick={() =>
-                act(() =>
-                  updateOrg(org.id, { status: suspended ? "active" : "suspended" })
-                )
-              }
+            <Badge tone={suspended ? "danger" : "ok"}>{detail.status}</Badge>
+            <div className="adm-plan-field">
+              <Field label="Plan">
+                <select
+                  className="select"
+                  value={detail.plan}
+                  onChange={(e) => askPlan(e.target.value as OrgPlan)}
+                >
+                  {ORG_PLANS.map((p) => (
+                    <option key={p} value={p}>
+                      {p}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+            </div>
+            <Button
+              variant={suspended ? "default" : "danger-outline"}
+              onClick={askSuspend}
             >
               {suspended ? "Reactivate org" : "Suspend org"}
-            </button>
+            </Button>
           </>
         )}
       </div>
-      {error && <p className="error">{error}</p>}
-      {notice && <p className="notice">{notice}</p>}
 
-      <h3>Users</h3>
-      <table className="admin-table">
-        <thead>
-          <tr>
-            <th>Name</th>
-            <th>Email</th>
-            <th>Role</th>
-            <th>Status</th>
-            <th>Actions</th>
-          </tr>
-        </thead>
-        <tbody>
-          {detail?.users.map((u) => (
-            <tr key={u.id}>
-              <td>{u.full_name}</td>
-              <td>{u.email}</td>
-              <td>
-                <span className="badge">{u.role}</span>
-              </td>
-              <td>{u.is_active ? "active" : "inactive"}</td>
-              <td>
-                <button onClick={() => resetPw(u.id)}>Reset password</button>
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+      {error && <Alert tone="danger">{error}</Alert>}
 
-      <h3>Clients</h3>
-      <table className="admin-table">
-        <thead>
-          <tr>
-            <th>Client</th>
-            <th>Status</th>
-          </tr>
-        </thead>
-        <tbody>
-          {detail?.clients.map((c) => (
-            <tr key={c.id}>
-              <td>{c.name}</td>
-              <td>
-                <span className={`badge ${c.status}`}>{c.status}</span>
-              </td>
-            </tr>
-          ))}
-          {detail && detail.clients.length === 0 && (
-            <tr>
-              <td colSpan={2} className="muted">
-                No clients.
-              </td>
-            </tr>
-          )}
-        </tbody>
-      </table>
+      {secret && (
+        <Alert tone="warn" title="Temporary password">
+          <p>
+            Share it securely with <strong>{secret.email}</strong> — it won't be
+            shown again.
+          </p>
+          <div className="adm-secret">
+            <code>{secret.password}</code>
+            <CopyButton text={secret.password} />
+            <Button variant="ghost" size="sm" onClick={() => setSecret(null)}>
+              Dismiss
+            </Button>
+          </div>
+        </Alert>
+      )}
+
+      <div>
+        <h3 className="adm-section-title">Users</h3>
+        <DataTable<AdminOrgDetail["users"][number]>
+          rows={detail?.users ?? []}
+          rowKey={(u) => u.id}
+          loading={!detail}
+          emptyMessage="No users."
+          columns={userCols}
+        />
+      </div>
+
+      <div>
+        <h3 className="adm-section-title">Clients</h3>
+        <DataTable<AdminOrgDetail["clients"][number]>
+          rows={detail?.clients ?? []}
+          rowKey={(c) => c.id}
+          loading={!detail}
+          emptyMessage="No clients."
+          columns={[
+            { key: "name", header: "Client", render: (c) => c.name, sortValue: (c) => c.name },
+            {
+              key: "status",
+              header: "Status",
+              render: (c) => <Badge tone={c.status}>{c.status}</Badge>,
+            },
+          ]}
+        />
+      </div>
+
+      <ConfirmDialog
+        open={confirm != null}
+        onCancel={() => setConfirm(null)}
+        onConfirm={runConfirm}
+        rows={confirm?.rows ?? []}
+        title={confirm?.title ?? ""}
+        tone={confirm?.tone ?? "warn"}
+        confirmLabel={confirm?.confirmLabel}
+        cancelLabel="Cancel"
+        busy={busy}
+      />
     </div>
   );
 }
@@ -326,7 +434,7 @@ function OrgDetail({
 /* ---------------- Org admin console: team management ---------------- */
 
 export function TeamAdmin({ session }: { session: Session }) {
-  const [members, setMembers] = useState<TeamMember[]>([]);
+  const [members, setMembers] = useState<TeamMember[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const isOwner = session.role === "owner";
 
@@ -338,7 +446,7 @@ export function TeamAdmin({ session }: { session: Session }) {
 
   const patch = async (
     id: string,
-    body: { role?: "admin" | "member"; is_active?: boolean }
+    body: { role?: "admin" | "member"; is_active?: boolean },
   ) => {
     setError(null);
     try {
@@ -349,66 +457,76 @@ export function TeamAdmin({ session }: { session: Session }) {
     }
   };
 
+  const columns: Column<TeamMember>[] = [
+    { key: "name", header: "Name", render: (m) => m.full_name, sortValue: (m) => m.full_name },
+    { key: "email", header: "Email", render: (m) => m.email, sortValue: (m) => m.email },
+    { key: "role", header: "Role", render: (m) => <Badge tone="neutral">{m.role}</Badge> },
+    {
+      key: "status",
+      header: "Status",
+      render: (m) => (
+        <Badge tone={m.is_active ? "ok" : "neutral"}>
+          {m.is_active ? "active" : "inactive"}
+        </Badge>
+      ),
+    },
+  ];
+  if (isOwner) {
+    columns.push({
+      key: "actions",
+      header: "Actions",
+      render: (m) => {
+        // The Owner row can't be edited here (also blocks self-edit).
+        if (m.role === "owner") return <span className="adm-sub">—</span>;
+        return (
+          <div className="adm-actions">
+            {m.role === "member" ? (
+              <Button size="sm" onClick={() => patch(m.id, { role: "admin" })}>
+                Make admin
+              </Button>
+            ) : (
+              <Button size="sm" onClick={() => patch(m.id, { role: "member" })}>
+                Make member
+              </Button>
+            )}
+            {m.is_active ? (
+              <Button
+                size="sm"
+                variant="danger-outline"
+                onClick={() => patch(m.id, { is_active: false })}
+              >
+                Deactivate
+              </Button>
+            ) : (
+              <Button size="sm" onClick={() => patch(m.id, { is_active: true })}>
+                Reactivate
+              </Button>
+            )}
+          </div>
+        );
+      },
+    });
+  }
+
   return (
-    <div>
-      <h2>Team</h2>
-      {error && <p className="error">{error}</p>}
-      <table className="admin-table">
-        <thead>
-          <tr>
-            <th>Name</th>
-            <th>Email</th>
-            <th>Role</th>
-            <th>Status</th>
-            {isOwner && <th>Actions</th>}
-          </tr>
-        </thead>
-        <tbody>
-          {members.map((m) => {
-            // The Owner is the only "owner" row and can't be edited here, which
-            // also prevents the acting Owner from editing themselves.
-            const editable = isOwner && m.role !== "owner";
-            return (
-              <tr key={m.id} className={m.is_active ? "" : "muted"}>
-                <td>{m.full_name}</td>
-                <td>{m.email}</td>
-                <td>
-                  <span className="badge">{m.role}</span>
-                </td>
-                <td>{m.is_active ? "active" : "inactive"}</td>
-                {isOwner && (
-                  <td>
-                    {editable ? (
-                      <>
-                        {m.role === "member" ? (
-                          <button onClick={() => patch(m.id, { role: "admin" })}>
-                            Make admin
-                          </button>
-                        ) : (
-                          <button onClick={() => patch(m.id, { role: "member" })}>
-                            Make member
-                          </button>
-                        )}
-                        {m.is_active ? (
-                          <button onClick={() => patch(m.id, { is_active: false })}>
-                            Deactivate
-                          </button>
-                        ) : (
-                          <button onClick={() => patch(m.id, { is_active: true })}>
-                            Reactivate
-                          </button>
-                        )}
-                      </>
-                    ) : (
-                      <span className="muted">—</span>
-                    )}
-                  </td>
-                )}
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
+    <div className="adm-view">
+      <div className="adm-head">
+        <div>
+          <h2>Team</h2>
+          <p className="adm-sub">Manage who can access your organization.</p>
+        </div>
+      </div>
+
+      {error && <Alert tone="danger">{error}</Alert>}
+
+      <DataTable<TeamMember>
+        rows={members ?? []}
+        rowKey={(m) => m.id}
+        loading={members == null}
+        emptyMessage="No team members yet."
+        columns={columns}
+      />
+
       <AddMemberForm session={session} onAdded={load} />
     </div>
   );
@@ -431,7 +549,7 @@ function AddMemberForm({
 
   return (
     <form
-      className="add-member"
+      className="card adm-invite"
       onSubmit={async (e) => {
         e.preventDefault();
         setError(null);
@@ -447,36 +565,58 @@ function AddMemberForm({
         }
       }}
     >
-      <h3>Invite a team member</h3>
-      <input
-        placeholder="Full name"
-        value={fullName}
-        onChange={(e) => setFullName(e.target.value)}
-        required
-      />
-      <input
-        placeholder="Email"
-        type="email"
-        value={email}
-        onChange={(e) => setEmail(e.target.value)}
-        required
-      />
-      <input
-        placeholder="Temporary password (min 8 chars)"
-        type="password"
-        value={password}
-        onChange={(e) => setPassword(e.target.value)}
-        required
-      />
-      <select value={role} onChange={(e) => setRole(e.target.value as "admin" | "member")}>
-        {roles.map((r) => (
-          <option key={r} value={r}>
-            {r}
-          </option>
-        ))}
-      </select>
-      <button type="submit">Add member</button>
-      {error && <p className="error">{error}</p>}
+      <h3 className="adm-invite-title">Invite a team member</h3>
+      <p className="adm-sub">
+        Creates the account with a temporary password you set and share.
+      </p>
+      <div className="adm-invite-grid">
+        <Field label="Full name">
+          <input
+            className="input"
+            value={fullName}
+            onChange={(e) => setFullName(e.target.value)}
+            required
+          />
+        </Field>
+        <Field label="Email">
+          <input
+            className="input"
+            type="email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            required
+          />
+        </Field>
+        <Field label="Temporary password" description="Minimum 8 characters.">
+          <input
+            className="input"
+            type="password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            minLength={8}
+            required
+          />
+        </Field>
+        <Field label="Role">
+          <select
+            className="select"
+            value={role}
+            onChange={(e) => setRole(e.target.value as "admin" | "member")}
+          >
+            {roles.map((r) => (
+              <option key={r} value={r}>
+                {r}
+              </option>
+            ))}
+          </select>
+        </Field>
+      </div>
+      <div className="adm-invite-foot">
+        <Button type="submit" variant="primary">
+          Add member
+        </Button>
+        {error && <Alert tone="danger">{error}</Alert>}
+      </div>
     </form>
   );
 }

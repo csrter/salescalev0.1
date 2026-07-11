@@ -1,1 +1,246 @@
-/* manage.css — .mg-* manage + google + creatives + integrations (spec §3.3, §7). Owner: manage view agent. */
+/* ==========================================================================
+   manage.css — .mg-* layout/composition for the ad-account write surface:
+   manage (pending changes / audit), google (keywords / search terms / asset
+   groups), creatives (gallery + preview), integrations (BYO credentials).
+   Primitives (.card, .table, .badge, .chip, .btn, .field, .alert, .dialog,
+   .seg, .empty) live in components/ui.css. This file is layout only —
+   tokens only, no color literals, never restyles a primitive's internals.
+   (DESIGN.md §3.3, §7 "Manage / Google / Creatives / Integrations".)
+   ========================================================================== */
+
+/* ---- page header & rhythm ------------------------------------------------ */
+
+.mg-view {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+}
+
+.mg-head h2 {
+  margin: 0;
+  font-size: var(--text-2xl);
+  font-weight: var(--weight-bold);
+  letter-spacing: var(--tracking-tight);
+  color: var(--ink);
+}
+
+.mg-sub {
+  margin: var(--space-1) 0 0;
+  font-size: var(--text-sm);
+  color: var(--ink-soft);
+}
+
+/* ---- sub-entity panels (google keywords / search terms / asset groups) ---
+   These render nested under a campaign/ad-group row, so they stack their
+   table and inline form with a little breathing room. Replaces .subpanel. */
+
+.mg-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+/* ---- inline staging forms (add keyword, new creative) -------------------- */
+
+.mg-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--space-3);
+}
+
+.mg-form--column {
+  flex-direction: column;
+  align-items: stretch;
+}
+
+/* A single field cell in a row form keeps its natural width but can grow. */
+.mg-form-cell {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.mg-form-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+/* Inline checkbox + label (e.g. "Negative keyword"). */
+.mg-check {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-sm);
+  color: var(--ink);
+  white-space: nowrap;
+}
+
+.mg-check input {
+  accent-color: var(--accent);
+  width: 16px;
+  height: 16px;
+}
+
+/* Right-aligned cell for row-level table actions. */
+.mg-row-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  justify-content: flex-end;
+}
+
+/* Left-aligned inline cell content (badge + label in one table cell). */
+.mg-cell-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+/* ---- creatives gallery --------------------------------------------------- */
+
+.mg-gallery {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+  gap: var(--space-4);
+}
+
+.mg-creative {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: 0;
+  overflow: hidden;
+}
+
+/* Aspect box keeps thumbnails uniform; the overlay reveals the action. */
+.mg-creative-thumb {
+  position: relative;
+  aspect-ratio: 4 / 3;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  overflow: hidden;
+}
+
+.mg-creative-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+/* Placeholder monogram when there's no thumbnail. */
+.mg-creative-thumb--empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--ink-faint);
+}
+
+.mg-creative-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--scrim);
+  opacity: 0;
+  transition: opacity var(--dur-fast) var(--ease-out);
+}
+
+.mg-creative:hover .mg-creative-overlay,
+.mg-creative-overlay:focus-within {
+  opacity: 1;
+}
+
+.mg-creative-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: 0 var(--space-4) var(--space-4);
+}
+
+.mg-creative-name {
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mg-creative-title {
+  font-size: var(--text-xs);
+  color: var(--ink-soft);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---- placement preview (inside the Dialog) ------------------------------- */
+
+.mg-preview-frame {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: var(--space-3);
+  min-height: 240px;
+  overflow: auto;
+}
+
+.mg-preview-frame :where(iframe, img) {
+  max-width: 100%;
+}
+
+/* ---- integrations (BYO app credentials) ---------------------------------- */
+
+.mg-integrations {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
+  gap: var(--space-4);
+}
+
+.mg-integration {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.mg-integration-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.mg-integration-title {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.mg-form-grid {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.mg-integration-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--border);
+}
+
+.mg-appid {
+  font-size: var(--text-xs);
+  color: var(--ink-soft);
+}
+
+.mg-appid code {
+  font-family: var(--font-mono);
+  color: var(--ink);
+}

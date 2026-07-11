@@ -10,7 +10,7 @@
  * DNS-TXT-based server-side — nothing here can skip it.
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, type CSSProperties } from "react";
 import {
   clearCustomDomain,
   clearOrgBranding,
@@ -22,11 +22,14 @@ import {
   type OrgBranding,
 } from "./api";
 import { useToast } from "./components/Toast";
-import { Badge, Field, SkeletonText } from "./components/ui";
+import { Alert, Badge, Button, Field, SkeletonText } from "./components/ui";
 import { refreshBranding, safeBrandUrl } from "./theme";
+import "./styles/views/settings.css";
 
 /** Color keys the backend accepts (services/branding.py BRAND_COLOR_KEYS),
- * with the neutral defaults shown when a tenant hasn't overridden them. */
+ * with the neutral defaults shown when a tenant hasn't overridden them.
+ * These hexes are DATA (grep-gate allowlisted), also seeded into the live
+ * preview so an un-staged palette still renders coherently. */
 const COLOR_FIELDS: { key: string; label: string; fallback: string }[] = [
   { key: "primary", label: "Primary", fallback: "#4f46e5" },
   { key: "primary_strong", label: "Primary (hover)", fallback: "#4338ca" },
@@ -34,6 +37,9 @@ const COLOR_FIELDS: { key: string; label: string; fallback: string }[] = [
   { key: "header_start", label: "Sidebar top", fallback: "#10152e" },
   { key: "header_end", label: "Sidebar bottom", fallback: "#0b0f21" },
 ];
+
+const fallbackFor = (key: string) =>
+  COLOR_FIELDS.find((f) => f.key === key)?.fallback ?? "#4f46e5";
 
 export function BrandingSettings() {
   const toast = useToast();
@@ -53,11 +59,21 @@ export function BrandingSettings() {
     load();
   }, []);
 
-  if (error) return <p className="error">{error}</p>;
+  if (error && !config)
+    return (
+      <div className="branding-settings">
+        <div className="set-page-head">
+          <div>
+            <h2>Branding</h2>
+          </div>
+        </div>
+        <Alert tone="danger">{error}</Alert>
+      </div>
+    );
   if (!config || !form)
     return (
-      <div>
-        <div className="page-head">
+      <div className="branding-settings">
+        <div className="set-page-head">
           <div>
             <h2>Branding</h2>
           </div>
@@ -115,12 +131,27 @@ export function BrandingSettings() {
 
   const logoPreview = safeBrandUrl(form.logo_url);
 
+  // Staged palette → inline vars on the preview container ONLY (never <html>).
+  // Mirrors theme.ts BRAND_VAR_MAP: primary → --accent/--brand-blue,
+  // header_* → --header-*. --accent-strong/-soft are only pinned when the
+  // tenant explicitly staged them (matching save); otherwise settings.css
+  // re-derives the whole accent family from --accent so the preview re-keys.
+  const c = form.colors;
+  const previewVars = {
+    "--accent": c.primary ?? fallbackFor("primary"),
+    "--brand-blue": c.primary ?? fallbackFor("primary"),
+    "--header-start": c.header_start ?? fallbackFor("header_start"),
+    "--header-end": c.header_end ?? fallbackFor("header_end"),
+    ...(c.primary_strong ? { "--accent-strong": c.primary_strong } : {}),
+    ...(c.primary_soft ? { "--accent-soft": c.primary_soft } : {}),
+  } as CSSProperties;
+
   return (
     <div className="branding-settings">
-      <div className="page-head">
+      <div className="set-page-head">
         <div>
           <h2>Branding</h2>
-          <p className="page-sub">
+          <p className="set-page-sub">
             What your clients see: your name, logo and colors anywhere they
             interact with the platform.
           </p>
@@ -128,14 +159,14 @@ export function BrandingSettings() {
       </div>
 
       {!config.white_labeling_available && (
-        <p className="notice">
+        <Alert tone="warn">
           White-labeling isn't included in your current plan.
-        </p>
+        </Alert>
       )}
 
-      <section>
+      <section className="set-section card">
         <h3>Identity</h3>
-        <div className="form-grid branding-form">
+        <div className="set-form">
           <Field label="Product name">
             <input
               value={form.product_name}
@@ -152,7 +183,7 @@ export function BrandingSettings() {
           </Field>
           {logoPreview && (
             <img
-              className="brand-logo branding-preview"
+              className="set-logo-preview"
               src={logoPreview}
               alt="Logo preview"
               height={30}
@@ -165,7 +196,7 @@ export function BrandingSettings() {
               onChange={(e) => set({ favicon_url: e.target.value || null })}
             />
           </Field>
-          <label className="crm-check">
+          <label className="set-check">
             <input
               type="checkbox"
               checked={form.apply_to_team}
@@ -176,33 +207,79 @@ export function BrandingSettings() {
         </div>
       </section>
 
-      <section>
+      <section className="set-section card">
         <h3>Colors</h3>
-        <div className="branding-colors">
+        <div className="set-colors">
           {COLOR_FIELDS.map(({ key, label, fallback }) => (
-            <div key={key} className="branding-color">
+            <div key={key} className="set-color">
               <input
+                id={`brand-color-${key}`}
                 type="color"
                 value={form.colors[key] ?? fallback}
                 onChange={(e) => setColor(key, e.target.value)}
-                title={label}
               />
-              <span>{label}</span>
+              <label htmlFor={`brand-color-${key}`} className="set-color-name">
+                {label}
+              </label>
               {form.colors[key] ? (
-                <button className="link" onClick={() => setColor(key, null)}>
+                <Button variant="link" onClick={() => setColor(key, null)}>
                   reset
-                </button>
+                </Button>
               ) : (
-                <span className="muted">default</span>
+                <span className="set-color-flag">default</span>
               )}
             </div>
           ))}
         </div>
       </section>
 
-      <section>
+      <div className="set-section">
+        <h3>Live preview</h3>
+        <p className="set-note">
+          Exactly how these colors render across the app — updates as you edit,
+          before you save. Watch that button and accent text stay legible.
+        </p>
+        <div
+          className="card set-preview"
+          style={previewVars}
+          role="img"
+          aria-label="Live preview of your branding applied to the app chrome"
+        >
+          <div className="set-preview-chrome" aria-hidden="true">
+            <aside className="set-preview-side">
+              <span className="set-preview-logo">
+                {(form.product_name || "Salescale").trim()}
+              </span>
+              <span className="set-preview-nav set-preview-nav--active">
+                Dashboard
+              </span>
+              <span className="set-preview-nav">Clients</span>
+              <span className="set-preview-nav">Reports</span>
+            </aside>
+            <div className="set-preview-main">
+              <div className="kpi">
+                <div className="kpi-label">Blended spend</div>
+                <div className="kpi-value">$48.2K</div>
+                <span className="kpi-delta kpi-delta--good">+12.4% vs prev 30d</span>
+              </div>
+              <div className="set-preview-table">
+                <div className="set-preview-tr">Paganelli HVAC</div>
+                <div className="set-preview-tr set-preview-tr--sel">
+                  Northside Plumbing
+                </div>
+              </div>
+              <div className="set-preview-controls">
+                <span className="btn btn--primary">Save changes</span>
+                <span className="badge badge--accent">Qualified</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <section className="set-section card">
         <h3>Branded email</h3>
-        <div className="form-grid branding-form">
+        <div className="set-form">
           <Field label="From name" optional>
             <input
               placeholder="Atlas Reach Reports"
@@ -220,21 +297,21 @@ export function BrandingSettings() {
               }
             />
           </Field>
-          <p className="muted footnote">
+          <p className="set-footnote">
             Client-facing email uses this sender once the domain is verified
             with the email provider; otherwise it falls back to the default.
           </p>
         </div>
       </section>
 
-      {error && <p className="error">{error}</p>}
-      <div className="inline-form">
-        <button className="primary" disabled={busy} onClick={save}>
-          {busy ? "Saving…" : "Save branding"}
-        </button>
-        <button className="ghost" disabled={busy} onClick={reset}>
+      {error && <Alert tone="danger">{error}</Alert>}
+      <div className="set-actions">
+        <Button variant="primary" busy={busy} disabled={busy} onClick={save}>
+          Save branding
+        </Button>
+        <Button variant="ghost" disabled={busy} onClick={reset}>
           Reset to defaults
-        </button>
+        </Button>
       </div>
 
       <CustomDomainPanel
@@ -261,6 +338,11 @@ function CustomDomainPanel({
   const [note, setNote] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  // Re-sync the input if the server normalized/cleared the domain on reload.
+  useEffect(() => {
+    setDomain(state.domain ?? "");
+  }, [state.domain]);
+
   const run = async (fn: () => Promise<string | null>) => {
     setBusy(true);
     setError(null);
@@ -277,27 +359,29 @@ function CustomDomainPanel({
   };
 
   return (
-    <section>
+    <section className="set-section card">
       <h3>
         Custom domain{" "}
         {state.domain &&
           (state.verified ? (
             <Badge tone="ok">verified</Badge>
           ) : (
-            <Badge tone="pending">pending verification</Badge>
+            <Badge tone="info">pending verification</Badge>
           ))}
       </h3>
-      <p className="muted">
+      <p className="set-note">
         Serve the platform from your own domain (e.g.{" "}
         <code>ads.youragency.com</code>) so clients log in under your brand.
       </p>
-      <div className="inline-form">
-        <input
-          placeholder="ads.youragency.com"
-          value={domain}
-          onChange={(e) => setDomain(e.target.value)}
-        />
-        <button
+      <div className="set-domain">
+        <Field label="Domain" optional>
+          <input
+            placeholder="ads.youragency.com"
+            value={domain}
+            onChange={(e) => setDomain(e.target.value)}
+          />
+        </Field>
+        <Button
           disabled={busy || !domain || !available}
           onClick={() =>
             run(async () => {
@@ -307,10 +391,10 @@ function CustomDomainPanel({
           }
         >
           {state.domain ? "Change domain" : "Claim domain"}
-        </button>
+        </Button>
         {state.domain && (
           <>
-            <button
+            <Button
               disabled={busy}
               onClick={() =>
                 run(async () => {
@@ -324,9 +408,9 @@ function CustomDomainPanel({
               }
             >
               Verify
-            </button>
-            <button
-              className="link danger"
+            </Button>
+            <Button
+              variant="link"
               disabled={busy}
               onClick={() =>
                 run(async () => {
@@ -337,19 +421,27 @@ function CustomDomainPanel({
               }
             >
               Remove
-            </button>
+            </Button>
           </>
         )}
       </div>
       {state.domain && !state.verified && state.verification_token && (
-        <p className="muted footnote">
+        <p className="set-footnote">
           Create a DNS TXT record at <code>{state.txt_record_name}</code>{" "}
           containing <code>{state.verification_token}</code>, point the domain
           at your deployment, then click Verify.
         </p>
       )}
-      {note && <p className="muted">{note}</p>}
-      {error && <p className="error">{error}</p>}
+      {note && (
+        <Alert tone="info" className="set-mt">
+          {note}
+        </Alert>
+      )}
+      {error && (
+        <Alert tone="danger" className="set-mt">
+          {error}
+        </Alert>
+      )}
     </section>
   );
 }

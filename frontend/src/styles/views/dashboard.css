@@ -1,1 +1,408 @@
-/* dashboard.css — .dash-* layout/composition only (spec §3.3, §7). Owner: dashboard view agent. */
+/* dashboard.css — .dash-* layout/composition only (spec §3.3, §7). Owner: dashboard view agent.
+   Layout + composition only: it arranges primitives (.card, .kpi, .table, charts,
+   .btn, .badge, .field) and never restyles their internals or declares raw colors.
+
+   HARD INVARIANT: the widget grid is a 12-column grid with 120px auto-rows and a
+   12px (var(--space-3)) gap. dashboard.tsx's pointer-resize math reads
+   grid.clientWidth and assumes exactly these constants (COLS=12, ROW_PX=120,
+   GAP_PX=12) — do not change columns/gap/row height here without updating that
+   math in lockstep. The grid has no inline padding so clientWidth == track box. */
+
+.dash {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+}
+
+/* ---- toolbar ------------------------------------------------------------- */
+
+.dash-toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
+
+.dash-toolbar h3 {
+  margin: 0;
+  font-size: var(--text-xl);
+  font-weight: var(--weight-semibold);
+  color: var(--ink);
+}
+
+/* live status tick — mono, quiet, doubles as the SR write-feedback channel */
+.dash-status {
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  color: var(--ink-faint);
+}
+
+.dash-status--error {
+  color: var(--danger);
+}
+
+.dash-note {
+  font-size: var(--text-xs);
+  color: var(--ink-soft);
+}
+
+.dash-actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+/* ---- widget grid --------------------------------------------------------- */
+
+.dash-grid {
+  display: grid;
+  grid-template-columns: repeat(12, 1fr);
+  grid-auto-rows: 120px;
+  grid-auto-flow: row dense;
+  gap: var(--space-3);
+}
+
+/* Widget = solid .card chrome (data surface), but we own the internal layout
+   so we zero the .card padding and manage header/body/handle ourselves. */
+.card.dash-widget {
+  padding: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+/* Drop placeholder: the dragged card shows the ghost wash + dashed accent line
+   in place, since the reorder splices it live to the hovered slot. */
+.dash-widget.dragging {
+  opacity: 0.5;
+  background: var(--accent-ghost);
+  outline: 2px dashed var(--accent-line);
+  outline-offset: -2px;
+}
+
+.dash-widget-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.dash-widget-head h4 {
+  margin: 0;
+  flex: 1;
+  min-width: 0;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 6-dot grip: the drag handle. Visible on hover; always visible on touch. */
+.dash-grip {
+  display: inline-flex;
+  align-items: center;
+  color: var(--ink-faint);
+  cursor: grab;
+  opacity: 0;
+  transition: opacity var(--dur-fast) var(--ease-out);
+}
+
+.dash-widget-head:hover .dash-grip,
+.dash-grip:focus-visible {
+  opacity: 1;
+}
+
+.dash-widget-head[draggable="true"]:active .dash-grip {
+  cursor: grabbing;
+}
+
+@media (hover: none) {
+  .dash-grip {
+    opacity: 1;
+  }
+}
+
+/* Remove button hidden until the card is hovered or the button is focused
+   (keyboard users reach it) — never opacity:0-but-focusable-invisible. */
+.dash-widget-remove {
+  opacity: 0;
+  transition: opacity var(--dur-fast) var(--ease-out);
+}
+
+.dash-widget:hover .dash-widget-remove,
+.dash-widget-remove:focus-visible {
+  opacity: 1;
+}
+
+.dash-widget-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+/* Corner resize affordance (12px chevron). Pointer-driven; math in dashboard.tsx. */
+.dash-resize {
+  position: absolute;
+  right: 2px;
+  bottom: 2px;
+  width: 18px;
+  height: 18px;
+  display: flex;
+  align-items: flex-end;
+  justify-content: flex-end;
+  color: var(--ink-faint);
+  cursor: nwse-resize;
+  touch-action: none;
+}
+
+.dash-resize:hover {
+  color: var(--ink-soft);
+}
+
+/* ---- keyboard Arrange mode ---------------------------------------------- */
+
+.dash-grid--arrange .dash-widget {
+  cursor: default;
+}
+
+.dash-widget--arrange {
+  outline: 1px dashed var(--accent-line);
+  outline-offset: -1px;
+}
+
+.dash-widget--arrange:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.dash-arrange-hint {
+  font-size: var(--text-xs);
+  color: var(--ink-soft);
+}
+
+/* ---- add-widget menu ----------------------------------------------------- */
+
+.dash-add {
+  position: relative;
+}
+
+.dash-add-menu {
+  position: absolute;
+  right: 0;
+  top: calc(100% + var(--space-1));
+  z-index: var(--z-dropdown);
+  min-width: 220px;
+  padding: var(--space-1);
+  display: flex;
+  flex-direction: column;
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-pop);
+}
+
+.dash-add-item {
+  appearance: none;
+  text-align: left;
+  border: none;
+  background: transparent;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-sans);
+  font-size: var(--text-sm);
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.dash-add-item:hover {
+  background: var(--accent-ghost);
+  color: var(--accent-ink);
+}
+
+.dash-add-item:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+/* ---- widget-internal composition ---------------------------------------- */
+
+.dash-muted {
+  font-size: var(--text-sm);
+  color: var(--ink-soft);
+}
+
+.dash-footnote {
+  margin: 0;
+  font-size: var(--text-xs);
+  color: var(--ink-faint);
+}
+
+.dash-chart-toolbar {
+  display: flex;
+  justify-content: flex-end;
+}
+
+/* alert/flag lists (creative fatigue, quality, reconciliation notes) */
+.dash-flags {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.dash-flag {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-sm);
+  color: var(--ink);
+}
+
+.dash-flag-sub {
+  color: var(--ink-soft);
+  font-size: var(--text-xs);
+}
+
+/* guarantee tracker */
+.dash-guarantee {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.dash-guarantee-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.dash-guarantee-name {
+  font-size: var(--text-md);
+  font-weight: var(--weight-semibold);
+  color: var(--ink);
+}
+
+.dash-progress {
+  position: relative;
+  height: 10px;
+  border-radius: var(--radius-full);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  overflow: hidden;
+}
+
+.dash-progress-fill {
+  height: 100%;
+  border-radius: var(--radius-full);
+  background: var(--accent);
+  transition: width var(--dur-med) var(--ease-out);
+}
+
+.dash-progress-fill--behind {
+  background: var(--warn);
+}
+
+/* straight-line pace marker sits above the fill; overflow:hidden clips it to
+   the track, so it must not be clipped — render it as a sibling overlay */
+.dash-progress-pace {
+  position: absolute;
+  top: -2px;
+  bottom: -2px;
+  width: 2px;
+  background: var(--ink-soft);
+}
+
+.dash-guarantee-numbers {
+  font-size: var(--text-sm);
+  color: var(--ink);
+}
+
+.dash-guarantee-numbers strong {
+  font-variant-numeric: tabular-nums;
+}
+
+.dash-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+/* utm builder */
+.dash-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.dash-form-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  align-items: flex-end;
+}
+
+.dash-form-row > .field {
+  flex: 1 1 160px;
+  min-width: 0;
+}
+
+.dash-result {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.dash-result code {
+  flex: 1;
+  min-width: 0;
+  overflow-x: auto;
+  white-space: nowrap;
+  padding: var(--space-2) var(--space-3);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--ink);
+}
+
+.dash-emq {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.dash-emq-label {
+  font-size: var(--text-sm);
+  color: var(--ink-soft);
+}
+
+/* ---- narrow screens: single-column, resize disabled --------------------- */
+
+@media (max-width: 780px) {
+  .dash-grid {
+    grid-template-columns: 1fr;
+  }
+  .dash-resize {
+    display: none;
+  }
+}
