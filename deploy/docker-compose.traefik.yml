@@ -1,0 +1,54 @@
+# Alternative to docker-compose.prod.yml for a VPS that ALREADY runs a
+# Traefik reverse proxy (e.g. Hostinger's "Docker" VPS template ships one).
+# No Caddy here — Traefik discovers these two containers via Docker labels
+# and handles TLS itself, the same way it already routes any other app on
+# the box. The existing Traefik service is untouched.
+#
+# The labels below assume a Traefik configured like Hostinger's default:
+#   --providers.docker=true --providers.docker.exposedbydefault=false
+#   --entrypoints.web.address=:80  --entrypoints.websecure.address=:443
+#   --certificatesresolvers.letsencrypt.acme.httpchallenge=true
+# If your Traefik's entrypoint or resolver names differ, check its
+# docker-compose.yml (grep for --entrypoints./--certificatesresolvers.) and
+# adjust `entrypoints=` / `certresolver=` below to match.
+#
+# Backend/frontend publish NO ports to the host — Traefik reaches them over
+# the Docker network by container IP (it can do this from host network mode
+# regardless of which bridge network they're on), the same isolation
+# property docker-compose.prod.yml gets from Caddy being the only bound port.
+#
+# Usage (from this directory):
+#   cp .env.example .env                          # fill in your domains
+#   cp ../.env.example ../backend/.env             # fill in secrets — see DEPLOYMENT.md
+#   docker compose -f docker-compose.traefik.yml up -d --build
+
+services:
+  backend:
+    build: ../backend
+    env_file:
+      - ../backend/.env
+    restart: unless-stopped
+    expose:
+      - "8000"
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.salescale-api.rule=Host(`${API_DOMAIN}`)
+      - traefik.http.routers.salescale-api.entrypoints=websecure
+      - traefik.http.routers.salescale-api.tls.certresolver=letsencrypt
+      - traefik.http.services.salescale-api.loadbalancer.server.port=8000
+
+  frontend:
+    build:
+      context: ../frontend
+      args:
+        # Baked into the static build — must be the API's public HTTPS URL.
+        VITE_API_URL: ${VITE_API_URL}
+    restart: unless-stopped
+    expose:
+      - "80"
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.salescale-app.rule=Host(`${APP_DOMAIN}`)
+      - traefik.http.routers.salescale-app.entrypoints=websecure
+      - traefik.http.routers.salescale-app.tls.certresolver=letsencrypt
+      - traefik.http.services.salescale-app.loadbalancer.server.port=80

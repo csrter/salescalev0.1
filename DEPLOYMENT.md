@@ -189,6 +189,19 @@ sudo systemctl restart docker
 
 ### D. Deploy the stack
 
+**First, check whether this VPS already runs a reverse proxy.** Hostinger's
+"Docker" VPS template (and some other one-click app catalogs) ship with
+Traefik pre-installed and already bound to 80/443:
+
+```bash
+sudo ss -tlnp | grep -E ':80|:443'
+docker ps --format '{{.Names}}\t{{.Image}}'
+```
+
+If something's already listening there, use `docker-compose.traefik.yml`
+(labels-only — it doesn't touch the existing proxy). If 80/443 are free, use
+`docker-compose.prod.yml` (brings its own Caddy). Pick one:
+
 ```bash
 git clone <your fork/repo URL> salescale && cd salescale
 
@@ -198,14 +211,29 @@ cp .env.example backend/.env
 nano backend/.env
 chmod 600 backend/.env
 
-# Domains + Caddy's cert-notice email.
+# Domains (+ Caddy's cert-notice email, if using the Caddy variant).
 cp deploy/.env.example deploy/.env
 nano deploy/.env
 
 cd deploy
+```
+
+**Fresh VPS, nothing on 80/443 (Caddy owns the ports):**
+```bash
 docker compose -f docker-compose.prod.yml up -d --build
 docker compose -f docker-compose.prod.yml logs -f caddy   # watch cert issuance succeed
 ```
+
+**Existing Traefik already on 80/443 (labels only, no proxy service of our own):**
+```bash
+docker compose -f docker-compose.traefik.yml up -d --build
+docker logs -f <your-traefik-container-name>   # watch it pick up the two new routers
+```
+The labels in `docker-compose.traefik.yml` assume entrypoints named
+`web`/`websecure` and a cert resolver named `letsencrypt` (Hostinger's
+default). If your Traefik's `--entrypoints.`/`--certificatesresolvers.` flags
+use different names, check its compose file and adjust
+`entrypoints=`/`certresolver=` in the labels to match.
 
 Verify: `curl https://api.yourdomain.com/api/health` → `{"ok": true}`, and
 `https://app.yourdomain.com` loads the login screen over a valid cert. Then
@@ -213,12 +241,8 @@ follow **OAuth redirect URIs** in step 1 above to register the four callback
 URLs on your Meta/Google apps before connecting any ad account or testing
 social sign-in.
 
-**Redeploying after a `git pull`:**
-
-```bash
-cd salescale && git pull
-cd deploy && docker compose -f docker-compose.prod.yml up -d --build
-```
+**Redeploying after a `git pull`:** re-run whichever `up -d --build` command
+you used above.
 
 ### E. Ongoing
 
