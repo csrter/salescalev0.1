@@ -42,14 +42,11 @@ from ..security import hash_password
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
 
-def _counts_by_org(db: Session, model) -> dict:
-    return dict(
-        db.execute(
-            select(model.organization_id, func.count()).group_by(
-                model.organization_id
-            )
-        ).all()
-    )
+def _counts_by_org(db: Session, model, where=None) -> dict:
+    stmt = select(model.organization_id, func.count())
+    if where is not None:
+        stmt = stmt.where(where)
+    return dict(db.execute(stmt.group_by(model.organization_id)).all())
 
 
 @router.get("/stats", response_model=AdminStats)
@@ -59,7 +56,11 @@ def platform_stats(_: User = Depends(require_superadmin), db: Session = Depends(
     return AdminStats(
         organizations=scalar(select(func.count()).select_from(Organization)),
         users=scalar(select(func.count()).select_from(User)),
-        clients=scalar(select(func.count()).select_from(Client)),
+        clients=scalar(
+            select(func.count())
+            .select_from(Client)
+            .where(Client.is_house.is_(False))  # exclude agency house pipelines
+        ),
         active_connections=scalar(
             select(func.count())
             .select_from(PlatformConnection)
@@ -109,7 +110,9 @@ def list_organizations(
     # Aggregate each usage count once, then stitch onto the org list — avoids an
     # N+1 over every organization.
     users = _counts_by_org(db, User)
-    clients = _counts_by_org(db, Client)
+    # House clients are internal prospect pipelines, not billed clients — keep
+    # them out of the operator's per-org client counts.
+    clients = _counts_by_org(db, Client, where=Client.is_house.is_(False))
     conns = _counts_by_org(db, PlatformConnection)
     contacts = _counts_by_org(db, Contact)
     orgs = (
@@ -157,7 +160,7 @@ def organization_detail(
     clients = (
         db.execute(
             select(Client)
-            .where(Client.organization_id == org_id)
+            .where(Client.organization_id == org_id, Client.is_house.is_(False))
             .order_by(Client.created_at)
         )
         .scalars()

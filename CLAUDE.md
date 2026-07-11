@@ -196,6 +196,21 @@ Build proceeds against dev-mode API; go-live gates on Meta App Review.
       Frontend: FieldManager in CRM setup, custom-field render/edit in the
       contact drawer + new-contact form, custom columns + filter bar +
       CSV import dialog in the lead list (src/crm_custom.tsx).
+- [x] House CRM (post-Phase-14 addition): the agency's own prospect
+      pipeline, surfaced as a top-level team-only "CRM" nav item. Modeled
+      as one synthetic Client row per org flagged `clients.is_house`
+      (migration d4e8f2a9b1c3, partial unique index — one per org), so
+      the entire existing CRM (board, contacts, deals, custom fields,
+      CSV import) runs against it unchanged. GET /api/orgs/me/house-client
+      (require_team) gets-or-creates it, race-safe via the unique index +
+      IntegrityError re-read. House clients are excluded from the client
+      roster (api/clients), the client-cap entitlement count, and all
+      admin counts/lists; they never have a portal user, so client-role
+      access is impossible through TenantScope's client pin. Frontend:
+      "crm" tab in App.tsx (Workspace section, show: isTeam) lazily
+      resolves the house id on first open and mounts the existing CrmView.
+      Tests: backend/tests/test_house_crm.py. Feeds the Outreach module
+      and Phase 12 Lead Finder (house CRM is where found leads land).
 - [ ] Phase 12 — Lead Finder & email verification
 - [ ] Stripe live activation + entitlement flip (after 12–14, so real
       limits land everywhere in one pass)

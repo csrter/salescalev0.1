@@ -128,6 +128,14 @@ class Client(Base):
     metric_settings: Mapped[Optional[dict]] = mapped_column(JSON)
     # Organization-internal — must never be serialized to client-role users.
     internal_notes: Mapped[Optional[str]] = mapped_column(Text)
+    # The Organization's own prospect pipeline (the agency "house" CRM) lives on
+    # a single synthetic Client row flagged here — one per org, hidden from the
+    # client roster/counts and never billed as a client, never given a portal
+    # user. The existing CRM then runs against it unchanged (see
+    # api/orgs get_house_client).
+    is_house: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=text("false"), nullable=False
+    )
     created_at: Mapped[dt.datetime] = created_at_column()
 
     connections: Mapped[list] = relationship(

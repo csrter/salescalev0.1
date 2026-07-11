@@ -45,7 +45,7 @@
       "runtimeExecutable": "sh",
       "runtimeArgs": [
         "-c",
-        "DATABASE_URL=sqlite:///./dev-alt2.db FRONTEND_ORIGIN=http://localhost:5193 exec backend/.venv/bin/uvicorn app.main:app --port 8020 --app-dir backend"
+        "DATABASE_URL=sqlite:///./dev-alt2.db FRONTEND_ORIGIN=http://localhost:5193 exec backend/venv/bin/uvicorn app.main:app --port 8020 --app-dir backend"
       ],
       "port": 8020
     },

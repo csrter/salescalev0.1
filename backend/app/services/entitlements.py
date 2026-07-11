@@ -44,7 +44,11 @@ def enforce_can_add_client(db: Session, org: Organization) -> None:
     if cap is None:
         return
     count = db.execute(
-        select(func.count()).select_from(Client).where(Client.organization_id == org.id)
+        select(func.count())
+        .select_from(Client)
+        # The house client is the org's own prospect pipeline, not a billed
+        # client — it must never consume a plan slot.
+        .where(Client.organization_id == org.id, Client.is_house.is_(False))
     ).scalar_one()
     if count >= cap:
         raise HTTPException(

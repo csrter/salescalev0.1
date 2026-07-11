@@ -15,6 +15,7 @@ import {
   TEAM_ROLES,
   api,
   createClient,
+  getHouseClient,
   getPlatforms,
   getSession,
   isMfaChallenge,
@@ -86,6 +87,7 @@ import {
   Settings,
   Shield,
   Sun,
+  Table2,
   Users,
   type LucideIcon,
 } from "./components/icons";
@@ -124,6 +126,7 @@ function pingSave(phase: "saving" | "saved" | "error") {
 
 type Tab =
   | "clients"
+  | "crm"
   | "outreach"
   | "changes"
   | "audit"
@@ -136,6 +139,7 @@ type Tab =
 
 const PAGE_TITLES: Record<Tab, string> = {
   clients: "Clients",
+  crm: "CRM",
   outreach: "Outreach",
   changes: "Pending changes",
   audit: "Audit log",
@@ -253,6 +257,25 @@ export default function App() {
     applyDensity(isTeamRole);
   }, [isTeamRole]);
 
+  // The org's "house" CRM (the agency's own prospect pipeline) mounts CrmView
+  // against a hidden client the server gets-or-creates. Resolve its id lazily —
+  // only the first time a team user opens the CRM tab, never for the Client
+  // role. Bump retries on error. (Declared before the early returns — hooks.)
+  const [houseId, setHouseId] = useState<string | null>(null);
+  const [houseErr, setHouseErr] = useState<string | null>(null);
+  const [houseBump, setHouseBump] = useState(0);
+  useEffect(() => {
+    if (tab !== "crm" || !isTeamRole || houseId) return;
+    let alive = true;
+    setHouseErr(null);
+    getHouseClient()
+      .then((r) => alive && setHouseId(r.client_id))
+      .catch((e) => alive && setHouseErr((e as Error).message));
+    return () => {
+      alive = false;
+    };
+  }, [tab, isTeamRole, houseId, houseBump]);
+
   if (oauthBusy)
     return (
       <div className="auth-center">
@@ -329,6 +352,7 @@ export default function App() {
   // both consume this same filtered list.
   const nav: NavItem[] = [
     { key: "clients", label: "Clients", icon: Building2, section: "Workspace", show: true },
+    { key: "crm", label: "CRM", icon: Table2, section: "Workspace", show: isTeam },
     { key: "outreach", label: "Outreach", icon: Send, section: "Workspace", show: isTeam },
     { key: "changes", label: "Pending changes", icon: GitBranch, section: "Ads", show: isTeam },
     { key: "audit", label: "Audit log", icon: Eye, section: "Ads", show: true },
@@ -442,6 +466,37 @@ export default function App() {
                     onSelect={setSelectedClient}
                   />
                 )}
+                {tab === "crm" &&
+                  isTeam &&
+                  (houseId ? (
+                    <CrmView clientId={houseId} session={session} />
+                  ) : houseErr ? (
+                    <section className="crm">
+                      <Alert tone="danger" title="Couldn't load the CRM">
+                        <div className="crm-alert-body">
+                          <span>{houseErr}</span>
+                          <Button
+                            size="sm"
+                            onClick={() => setHouseBump((b) => b + 1)}
+                          >
+                            Retry
+                          </Button>
+                        </div>
+                      </Alert>
+                    </section>
+                  ) : (
+                    <section className="crm">
+                      <div className="crm-board" aria-hidden="true">
+                        {Array.from({ length: 4 }, (_, i) => (
+                          <div key={i} className="kanban-lane">
+                            <Skeleton height="0.85em" width="55%" />
+                            <Skeleton height="3.4em" />
+                            <Skeleton height="3.4em" />
+                          </div>
+                        ))}
+                      </div>
+                    </section>
+                  ))}
                 {tab === "outreach" && isTeam && <OutreachView isAdmin={isAdmin} />}
                 {tab === "changes" && <PendingChangesPanel />}
                 {tab === "audit" && <AuditLogView />}

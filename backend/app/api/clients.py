@@ -40,7 +40,12 @@ def list_clients(
 ):
     stmt = (
         select(Client)
-        .where(Client.organization_id == scope.organization_id)
+        .where(
+            Client.organization_id == scope.organization_id,
+            # The house client (agency's own prospect pipeline) is not a real
+            # client — keep it out of the roster; fetch-by-id still works.
+            Client.is_house.is_(False),
+        )
         .order_by(Client.created_at)
         .limit(page.limit)
         .offset(page.offset)

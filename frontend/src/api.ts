@@ -142,6 +142,11 @@ export const getMyOrg = () => api<Org>("/api/orgs/me");
 export const setRequireMfa = (require_mfa: boolean) =>
   api<Org>("/api/orgs/me/require-mfa", { method: "PUT", body: JSON.stringify({ require_mfa }) });
 
+/** The org's own "house" prospect pipeline lives on a hidden client that the
+ * server gets-or-creates. Team-only; not returned by GET /api/clients. */
+export const getHouseClient = () =>
+  api<{ client_id: string }>("/api/orgs/me/house-client");
+
 /** Refresh the persisted session from /me (e.g. after enrolling 2FA clears the
  * mfa_setup_required gate). */
 export async function refreshSession(): Promise<Session> {

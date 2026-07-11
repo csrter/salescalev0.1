@@ -21,6 +21,7 @@ from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..db import get_db
@@ -40,6 +41,7 @@ from ..models.core import (
     ROLE_CLIENT,
     ROLE_MEMBER,
     ROLE_OWNER,
+    Client,
     Organization,
     User,
 )
@@ -214,6 +216,65 @@ def set_require_mfa(
     org.require_mfa = body.require_mfa
     db.commit()
     return org
+
+
+@router.get("/me/house-client")
+def get_house_client(
+    user: User = Depends(require_team), db: Session = Depends(get_db)
+):
+    """The Organization's own prospect pipeline — the agency "house" CRM. It's
+    one synthetic Client row per org (flagged is_house), hidden from the client
+    roster and never counted as a billed client, so the whole existing CRM runs
+    against it unchanged. Get-or-create: the first team member to open the house
+    CRM materializes the row. Team-only — a house pipeline is internal agency
+    workflow, never a client-portal surface."""
+    # first() not one-or-none, same rigor as crm.get_or_create_pipeline: the
+    # partial unique index caps it at one per org, but "get or create" picks the
+    # earliest deterministically rather than assuming exactly one row exists.
+    client = (
+        db.execute(
+            select(Client)
+            .where(
+                Client.organization_id == user.organization_id,
+                Client.is_house.is_(True),
+            )
+            .order_by(Client.created_at)
+            .limit(1)
+        )
+        .scalars()
+        .first()
+    )
+    if client is None:
+        client = Client(
+            organization_id=user.organization_id,
+            name="House",
+            status="active",
+            is_house=True,
+        )
+        db.add(client)
+        try:
+            db.commit()
+        except IntegrityError:
+            # Two team members opened the house CRM for the first time at
+            # once — the partial unique index let exactly one create through,
+            # so read that winner back instead of surfacing a 500.
+            db.rollback()
+            client = (
+                db.execute(
+                    select(Client)
+                    .where(
+                        Client.organization_id == user.organization_id,
+                        Client.is_house.is_(True),
+                    )
+                    .order_by(Client.created_at)
+                    .limit(1)
+                )
+                .scalars()
+                .first()
+            )
+            if client is None:  # pragma: no cover — index fired, row must exist
+                raise HTTPException(500, "House client creation raced")
+    return {"client_id": client.id}
 
 
 # --- members ---
