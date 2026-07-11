@@ -693,6 +693,86 @@ def test_prospect_import_and_auto_enroll_on_engagement(api, ig_account, team_hea
     assert len(graph_stub["send_text"]) == 1
 
 
+def test_house_client_is_a_valid_outreach_target(api, team_headers, seeded, graph_stub):
+    """The agency's own prospecting: the house client (the hidden per-org
+    Client the CRM/Lead Finder run against) must work end-to-end as an
+    outreach target — an IG account, a sequence, and imported prospects all
+    bind to it — even though it's excluded from the /api/clients roster (the
+    reason the Outreach UI resolves it separately and prepends it to the
+    pickers)."""
+    _reset_outreach_rows()
+    # Resolve/create the house client the same way the frontend does.
+    house = api.get("/api/orgs/me/house-client", headers=team_headers)
+    assert house.status_code == 200, house.text
+    house_id = house.json()["client_id"]
+
+    # It's a real, org-scoped client but deliberately absent from the roster
+    # that feeds /api/clients — hence the UI gap this change closes.
+    roster = api.get("/api/clients", headers=team_headers).json()
+    assert house_id not in {c["id"] for c in roster}
+
+    # Provision an IG account ON the house client (distinct id from the shared
+    # fixture account, which lives on client_a).
+    db = SessionLocal()
+    house_account = InstagramAccount(
+        organization_id=seeded["org"],
+        client_id=house_id,
+        ig_user_id="17840000000000099",
+        page_id="page-house",
+        username="atlasreach.agency",
+        access_token_encrypted=encrypt_secret("test-ig-page-token"),
+        status="active",
+        daily_send_cap=100,
+        connected_at=utcnow(),
+    )
+    db.add(house_account)
+    db.commit()
+    house_account_id = house_account.id
+    db.close()
+
+    # A sequence bound to that account inherits the house client_id.
+    seq = api.post(
+        "/api/outreach/sequences",
+        json={"account_id": house_account_id, "name": "Agency self-prospecting"},
+        headers=team_headers,
+    )
+    assert seq.status_code == 201, seq.text
+    seq_id = seq.json()["id"]
+    api.put(
+        f"/api/outreach/sequences/{seq_id}/steps",
+        json=[{"kind": "message", "text_a": "Thanks for the follow!"}],
+        headers=team_headers,
+    )
+
+    # Import prospects under the house client — the core assertion.
+    resp = api.post(
+        "/api/outreach/prospects/import",
+        json={
+            "client_id": house_id,
+            "handles": ["@agencylead1", "agencylead2"],
+            "vertical": "agency",
+            "sequence_id": seq_id,
+            "account_id": house_account_id,
+        },
+        headers=team_headers,
+    )
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["created"] == 2
+
+    # Everything landed on the house client, not a real client account.
+    db = SessionLocal()
+    assert (
+        db.execute(select(OutreachSequence).where(OutreachSequence.id == seq_id))
+        .scalar_one()
+        .client_id
+        == house_id
+    )
+    prospects = db.execute(select(OutreachProspect)).scalars().all()
+    assert len(prospects) == 2
+    assert all(p.client_id == house_id for p in prospects)
+    db.close()
+
+
 # --- analytics + audit ---
 
 

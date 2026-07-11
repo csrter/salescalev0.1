@@ -26,6 +26,12 @@ class GoogleApiError(Exception):
     pass
 
 
+# Per-RPC deadline for read calls. The google-ads library's default is
+# effectively unbounded (~1h), which lets a stalled gRPC call outlive the
+# browser's fetch — the UI then sees an opaque NetworkError instead of a 502.
+READ_TIMEOUT_SECONDS = 45.0
+
+
 def build_oauth_url(state: str) -> str:
     settings = get_settings()
     creds = integration_creds.current_google()  # org's own client, or fallback
@@ -107,7 +113,7 @@ def list_accessible_customers(refresh_token: str) -> List[str]:
     def run():
         client = _client(refresh_token)
         svc = client.get_service("CustomerService")
-        resp = svc.list_accessible_customers()
+        resp = svc.list_accessible_customers(timeout=READ_TIMEOUT_SECONDS)
         # resource_names look like "customers/1234567890"
         return [rn.split("/")[-1] for rn in resp.resource_names]
 
@@ -123,7 +129,11 @@ def _search(
     def run():
         client = _client(refresh_token, login_customer_id)
         svc = client.get_service("GoogleAdsService")
-        return list(svc.search(customer_id=customer_id, query=query))
+        return list(
+            svc.search(
+                customer_id=customer_id, query=query, timeout=READ_TIMEOUT_SECONDS
+            )
+        )
 
     return _wrap_auth_errors(run)
 

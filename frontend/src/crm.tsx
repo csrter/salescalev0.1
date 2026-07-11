@@ -27,6 +27,9 @@ import {
   ADMIN_ROLES,
   TEAM_ROLES,
   api,
+  bulkDeleteContacts,
+  deleteContact,
+  updateContact,
   verifyContacts,
   type Session,
   type VerificationStatus,
@@ -44,7 +47,7 @@ import {
   SkeletonText,
 } from "./components/ui";
 import { useToast } from "./components/Toast";
-import { ChevronRight, Inbox, Plus, Settings } from "./components/icons";
+import { ChevronRight, Inbox, Pencil, Plus, Settings, Trash2 } from "./components/icons";
 import {
   CsvImportDialog,
   CustomFieldInputs,
@@ -88,6 +91,9 @@ interface ContactRow {
   last_name: string | null;
   email: string | null;
   phone: string | null;
+  city: string | null;
+  state: string | null;
+  company_name: string | null;
   source: string | null;
   qualified_at: string | null;
   created_at: string;
@@ -765,6 +771,14 @@ function matchesFilter(c: ContactRow, def: CustomFieldDef, f: CfFilter): boolean
   }
 }
 
+/** Choosable non-custom contact columns (Phase-12 contract adds these fields to
+ * list payloads). Kept alongside the custom-field column choices in the picker. */
+const SYS_COLUMNS: { key: string; label: string; get: (c: ContactRow) => string | null }[] = [
+  { key: "city", label: "City", get: (c) => c.city },
+  { key: "state", label: "State", get: (c) => c.state },
+  { key: "company_name", label: "Business name", get: (c) => c.company_name },
+];
+
 function LeadList({
   contacts,
   clientId,
@@ -786,13 +800,39 @@ function LeadList({
   onSelect: (id: string) => void;
   onCreated: () => void;
 }) {
+  const toast = useToast();
   const [adding, setAdding] = useState(false);
   const [showImport, setShowImport] = useState(false);
   const [showCols, setShowCols] = useState(false);
   const [showFilters, setShowFilters] = useState(false);
   const [cols, setCols] = useState<string[]>([]);
+  const [sysCols, setSysCols] = useState<string[]>([]);
   const [filters, setFilters] = useState<CfFilter[]>([]);
   const [verifFilter, setVerifFilter] = useState<string>("");
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [confirmingBulk, setConfirmingBulk] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+
+  // System-column choices persist client-side only (the crm-columns preference
+  // stores custom-field keys; keeping system columns out of it avoids any
+  // backend key-validation coupling).
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(`crm-syscols:${clientId}`);
+      setSysCols(raw ? (JSON.parse(raw) as string[]) : []);
+    } catch {
+      setSysCols([]);
+    }
+  }, [clientId]);
+
+  const saveSysCols = (next: string[]) => {
+    setSysCols(next);
+    try {
+      localStorage.setItem(`crm-syscols:${clientId}`, JSON.stringify(next));
+    } catch {
+      /* ignore quota/availability errors — in-session state still applies */
+    }
+  };
 
   // Per-user column choice (Phase 4 preference pattern), loaded per client view.
   useEffect(() => {
@@ -839,7 +879,81 @@ function LeadList({
     );
   }, [contacts, filters, defByKey, verifFilter]);
 
+  // --- bulk selection (admin-only) ---
+  const visibleIds = useMemo(() => rows.map((r) => r.id), [rows]);
+  const selectedVisible = useMemo(
+    () => visibleIds.filter((id) => selected.has(id)),
+    [visibleIds, selected]
+  );
+  const allSelected = rows.length > 0 && selectedVisible.length === rows.length;
+
+  const toggleOne = (id: string, on: boolean) =>
+    setSelected((s) => {
+      const next = new Set(s);
+      if (on) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+
+  const toggleAll = (on: boolean) =>
+    setSelected((s) => {
+      const next = new Set(s);
+      for (const id of visibleIds) {
+        if (on) next.add(id);
+        else next.delete(id);
+      }
+      return next;
+    });
+
+  const doBulkDelete = () => {
+    if (deleting || selectedVisible.length === 0) return;
+    setDeleting(true);
+    bulkDeleteContacts(selectedVisible)
+      .then((r) => {
+        toast(`Deleted ${r.deleted} lead${r.deleted === 1 ? "" : "s"}`, "ok");
+        setSelected(new Set());
+        setConfirmingBulk(false);
+        onCreated();
+      })
+      .catch((e) => toast((e as Error).message, "error"))
+      .finally(() => setDeleting(false));
+  };
+
+  const selectColumn: Column<ContactRow> = {
+    key: "select",
+    header: (
+      <input
+        type="checkbox"
+        aria-label="Select all leads"
+        checked={allSelected}
+        ref={(el) => {
+          if (el) el.indeterminate = selectedVisible.length > 0 && !allSelected;
+        }}
+        onChange={(e) => toggleAll(e.target.checked)}
+      />
+    ),
+    render: (c) => (
+      <input
+        type="checkbox"
+        aria-label={`Select ${contactName(c)}`}
+        checked={selected.has(c.id)}
+        onClick={(e) => e.stopPropagation()}
+        onChange={(e) => toggleOne(c.id, e.target.checked)}
+      />
+    ),
+  };
+
+  const sysColumns: Column<ContactRow>[] = SYS_COLUMNS.filter((s) =>
+    sysCols.includes(s.key)
+  ).map((s) => ({
+    key: `sys_${s.key}`,
+    header: s.label,
+    render: (c) => <span className="crm-muted">{s.get(c) || "—"}</span>,
+    sortValue: (c) => s.get(c) ?? "",
+  }));
+
   const columns: Column<ContactRow>[] = [
+    ...(isAdmin ? [selectColumn] : []),
     {
       key: "lead",
       header: "Lead",
@@ -863,6 +977,7 @@ function LeadList({
       ),
       sortValue: (c) => c.source ?? "",
     },
+    ...sysColumns,
     ...customFieldColumns<ContactRow>(chosenDefs),
     {
       key: "attribution",
@@ -919,28 +1034,26 @@ function LeadList({
             </select>
           )}
           {pickableDefs.length > 0 && (
-            <>
-              <Button
-                variant="ghost"
-                size="sm"
-                aria-expanded={showFilters}
-                onClick={() => setShowFilters((s) => !s)}
-              >
-                Filter{filters.length ? ` (${filters.length})` : ""}
-              </Button>
-              <Button
-                variant="ghost"
-                size="sm"
-                aria-expanded={showCols}
-                onClick={() => setShowCols((s) => !s)}
-              >
-                <Settings size={14} /> Columns
-              </Button>
-            </>
+            <Button
+              variant="ghost"
+              size="sm"
+              aria-expanded={showFilters}
+              onClick={() => setShowFilters((s) => !s)}
+            >
+              Filter{filters.length ? ` (${filters.length})` : ""}
+            </Button>
           )}
+          <Button
+            variant="ghost"
+            size="sm"
+            aria-expanded={showCols}
+            onClick={() => setShowCols((s) => !s)}
+          >
+            <Settings size={14} /> Columns
+          </Button>
           {isAdmin && (
             <Button variant="ghost" size="sm" onClick={() => setShowImport(true)}>
-              Import CSV
+              Import
             </Button>
           )}
           {isTeam && (
@@ -956,8 +1069,24 @@ function LeadList({
         </div>
       </div>
 
-      {showCols && pickableDefs.length > 0 && (
-        <div className="crm-col-picker" role="group" aria-label="Custom field columns">
+      {showCols && (
+        <div className="crm-col-picker" role="group" aria-label="Table columns">
+          {SYS_COLUMNS.map((s) => (
+            <label key={s.key} className="crm-check">
+              <input
+                type="checkbox"
+                checked={sysCols.includes(s.key)}
+                onChange={(e) =>
+                  saveSysCols(
+                    e.target.checked
+                      ? [...sysCols, s.key]
+                      : sysCols.filter((k) => k !== s.key)
+                  )
+                }
+              />
+              <span>{s.label}</span>
+            </label>
+          ))}
           {pickableDefs.map((d) => (
             <label key={d.id} className="crm-check">
               <input
@@ -990,6 +1119,57 @@ function LeadList({
             onCreated();
           }}
         />
+      )}
+
+      {isAdmin && selectedVisible.length > 0 && (
+        <div className="crm-bulk-bar" role="region" aria-label="Bulk actions">
+          <span className="crm-count">
+            {selectedVisible.length} selected
+          </span>
+          <div className="crm-toolbar-spacer">
+            {confirmingBulk ? (
+              <>
+                <span className="crm-note">
+                  Delete {selectedVisible.length} lead
+                  {selectedVisible.length === 1 ? "" : "s"}? This can’t be undone.
+                </span>
+                <Button
+                  variant="danger"
+                  size="sm"
+                  busy={deleting}
+                  onClick={doBulkDelete}
+                >
+                  <Trash2 size={14} /> Delete
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  disabled={deleting}
+                  onClick={() => setConfirmingBulk(false)}
+                >
+                  Cancel
+                </Button>
+              </>
+            ) : (
+              <>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setSelected(new Set())}
+                >
+                  Clear
+                </Button>
+                <Button
+                  variant="danger-outline"
+                  size="sm"
+                  onClick={() => setConfirmingBulk(true)}
+                >
+                  <Trash2 size={14} /> Delete selected
+                </Button>
+              </>
+            )}
+          </div>
+        </div>
       )}
 
       <DataTable<ContactRow>
@@ -1294,6 +1474,7 @@ function ContactDrawer({
   onChanged: () => void;
 }) {
   const isTeam = TEAM_ROLES.includes(session.role);
+  const isAdmin = ADMIN_ROLES.includes(session.role);
   const toast = useToast();
   const [detail, setDetail] = useState<ContactDetail | null>(null);
   const [members, setMembers] = useState<
@@ -1351,11 +1532,14 @@ function ContactDrawer({
 
     return (
       <>
-        <p className="crm-muted">
-          {[detail.email, detail.phone].filter(Boolean).join(" · ")}
-          {detail.source ? ` · via ${detail.source.replace(/_/g, " ")}` : ""}
-        </p>
-        <AttributionChips contact={detail} />
+        <IdentityBlock
+          detail={detail}
+          canEdit={isTeam}
+          onSaved={() => {
+            reload();
+            onChanged();
+          }}
+        />
 
         {isTeam && detail.email && (
           <div className="crm-verify-row">
@@ -1494,6 +1678,17 @@ function ContactDrawer({
             </ul>
           </section>
         )}
+
+        {isAdmin && (
+          <DeleteContact
+            contactId={detail.id}
+            name={contactName(detail)}
+            onDeleted={() => {
+              onChanged();
+              onClose();
+            }}
+          />
+        )}
       </>
     );
   };
@@ -1528,6 +1723,221 @@ function ContactDrawer({
         {body()}
       </div>
     </div>
+  );
+}
+
+/** The contact's identity (name/email/phone/city/state/company) as a read view
+ * with an inline Edit form for team roles. Save PATCHes the partial and reuses
+ * the drawer + list refresh (onSaved). */
+function IdentityBlock({
+  detail,
+  canEdit,
+  onSaved,
+}: {
+  detail: ContactDetail;
+  canEdit: boolean;
+  onSaved: () => void;
+}) {
+  const toast = useToast();
+  const [editing, setEditing] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [form, setForm] = useState({
+    first_name: "",
+    last_name: "",
+    email: "",
+    phone: "",
+    city: "",
+    state: "",
+    company_name: "",
+  });
+
+  const startEdit = () => {
+    setForm({
+      first_name: detail.first_name ?? "",
+      last_name: detail.last_name ?? "",
+      email: detail.email ?? "",
+      phone: detail.phone ?? "",
+      city: detail.city ?? "",
+      state: detail.state ?? "",
+      company_name: detail.company_name ?? "",
+    });
+    setError(null);
+    setEditing(true);
+  };
+
+  const set = (patch: Partial<typeof form>) => setForm((f) => ({ ...f, ...patch }));
+
+  const save = () => {
+    if (busy) return;
+    setBusy(true);
+    setError(null);
+    updateContact(detail.id, {
+      first_name: form.first_name.trim() || null,
+      last_name: form.last_name.trim() || null,
+      email: form.email.trim() || null,
+      phone: form.phone.trim() || null,
+      city: form.city.trim() || null,
+      state: form.state.trim() || null,
+      company_name: form.company_name.trim() || null,
+    })
+      .then(() => {
+        setEditing(false);
+        onSaved();
+        toast("Contact updated", "ok");
+      })
+      .catch((e) => setError((e as Error).message))
+      .finally(() => setBusy(false));
+  };
+
+  if (editing) {
+    return (
+      <div className="crm-form crm-identity-edit">
+        <Field label="First name">
+          <input
+            value={form.first_name}
+            onChange={(e) => set({ first_name: e.target.value })}
+          />
+        </Field>
+        <Field label="Last name">
+          <input
+            value={form.last_name}
+            onChange={(e) => set({ last_name: e.target.value })}
+          />
+        </Field>
+        <Field label="Email">
+          <input
+            type="email"
+            value={form.email}
+            onChange={(e) => set({ email: e.target.value })}
+          />
+        </Field>
+        <Field label="Phone">
+          <input value={form.phone} onChange={(e) => set({ phone: e.target.value })} />
+        </Field>
+        <Field label="City">
+          <input value={form.city} onChange={(e) => set({ city: e.target.value })} />
+        </Field>
+        <Field label="State">
+          <input value={form.state} onChange={(e) => set({ state: e.target.value })} />
+        </Field>
+        <Field label="Business name">
+          <input
+            value={form.company_name}
+            onChange={(e) => set({ company_name: e.target.value })}
+          />
+        </Field>
+        {error && (
+          <span className="crm-form-error" role="alert">
+            {error}
+          </span>
+        )}
+        <div className="crm-form-actions">
+          <Button variant="primary" size="sm" busy={busy} onClick={save}>
+            Save
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            disabled={busy}
+            onClick={() => {
+              setEditing(false);
+              setError(null);
+            }}
+          >
+            Cancel
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
+  const location = [detail.city, detail.state].filter(Boolean).join(", ");
+  const orgLine = [detail.company_name, location].filter(Boolean).join(" · ");
+
+  return (
+    <div className="crm-identity">
+      <p className="crm-muted">
+        {[detail.email, detail.phone].filter(Boolean).join(" · ") || "No contact info"}
+        {detail.source ? ` · via ${detail.source.replace(/_/g, " ")}` : ""}
+      </p>
+      {orgLine && <p className="crm-muted">{orgLine}</p>}
+      <AttributionChips contact={detail} />
+      {canEdit && (
+        <div className="crm-identity-actions">
+          <Button variant="ghost" size="sm" onClick={startEdit}>
+            <Pencil size={13} /> Edit info
+          </Button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Admin-only destructive delete with an inline two-step confirm (matches the
+ * custom-field hard-delete idiom). On success the parent closes the drawer and
+ * refreshes the list. */
+function DeleteContact({
+  contactId,
+  name,
+  onDeleted,
+}: {
+  contactId: string;
+  name: string;
+  onDeleted: () => void;
+}) {
+  const toast = useToast();
+  const [confirming, setConfirming] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  const del = () => {
+    if (busy) return;
+    setBusy(true);
+    deleteContact(contactId)
+      .then(() => {
+        toast("Lead deleted", "ok");
+        onDeleted();
+      })
+      .catch((e) => {
+        toast((e as Error).message, "error");
+        setBusy(false);
+      });
+  };
+
+  return (
+    <section className="crm-section crm-danger-zone">
+      {confirming ? (
+        <>
+          <p className="crm-note">
+            Permanently delete <strong>{name}</strong> and all of its deals,
+            activity and tasks? This can’t be undone.
+          </p>
+          <div className="crm-form-actions">
+            <Button variant="danger" size="sm" busy={busy} onClick={del}>
+              <Trash2 size={14} /> Delete lead
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              disabled={busy}
+              onClick={() => setConfirming(false)}
+            >
+              Cancel
+            </Button>
+          </div>
+        </>
+      ) : (
+        <div className="crm-form-actions">
+          <Button
+            variant="danger-outline"
+            size="sm"
+            onClick={() => setConfirming(true)}
+          >
+            <Trash2 size={14} /> Delete lead
+          </Button>
+        </div>
+      )}
+    </section>
   );
 }
 

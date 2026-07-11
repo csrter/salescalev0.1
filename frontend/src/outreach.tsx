@@ -23,6 +23,7 @@ import {
   disconnectIgAccount,
   downloadCsv,
   enrichOutreachProspect,
+  getHouseClient,
   getOutreachSequence,
   igConnectStart,
   importOutreachProspects,
@@ -114,6 +115,13 @@ function useDirtyGuard(open: boolean, serialized: string): () => boolean {
 
 type Panel = "inbox" | "rules" | "sequences" | "prospects" | "analytics" | "settings";
 
+// The org's own prospect pipeline lives on a hidden "house" Client the server
+// gets-or-creates. It isn't returned by /api/clients, so we resolve it
+// separately and prepend it to the roster — this label distinguishes it in
+// every client picker (filter, import, connect) and resolves outreach rows
+// attached to it to a name rather than a bare id.
+const HOUSE_CLIENT_LABEL = "My agency (house CRM)";
+
 export function OutreachView({ isAdmin }: { isAdmin: boolean }) {
   const [panel, setPanel] = useState<Panel>("inbox");
   const [clients, setClients] = useState<Client[]>([]);
@@ -125,7 +133,27 @@ export function OutreachView({ isAdmin }: { isAdmin: boolean }) {
   }, [clientId]);
 
   useEffect(() => {
-    api<Client[]>("/api/clients").then(setClients).catch(() => {});
+    let alive = true;
+    // Load the real client roster and the org's own "house" prospect pipeline
+    // in parallel, then prepend the house client so agencies can run outreach
+    // for their OWN prospecting — not just client accounts. getHouseClient is
+    // team-gated (all team roles pass); degrade gracefully to just the roster
+    // if it fails so the pickers still work.
+    Promise.all([
+      api<Client[]>("/api/clients").catch(() => [] as Client[]),
+      getHouseClient()
+        .then((r) => r.client_id)
+        .catch(() => null),
+    ]).then(([roster, houseId]) => {
+      if (!alive) return;
+      const house: Client[] = houseId
+        ? [{ id: houseId, name: HOUSE_CLIENT_LABEL, status: "active" }]
+        : [];
+      setClients([...house, ...roster]);
+    });
+    return () => {
+      alive = false;
+    };
   }, []);
   useEffect(refreshAccounts, [refreshAccounts]);
 

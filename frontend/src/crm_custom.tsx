@@ -896,9 +896,54 @@ const SYSTEM_TARGETS: { value: string; label: string }[] = [
   { value: "skip", label: "Skip" },
   { value: "first_name", label: "First name" },
   { value: "last_name", label: "Last name" },
+  { value: "full_name", label: "Full name" },
   { value: "email", label: "Email" },
   { value: "phone", label: "Phone" },
+  { value: "city", label: "City" },
+  { value: "state", label: "State" },
+  { value: "company", label: "Business name" },
 ];
+
+/** Header → system target synonym table (first match wins, most specific
+ * first). Headers are normalized to a-z0-9 only before lookup, so "First Name",
+ * "first_name", "FIRST-NAME" all collapse to "firstname". */
+const HEADER_SYNONYMS: { target: string; keys: string[] }[] = [
+  { target: "first_name", keys: ["firstname", "first", "fname", "givenname", "forename"] },
+  { target: "last_name", keys: ["lastname", "last", "lname", "surname", "familyname"] },
+  { target: "full_name", keys: ["name", "fullname", "contactname", "contact", "leadname"] },
+  { target: "email", keys: ["email", "emailaddress", "mail", "workemail"] },
+  {
+    target: "phone",
+    keys: [
+      "phone",
+      "phonenumber",
+      "mobile",
+      "cell",
+      "cellphone",
+      "telephone",
+      "tel",
+      "mobilenumber",
+      "contactnumber",
+    ],
+  },
+  { target: "city", keys: ["city", "town", "locality"] },
+  { target: "state", keys: ["state", "province", "region", "stateprovince"] },
+  {
+    target: "company",
+    keys: [
+      "company",
+      "companyname",
+      "business",
+      "businessname",
+      "organization",
+      "organisation",
+      "employer",
+      "accountname",
+    ],
+  },
+];
+
+const normalizeHeader = (h: string) => h.toLowerCase().replace(/[^a-z0-9]/g, "");
 
 /** Minimal CSV parse (handles quoted fields + commas + CRLF). Good enough for
  * the paste-a-CSV import; large/edge files are a later concern. */
@@ -941,6 +986,58 @@ function parseCsv(text: string): { headers: string[]; rows: Record<string, strin
   return { headers, rows: out };
 }
 
+/** Stringify a scalar/complex JSON value for a flat cell. null/undefined → "";
+ * strings pass through; numbers/booleans stringify; objects/arrays JSON-encode. */
+function jsonCell(v: unknown): string {
+  if (v === null || v === undefined) return "";
+  if (typeof v === "string") return v;
+  if (typeof v === "number" || typeof v === "boolean") return String(v);
+  try {
+    return JSON.stringify(v);
+  } catch {
+    return String(v);
+  }
+}
+
+const ROW_ARRAY_KEYS = ["contacts", "leads", "rows", "data", "records"];
+
+/** Parse a JSON contacts export into the same {headers, rows} shape parseCsv
+ * produces. Accepts either a top-level array of flat objects, or an object
+ * whose first array-valued key (preferring the conventional names above, else
+ * the first array value found) holds the rows. Headers are the union of keys
+ * in first-seen order. */
+function parseJson(text: string): { headers: string[]; rows: Record<string, string>[] } {
+  const data = JSON.parse(text);
+  let arr: unknown;
+  if (Array.isArray(data)) {
+    arr = data;
+  } else if (data && typeof data === "object") {
+    const obj = data as Record<string, unknown>;
+    const namedKey = ROW_ARRAY_KEYS.find((k) => Array.isArray(obj[k]));
+    if (namedKey) arr = obj[namedKey];
+    else arr = Object.values(obj).find((v) => Array.isArray(v));
+  }
+  if (!Array.isArray(arr)) return { headers: [], rows: [] };
+
+  const headers: string[] = [];
+  const seen = new Set<string>();
+  const rows: Record<string, string>[] = [];
+  for (const item of arr) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+    const rec = item as Record<string, unknown>;
+    const out: Record<string, string> = {};
+    for (const [k, v] of Object.entries(rec)) {
+      if (!seen.has(k)) {
+        seen.add(k);
+        headers.push(k);
+      }
+      out[k] = jsonCell(v);
+    }
+    rows.push(out);
+  }
+  return { headers, rows };
+}
+
 function inferType(values: string[]): CustomFieldType {
   const nonEmpty = values.filter((v) => v !== "");
   if (nonEmpty.length === 0) return "text";
@@ -975,24 +1072,40 @@ export function CsvImportDialog({
   );
   const [error, setError] = useState<string | null>(null);
 
-  const load = (text: string) => {
-    const p = parseCsv(text);
+  const load = (text: string, isJson: boolean) => {
+    const p = isJson ? parseJson(text) : parseCsv(text);
     if (p.headers.length === 0) {
-      setError("Couldn’t find any columns in that CSV.");
+      setError(
+        isJson
+          ? "Couldn’t find any contact rows in that JSON file."
+          : "Couldn’t find any columns in that CSV."
+      );
       return;
     }
-    // Auto-map obvious headers.
+    // Auto-map headers via the normalized synonym table. Each system target is
+    // assigned at most once — the earliest (most specific) matching column wins.
     const guess: Record<string, MappingTarget> = {};
+    const usedTargets = new Set<string>();
     for (const h of p.headers) {
-      const l = h.toLowerCase();
-      if (l.includes("email")) guess[h] = "email";
-      else if (l.includes("phone")) guess[h] = "phone";
-      else if (l === "first" || l.includes("first name")) guess[h] = "first_name";
-      else if (l === "last" || l.includes("last name")) guess[h] = "last_name";
-      else {
-        const match = defs.find((d) => d.label.toLowerCase() === l && !d.archived_at);
+      const norm = normalizeHeader(h);
+      const hit = HEADER_SYNONYMS.find(
+        (s) => !usedTargets.has(s.target) && s.keys.includes(norm)
+      );
+      if (hit) {
+        guess[h] = hit.target;
+        usedTargets.add(hit.target);
+      } else {
+        const match = defs.find(
+          (d) => normalizeHeader(d.label) === norm && !d.archived_at
+        );
         guess[h] = match ? `custom:${match.key}` : "skip";
       }
+    }
+    // Only keep a full_name mapping when neither first_name nor last_name was
+    // detected on any column (the backend splits full_name into both).
+    if (usedTargets.has("first_name") || usedTargets.has("last_name")) {
+      for (const h of Object.keys(guess))
+        if (guess[h] === "full_name") guess[h] = "skip";
     }
     setMapping(guess);
     setParsed(p);
@@ -1002,7 +1115,23 @@ export function CsvImportDialog({
 
   const onFile = (f: File) => {
     const reader = new FileReader();
-    reader.onload = () => load(String(reader.result ?? ""));
+    reader.onload = () => {
+      const text = String(reader.result ?? "");
+      const trimmed = text.trimStart();
+      const isJson =
+        /\.json$/i.test(f.name) ||
+        trimmed.startsWith("[") ||
+        trimmed.startsWith("{");
+      try {
+        load(text, isJson);
+      } catch (err) {
+        setError(
+          isJson
+            ? `Couldn’t parse that JSON file: ${(err as Error).message}`
+            : (err as Error).message
+        );
+      }
+    };
     reader.readAsText(f);
   };
 
@@ -1047,17 +1176,19 @@ export function CsvImportDialog({
   const activeDefs = defs.filter((d) => !d.archived_at);
 
   return (
-    <Dialog open onClose={onClose} title="Import contacts from CSV" size="lg">
+    <Dialog open onClose={onClose} title="Import contacts from CSV or JSON" size="lg">
       {!parsed && (
         <div className="crm-csv-drop">
           <p className="crm-muted">
-            Upload a CSV whose first row is column headers. You’ll map each column to a
-            contact field — including custom fields, which you can create on the spot.
+            Upload a CSV (first row = column headers) or a JSON file (an array of
+            contact objects, or an object with a <code>contacts</code>/<code>rows</code>
+            array). You’ll map each column to a contact field — including custom
+            fields, which you can create on the spot.
           </p>
           <input
             ref={fileRef}
             type="file"
-            accept=".csv,text/csv"
+            accept=".csv,.json,text/csv,application/json"
             onChange={(e) => e.target.files?.[0] && onFile(e.target.files[0])}
           />
           {error && (

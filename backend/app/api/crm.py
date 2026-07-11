@@ -19,16 +19,26 @@ CRM writes never touch a live ad platform, so they are not staged changes
 import json
 from typing import Dict, List, Optional
 
-from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Query
+from fastapi import (
+    APIRouter,
+    BackgroundTasks,
+    Depends,
+    Header,
+    HTTPException,
+    Query,
+    Response,
+)
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..db import get_db
 from ..deps import TenantScope, get_scope, require_admin, require_team
 from ..models.attribution import LandingEvent
+from ..models.audit import AUDIT_SUCCESS, AuditLogEntry
 from ..models.core import Client, Organization, User
 from ..models.crm import (
     Activity,
+    Company,
     Contact,
     CrmTask,
     CustomFieldDefinition,
@@ -41,6 +51,7 @@ from ..schemas import (
     ACTIVITY_TYPES,
     ActivityCreateIn,
     ActivityOut,
+    ContactBulkDeleteIn,
     ContactCreateIn,
     ContactOutPublic,
     ContactOutTeam,
@@ -81,7 +92,26 @@ def _client_for(db: Session, scope: TenantScope, client_id: str) -> Client:
     return client
 
 
-def _serialize_contact(db: Session, contact: Contact, scope: TenantScope) -> dict:
+def _company_names(
+    db: Session, contacts: List[Contact]
+) -> Dict[str, Optional[str]]:
+    """Batch-resolve company_id -> company name for a set of contacts, so list
+    views don't fire one query per row."""
+    ids = {c.company_id for c in contacts if c.company_id}
+    if not ids:
+        return {}
+    rows = db.execute(
+        select(Company.id, Company.name).where(Company.id.in_(ids))
+    ).all()
+    return {cid: name for cid, name in rows}
+
+
+def _serialize_contact(
+    db: Session,
+    contact: Contact,
+    scope: TenantScope,
+    company_names: Optional[Dict[str, Optional[str]]] = None,
+) -> dict:
     """Serialize a contact for the caller's role, with custom-field values
     injected. Client-role reads are filtered to visible_to_clients fields at the
     data layer (visible_values), so a hidden field never appears in the payload."""
@@ -90,6 +120,11 @@ def _serialize_contact(db: Session, contact: Contact, scope: TenantScope) -> dic
     out["custom_fields"] = custom_fields_svc.visible_values(
         db, scope.organization_id, contact, is_team=scope.is_team
     )
+    if company_names is not None:
+        out["company_name"] = company_names.get(contact.company_id)
+    elif contact.company_id:
+        company = db.get(Company, contact.company_id)
+        out["company_name"] = company.name if company else None
     return out
 
 
@@ -166,9 +201,10 @@ def get_board(
         .all()
     )
     attribution = _attribution_for(db, client, contacts)
+    company_names = _company_names(db, contacts)
     contact_out = {
         c.id: {
-            **_serialize_contact(db, c, scope),
+            **_serialize_contact(db, c, scope, company_names),
             "attribution": attribution.get(c.id),
         }
         for c in contacts
@@ -328,9 +364,10 @@ def list_contacts(
 
     contacts = list(db.execute(stmt.limit(min(limit, 500))).scalars())
     attribution = _attribution_for(db, client, contacts)
+    company_names = _company_names(db, contacts)
     return [
         {
-            **_serialize_contact(db, c, scope),
+            **_serialize_contact(db, c, scope, company_names),
             "attribution": attribution.get(c.id),
         }
         for c in contacts
@@ -354,8 +391,14 @@ def create_contact(
         last_name=body.last_name,
         email=body.email.lower() if body.email else None,
         phone=body.phone,
+        city=body.city,
+        state=body.state,
         source="manual",
     )
+    if body.company_name and body.company_name.strip():
+        contact.company_id = crm_svc.get_or_create_company(
+            db, client.organization_id, client.id, body.company_name
+        )
     try:
         custom_fields_svc.validate_and_merge(
             db,
@@ -397,6 +440,19 @@ def update_contact(
         contact.email = new_email
     if body.phone is not None:
         contact.phone = body.phone
+    if body.city is not None:
+        contact.city = body.city
+    if body.state is not None:
+        contact.state = body.state
+    if "company_name" in body.model_fields_set:
+        name = (body.company_name or "").strip()
+        contact.company_id = (
+            crm_svc.get_or_create_company(
+                db, contact.organization_id, contact.client_id, name
+            )
+            if name
+            else None
+        )
     if body.custom_fields is not None:
         try:
             custom_fields_svc.validate_and_merge(
@@ -493,8 +549,21 @@ def set_qualification(
 
 
 # System contact fields a CSV column may map to directly (everything else maps
-# to a custom field or is skipped).
-_CSV_SYSTEM_TARGETS = {"first_name", "last_name", "email", "phone"}
+# to a custom field or is skipped). "company" get-or-creates a linked Company;
+# "full_name" splits into first/last (explicit first/last columns win).
+_CSV_SYSTEM_TARGETS = {
+    "first_name",
+    "last_name",
+    "email",
+    "phone",
+    "city",
+    "state",
+    "company",
+    "full_name",
+}
+# The subset that makes a row a real contact — a row mapping only a company or
+# a city isn't one.
+_CSV_IDENTITY_TARGETS = ("first_name", "last_name", "email", "phone")
 
 
 @router.post("/contacts/import")
@@ -564,6 +633,7 @@ def import_contacts(
     imported = 0
     failed: List[dict] = []
     created_contacts: List[Contact] = []
+    company_cache: Dict[str, Optional[str]] = {}
     for idx, row in enumerate(body.rows):
         identity: Dict[str, Optional[str]] = {}
         custom: Dict[str, object] = {}
@@ -578,7 +648,14 @@ def import_contacts(
                 identity[name] = str(raw).strip()
             else:
                 custom[name] = raw
-        if not any(identity.get(k) for k in _CSV_SYSTEM_TARGETS):
+        full_name = identity.pop("full_name", None)
+        if full_name:
+            parts = full_name.split(None, 1)
+            identity.setdefault("first_name", parts[0])
+            if len(parts) > 1:
+                identity.setdefault("last_name", parts[1])
+        company_name = identity.pop("company", None)
+        if not any(identity.get(k) for k in _CSV_IDENTITY_TARGETS):
             failed.append(
                 {"row": idx, "error": "no identity field (name/email/phone) mapped"}
             )
@@ -590,8 +667,17 @@ def import_contacts(
             last_name=identity.get("last_name"),
             email=(identity["email"].lower() if identity.get("email") else None),
             phone=identity.get("phone"),
+            city=identity.get("city"),
+            state=identity.get("state"),
             source="csv_import",
         )
+        if company_name:
+            cache_key = company_name.lower()
+            if cache_key not in company_cache:
+                company_cache[cache_key] = crm_svc.get_or_create_company(
+                    db, client.organization_id, client.id, company_name
+                )
+            contact.company_id = company_cache[cache_key]
         try:
             custom_fields_svc.validate_and_merge(
                 db, scope.organization_id, contact, custom, enforce_required=True
@@ -652,6 +738,68 @@ def verify_contacts_bulk(
         "skipped_no_email": [c.id for c in contacts if not c.email],
         "usage": entitlements.email_verification_usage(db, org),
     }
+
+
+def _write_contact_delete_audit(db: Session, contact: Contact, user: User) -> None:
+    """Per-deleted-contact trail in the standard audit pattern (guardrail 8):
+    actor, target contact, org, timestamp — written before the cascade."""
+    name = " ".join(filter(None, [contact.first_name, contact.last_name]))
+    db.add(
+        AuditLogEntry(
+            organization_id=contact.organization_id,
+            client_id=contact.client_id,
+            user_id=user.id,
+            user_email=user.email,
+            user_name=user.full_name,
+            platform="crm",
+            entity_type="contact",
+            entity_external_id=contact.id,
+            entity_name=name or contact.email or contact.phone,
+            action="contact.deleted",
+            diff=[],
+            status=AUDIT_SUCCESS,
+        )
+    )
+
+
+@router.delete("/contacts/{contact_id}", status_code=204)
+def delete_contact(
+    contact_id: str,
+    user: User = Depends(require_admin),
+    scope: TenantScope = Depends(get_scope),
+    db: Session = Depends(get_db),
+):
+    """Delete a contact and cascade to everything referencing it (guardrail 9).
+    Admin-gated, org-scoped (cross-tenant ids 404)."""
+    contact = scope.get_or_404(db, Contact, contact_id)
+    _write_contact_delete_audit(db, contact, user)
+    crm_svc.delete_contact(db, contact)
+    db.commit()
+    return Response(status_code=204)
+
+
+@router.post("/contacts/bulk-delete")
+def bulk_delete_contacts(
+    body: ContactBulkDeleteIn,
+    user: User = Depends(require_admin),
+    scope: TenantScope = Depends(get_scope),
+    db: Session = Depends(get_db),
+):
+    """Delete many contacts at once. Ids not in the caller's org are silently
+    skipped — never a signal that a contact exists elsewhere."""
+    contacts = list(
+        db.execute(
+            select(Contact).where(
+                Contact.organization_id == scope.organization_id,
+                Contact.id.in_(body.contact_ids),
+            )
+        ).scalars()
+    )
+    for contact in contacts:
+        _write_contact_delete_audit(db, contact, user)
+        crm_svc.delete_contact(db, contact)
+    db.commit()
+    return {"deleted": len(contacts)}
 
 
 # --- Deals ---

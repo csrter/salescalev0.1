@@ -299,6 +299,24 @@
   gap: var(--space-3);
 }
 
+/* ---- bulk-select action bar (lead list) ------------------------------- */
+
+.crm-bulk-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+
+.crm-bulk-bar .crm-toolbar-spacer {
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
 /* ---- contact drawer (floating glass layer) ---------------------------- */
 
 .crm-drawer-scrim {
@@ -348,6 +366,26 @@
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
+}
+
+/* identity block: read view + inline edit form */
+
+.crm-identity {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.crm-identity-actions {
+  display: flex;
+  gap: var(--space-2);
+}
+
+/* danger zone: admin-only destructive delete, set off from content above */
+
+.crm-danger-zone {
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--border);
 }
 
 /* deals list inside the drawer */

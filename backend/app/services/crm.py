@@ -18,12 +18,29 @@ plain qualified yes/no.
 
 from typing import Dict, List, Optional, Tuple
 
-from sqlalchemy import select
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.orm import Session
 
+from ..models.attribution import LandingEvent
 from ..models.base import utcnow
+from ..models.conversions import ConversionEvent
 from ..models.core import Client, Organization
-from ..models.crm import Contact, Deal, Pipeline, PipelineStage
+from ..models.crm import (
+    Activity,
+    Company,
+    Contact,
+    ContactTag,
+    CrmTask,
+    Deal,
+    Pipeline,
+    PipelineStage,
+)
+from ..models.lead_finder import EmailVerificationRecord
+from ..models.outreach import (
+    OutreachConversation,
+    OutreachEnrollment,
+    OutreachProspect,
+)
 from .external_sync import push_contact_update
 
 # Sensible generic starting point — renamed/replaced per client the moment
@@ -89,6 +106,79 @@ def stages_for(db: Session, pipeline: Pipeline) -> List[PipelineStage]:
             .order_by(PipelineStage.position)
         ).scalars()
     )
+
+
+def get_or_create_company(
+    db: Session, organization_id: str, client_id: str, name: str
+) -> Optional[str]:
+    """Resolve a company name to a company id, get-or-create scoped to
+    (organization_id, client_id). Case-insensitive exact-name match, so a batch
+    of rows naming the same company links to one row. Returns None for a blank
+    name."""
+    name = (name or "").strip()
+    if not name:
+        return None
+    existing = (
+        db.execute(
+            select(Company)
+            .where(
+                Company.organization_id == organization_id,
+                Company.client_id == client_id,
+                func.lower(Company.name) == name.lower(),
+            )
+            .order_by(Company.created_at)
+            .limit(1)
+        )
+        .scalars()
+        .first()
+    )
+    if existing is not None:
+        return existing.id
+    company = Company(
+        organization_id=organization_id, client_id=client_id, name=name
+    )
+    db.add(company)
+    db.flush()
+    return company.id
+
+
+def delete_contact(db: Session, contact: Contact) -> None:
+    """Delete a contact and everything that references it, so no row is left
+    orphaned or dangling on a not-null FK. Owned CRM children (deals, notes,
+    tasks, tag links) are deleted; looser historical/ledger references
+    (attribution, conversions, verification records, outreach) are detached to
+    keep metrics and metering counts intact."""
+    cid = contact.id
+    deal_ids = [
+        r[0] for r in db.execute(select(Deal.id).where(Deal.contact_id == cid))
+    ]
+    if deal_ids:
+        db.execute(
+            update(Activity)
+            .where(Activity.deal_id.in_(deal_ids))
+            .values(deal_id=None)
+        )
+        db.execute(
+            update(CrmTask)
+            .where(CrmTask.deal_id.in_(deal_ids))
+            .values(deal_id=None)
+        )
+    db.execute(delete(Activity).where(Activity.contact_id == cid))
+    db.execute(delete(CrmTask).where(CrmTask.contact_id == cid))
+    db.execute(delete(ContactTag).where(ContactTag.contact_id == cid))
+    db.execute(delete(Deal).where(Deal.contact_id == cid))
+    for model in (
+        LandingEvent,
+        ConversionEvent,
+        EmailVerificationRecord,
+        OutreachConversation,
+        OutreachEnrollment,
+        OutreachProspect,
+    ):
+        db.execute(
+            update(model).where(model.contact_id == cid).values(contact_id=None)
+        )
+    db.delete(contact)
 
 
 def set_qualified(

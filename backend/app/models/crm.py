@@ -68,6 +68,8 @@ class Contact(Base):
     last_name: Mapped[Optional[str]] = mapped_column(String(150))
     email: Mapped[Optional[str]] = mapped_column(String(320), index=True)
     phone: Mapped[Optional[str]] = mapped_column(String(50))
+    city: Mapped[Optional[str]] = mapped_column(String(120))
+    state: Mapped[Optional[str]] = mapped_column(String(64))
     # Where the lead came from: meta_instant_form | google_lead_form |
     # landing_page | manual — attribution details live on the landing event.
     source: Mapped[Optional[str]] = mapped_column(String(50))
@@ -126,6 +128,8 @@ RESERVED_CONTACT_FIELD_KEYS: frozenset[str] = frozenset(
         "name",
         "email",
         "phone",
+        "city",
+        "state",
         "source",
         "source_external_id",
         "source_detail",

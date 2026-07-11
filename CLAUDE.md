@@ -303,6 +303,45 @@ live activation + the entitlement flip, the Outreach module build
       through existing handling instead of a bare 500. Tests in
       test_teams_invites / test_social_auth / test_integrations /
       test_connect_flows.
+- [x] CRM completeness + house outreach + live-refresh fix (post-deploy
+      session): (1) Contact gained city/state columns (migration
+      a4e1c9d3f27b, nullable — prod-safe) and a company_name read/write
+      field resolved from Company (get-or-create org-scoped,
+      case-insensitive, services/crm.get_or_create_company; batch
+      resolution avoids N+1). CSV import targets extended with
+      city/state/company/full_name (full_name splits on first
+      whitespace server-side, explicit first/last columns win; per-row
+      in-request company dedupe). Import dialog auto-detects
+      First/Last/Full name, Email, Phone, City, State, Business name
+      via a normalized-header synonym table, and accepts JSON files
+      (top-level array, or first array under
+      contacts/leads/rows/data/records). (2) Lead deletion: DELETE
+      /api/crm/contacts/{id} + POST /api/crm/contacts/bulk-delete
+      (require_admin, ≤500 ids, cross-org ids silently skipped),
+      cascade via services/crm.delete_contact (activities, tasks, tags,
+      deals; detaches historical landing/conversion/verification/
+      outreach refs), audit_log contact.deleted per row. Drawer got a
+      two-step "Delete lead" confirm + an "Edit info" form
+      (identity + city/state/business name — PATCH already existed);
+      lead list got checkboxes + bulk-delete bar + City/State/Business
+      name columns. Notes already existed (Activity timeline).
+      (3) Outreach for the agency itself: the house client is now a
+      selectable target in all three outreach pickers ("My agency
+      (house CRM)", frontend-only — backend always accepted any
+      org-scoped client_id); test proves prospect import + sequences
+      under the house client. (4) The production "Live refresh failed
+      (NetworkError)" on the campaign browser: GoogleApiError /
+      MetaApiError / PlacesError escaping a router became bare 500s
+      that bypass CORSMiddleware, which browsers report as an opaque
+      NetworkError — main.py now registers global 502 handlers with a
+      readable detail; Google Ads reads got a 45s per-RPC deadline
+      (READ_TIMEOUT_SECONDS — the library default is ~unbounded, so a
+      stalled gRPC call outlived the browser fetch); frontend api()
+      got a 75s AbortSignal.timeout. Tests 283 → 292
+      (test_crm_contacts.py with dedicated cc_org fixtures,
+      test_platform_error_surfacing.py, house-outreach test in
+      test_outreach.py). NOT deployed — the VPS still runs 8f71709;
+      ship a snapshot per HANDOFF.md to take these live.
 - [ ] Stripe live activation + entitlement flip (after 12–14, so real
       limits land everywhere in one pass)
 - [ ] Outreach module build (dev-mode) — go-live gated on Meta App

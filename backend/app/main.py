@@ -146,6 +146,35 @@ app.include_router(ai.router, dependencies=_MFA)
 app.include_router(outreach.router, dependencies=_MFA)
 
 
+# Platform-API failures that escape a router (live refresh paths catch only
+# auth errors) must become structured 502s: an unhandled exception is a bare
+# 500 emitted outside CORSMiddleware, which browsers report as an opaque
+# "NetworkError" instead of the actual reason.
+from .services.google_ads_api import GoogleApiError as _GoogleApiError
+from .services.meta_api import MetaApiError as _MetaApiError
+from .services.places import PlacesError as _PlacesError
+
+_PLATFORM_ERROR_LABELS = {
+    _GoogleApiError: "Google Ads API error",
+    _MetaApiError: "Meta API error",
+    _PlacesError: "Google Places error",
+}
+
+
+def _platform_error_handler(request, exc):
+    from fastapi.responses import JSONResponse
+
+    label = next(
+        (v for k, v in _PLATFORM_ERROR_LABELS.items() if isinstance(exc, k)),
+        "Platform API error",
+    )
+    return JSONResponse({"detail": f"{label}: {exc}"}, status_code=502)
+
+
+for _exc_type in _PLATFORM_ERROR_LABELS:
+    app.add_exception_handler(_exc_type, _platform_error_handler)
+
+
 @app.get("/api/health")
 def health():
     return {"ok": True}

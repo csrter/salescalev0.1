@@ -27,16 +27,31 @@ export function setSession(s: Session | null) {
   else localStorage.removeItem("session");
 }
 
+// Bound every request so a stalled backend/proxy surfaces as a readable
+// timeout instead of the browser's opaque "NetworkError" long after the
+// user gave up. Generous: live platform refreshes can legitimately take
+// tens of seconds (the backend caps its own platform reads at 45s).
+const REQUEST_TIMEOUT_MS = 75_000;
+
 export async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const session = getSession();
-  const resp = await fetch(`${BASE}${path}`, {
-    ...init,
-    headers: {
-      "Content-Type": "application/json",
-      ...(session ? { Authorization: `Bearer ${session.access_token}` } : {}),
-      ...init?.headers,
-    },
-  });
+  let resp: Response;
+  try {
+    resp = await fetch(`${BASE}${path}`, {
+      ...init,
+      signal: init?.signal ?? AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      headers: {
+        "Content-Type": "application/json",
+        ...(session ? { Authorization: `Bearer ${session.access_token}` } : {}),
+        ...init?.headers,
+      },
+    });
+  } catch (e) {
+    if (e instanceof DOMException && e.name === "TimeoutError") {
+      throw new Error("the server took too long to respond");
+    }
+    throw e;
+  }
   // Only treat a 401 as an expired session when we actually sent one. A 401
   // on an unauthenticated call (e.g. wrong login credentials) must surface as
   // an error the form can show — not silently reload the page.
@@ -1161,6 +1176,35 @@ export const verifyContacts = (contactIds: string[]) =>
     skipped_no_email: string[];
     usage: MeteredUsage;
   }>("/api/crm/contacts/verify", {
+    method: "POST",
+    body: JSON.stringify({ contact_ids: contactIds }),
+  });
+
+// --- CRM contact edit / delete ---
+// Editable identity fields on a contact. All partial; sending null clears the
+// field (company_name null/empty clears the Company link). Changing email
+// resets the verification verdict server-side.
+export interface ContactEditBody {
+  first_name?: string | null;
+  last_name?: string | null;
+  email?: string | null;
+  phone?: string | null;
+  city?: string | null;
+  state?: string | null;
+  company_name?: string | null;
+}
+
+export const updateContact = (id: string, body: ContactEditBody) =>
+  api(`/api/crm/contacts/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify(body),
+  });
+
+export const deleteContact = (id: string) =>
+  api<void>(`/api/crm/contacts/${id}`, { method: "DELETE" });
+
+export const bulkDeleteContacts = (contactIds: string[]) =>
+  api<{ deleted: number }>("/api/crm/contacts/bulk-delete", {
     method: "POST",
     body: JSON.stringify({ contact_ids: contactIds }),
   });

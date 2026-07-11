@@ -722,6 +722,9 @@ class ContactOutPublic(BaseModel):
     last_name: Optional[str] = None
     email: Optional[str] = None
     phone: Optional[str] = None
+    city: Optional[str] = None
+    state: Optional[str] = None
+    company_name: Optional[str] = None
     source: Optional[str] = None
     qualified_at: Optional[dt.datetime] = None
     created_at: dt.datetime
@@ -745,6 +748,11 @@ class ContactCreateIn(BaseModel):
     last_name: Optional[str] = None
     email: Optional[EmailStr] = None
     phone: Optional[str] = None
+    city: Optional[str] = None
+    state: Optional[str] = None
+    # Non-empty resolves to a get-or-created org-scoped Company; the contact's
+    # company_id is set to it.
+    company_name: Optional[str] = None
     # Phase 14: custom field values keyed by definition key. Validated/coerced
     # at the data-access layer (services/custom_fields), not trusted as sent.
     custom_fields: Optional[Dict[str, Any]] = None
@@ -755,8 +763,17 @@ class ContactUpdateIn(BaseModel):
     last_name: Optional[str] = None
     email: Optional[EmailStr] = None
     phone: Optional[str] = None
+    city: Optional[str] = None
+    state: Optional[str] = None
+    # Present + non-empty get-or-creates and links a Company; present + empty
+    # clears company_id (detected via model_fields_set in the router).
+    company_name: Optional[str] = None
     # Only the keys present are changed; a key set to null clears that value.
     custom_fields: Optional[Dict[str, Any]] = None
+
+
+class ContactBulkDeleteIn(BaseModel):
+    contact_ids: List[str] = Field(min_length=1, max_length=500)
 
 
 # --- Phase 14: custom field definitions ---
