@@ -1,0 +1,56 @@
+# Production stack for a single VPS: backend + frontend + Caddy (TLS
+# termination, automatic Let's Encrypt certs, HTTP->HTTPS redirect).
+#
+# Backend and frontend publish NO ports to the host — `expose` only makes
+# them reachable from other containers on this compose network. Caddy is the
+# only thing bound to the host's 80/443. That's what keeps the API and app
+# off the public internet on any port but 443, no firewall rule required.
+#
+# Usage (from this directory):
+#   cp .env.example .env               # fill in your domains
+#   cp ../backend/.env.example ../backend/.env   # fill in secrets — see DEPLOYMENT.md
+#   docker compose -f docker-compose.prod.yml up -d --build
+#
+# Redeploy after a `git pull`:
+#   docker compose -f docker-compose.prod.yml up -d --build
+
+services:
+  backend:
+    build: ../backend
+    env_file:
+      - ../backend/.env
+    restart: unless-stopped
+    expose:
+      - "8000"
+
+  frontend:
+    build:
+      context: ../frontend
+      args:
+        # Baked into the static build — must be the API's public HTTPS URL.
+        VITE_API_URL: ${VITE_API_URL}
+    restart: unless-stopped
+    expose:
+      - "80"
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    environment:
+      APP_DOMAIN: ${APP_DOMAIN}
+      API_DOMAIN: ${API_DOMAIN}
+      ACME_EMAIL: ${ACME_EMAIL}
+    depends_on:
+      - backend
+      - frontend
+
+volumes:
+  caddy_data:
+  caddy_config:

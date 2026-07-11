@@ -1,0 +1,16 @@
+# Caddy auto-provisions and renews Let's Encrypt certs for both domains —
+# no certbot, no cron job, no manual renewal. Requires APP_DOMAIN/API_DOMAIN
+# to already have an A record pointing at this VPS before first start (Caddy
+# validates ownership over HTTP-01 on port 80).
+
+{
+	email {$ACME_EMAIL}
+}
+
+{$APP_DOMAIN} {
+	reverse_proxy frontend:80
+}
+
+{$API_DOMAIN} {
+	reverse_proxy backend:8000
+}
