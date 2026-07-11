@@ -49,7 +49,7 @@ import {
   resendVerification,
   sessionFromToken,
 } from "./api";
-import "./App.css";
+import "./legacy.css";
 
 type IconName =
   | "clients"

@@ -1,126 +1,252 @@
-/* Salescale design foundation — the single token source for every screen.
-   Light + dark are defined together via light-dark(); the user toggle works
-   by narrowing color-scheme on :root (see theme.ts). Tenant white-label
-   branding overrides a small set of these at runtime (theme.ts applyBranding)
-   so nothing below may hardcode a brand color outside a token. */
+/* ==========================================================================
+   theme.css — Salescale design tokens. THE ONLY FILE that may contain
+   literal colors, font sizes, radii, durations, or z-index numbers.
+   (CI grep gate enforces this — see the CSS architecture doc section.)
+
+   Theming mechanism (FROZEN): light-dark() pairs on :root with
+   color-scheme, narrowed by :root[data-theme] which theme.ts stamps on
+   <html>. Do not change this mechanism.
+
+   White-label contract (FROZEN): theme.ts BRAND_VAR_MAP writes these vars
+   inline on <html> at runtime (inline style beats everything below):
+       primary        → --accent, --brand-blue
+       primary_strong → --accent-strong
+       primary_soft   → --accent-soft
+       header_start   → --header-start
+       header_end     → --header-end
+   These six names must keep existing and keep meaning what they mean.
+   Every brand-colored thing in the UI derives from them (color-mix
+   allowed). No other file may introduce a brand hex.
+
+   Derivation rule: --accent-strong / --accent-soft stylesheet DEFAULTS are
+   re-derived from var(--accent) (see @supports block at the bottom), so a
+   tenant that sets only `primary` still gets coherent variants. A tenant
+   that sets all keys wins via inline styles, as before.
+
+   Browser floor: same as the existing light-dark() mechanism —
+   Chromium ≥123 (Electron shell qualifies) / Safari ≥17.5 / Firefox ≥120.
+   All such browsers also support color-mix(in oklab, …).
+   ========================================================================== */
 
 :root {
   color-scheme: light dark;
 
-  /* --- typography --- */
+  /* ---- typography (px for Electron determinism) ---------------------- */
   --font-sans: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
-  --font-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
-  --text-xs: 0.72rem;
-  --text-sm: 0.82rem;
-  --text-md: 0.9rem;
-  --text-base: 15px;
-  --text-lg: 1.05rem;
-  --text-xl: 1.35rem;
-  --text-2xl: 1.7rem;
-  --text-3xl: 2.2rem;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+  --text-2xs: 11px;   /* table meta, axis ticks, kbd, overlines */
+  --text-xs: 12px;    /* badges, captions, breadcrumb, deltas */
+  --text-sm: 13px;    /* secondary UI, table cells, buttons */
+  --text-md: 14px;    /* default UI: inputs, nav, controls */
+  --text-base: 15px;  /* body copy */
+  --text-lg: 17px;    /* card titles */
+  --text-xl: 20px;    /* section headings */
+  --text-2xl: 26px;   /* page titles */
+  --text-3xl: 34px;   /* KPI values */
+  --text-hero: 48px;  /* ONE hero figure per view; proportional figures */
+
+  --leading-tight: 1.2;
+  --leading-normal: 1.5;
+  --weight-normal: 400;
+  --weight-medium: 500;
+  --weight-semibold: 600;
+  --weight-bold: 700;
   --tracking-tight: -0.02em;
   --tracking-caps: 0.06em;
 
-  /* --- spacing scale (4px base) --- */
-  --space-1: 4px;
-  --space-2: 8px;
-  --space-3: 12px;
-  --space-4: 16px;
-  --space-5: 20px;
-  --space-6: 24px;
-  --space-8: 32px;
-  --space-10: 40px;
+  /* ---- spacing (4px base) --------------------------------------------- */
+  --space-1: 4px;  --space-2: 8px;   --space-3: 12px; --space-4: 16px;
+  --space-5: 20px; --space-6: 24px;  --space-8: 32px; --space-10: 40px;
+  --space-12: 48px; --space-16: 64px;
 
-  /* --- motion --- */
-  --dur-fast: 0.14s;
-  --dur-med: 0.25s;
+  /* ---- motion (ALL durations in the app come from these) -------------- */
+  --dur-fast: 0.14s;     /* hovers, focus, toggles, chevrons */
+  --dur-med: 0.25s;      /* drawers, dialogs, nav pill, tabs */
+  --dur-slow: 0.45s;     /* entrances, skeleton shimmer base */
+  --dur-ambient: 40s;    /* login aurora drift — decorative only */
   --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --ease-spring: cubic-bezier(0.3, 1.25, 0.4, 1); /* nav pill slide only */
 
-  /* --- fixed brand palette (navy scale is mode-invariant) --- */
+  /* ---- navy scale: CHROME ONLY (sidebar, auth aside). NEVER text ink -- */
   --navy-950: #0a1022;
   --navy-900: #0e1a3c;
   --navy-800: #142457;
   --navy-700: #1c3178;
-
-  /* Salescale brand (logo) colors; tenant branding may override at runtime. */
-  --brand-blue: #2b62e0;
   --brand-navy: #0f2147;
 
-  /* --- accent (tenant-brandable: "primary" keys) --- */
+  /* ---- brand primitives (FROZEN names — see contract above) ----------- */
+  --brand-blue: #2b62e0;
   --accent: light-dark(#4f46e5, #7c78f0);
+  /* literal fallbacks; re-derived from --accent in the @supports block */
   --accent-strong: light-dark(#4338ca, #938ff5);
   --accent-soft: light-dark(#e7e8fb, #262d55);
-  /* legacy aliases still referenced across components */
+
+  /* ---- derived brand helpers (never tenant-written; always computed) -- */
+  --accent-ghost: color-mix(in srgb, var(--accent) 8%, transparent);   /* hover washes, drag ghosts */
+  --accent-line: color-mix(in srgb, var(--accent) 38%, transparent);   /* selected borders, drop targets */
+  --accent-ink: light-dark(color-mix(in oklab, var(--accent) 78%, black),
+                           color-mix(in oklab, var(--accent) 72%, white)); /* accent-colored TEXT — always ink-mixed so any tenant hue stays readable */
+  --ink-on-accent: #ffffff;
+
+  /* legacy aliases — keep until the final migration sweep, then delete */
   --cobalt: var(--accent);
   --cobalt-strong: var(--accent-strong);
   --cobalt-soft: var(--accent-soft);
-  --amber: #d97706;
+  --amber: #d97706; /* deprecated: use --warn or --chart-3 */
 
-  /* --- surfaces --- */
-  --bg: light-dark(#f5f6fb, #0a0d18);
+  /* ---- surfaces -------------------------------------------------------- */
+  --bg: light-dark(#f4f5fa, #0a0d18);
   --bg-grad-1: light-dark(#ecedfb, #0c1024);
   --bg-grad-2: light-dark(#f7f4fb, #0a0d18);
-  --card: light-dark(#ffffff, #151a2e);
-  --surface: light-dark(#fafbfe, #11162a);
+  --card: light-dark(#ffffff, #151a2e);          /* data surfaces + chart surface */
+  --surface: light-dark(#f8f9fd, #11162a);        /* inset wells: table headers, kanban lanes, input bg */
+  --surface-raised: light-dark(#ffffff, #1a2038); /* menus, popovers, tooltips */
   --border: light-dark(#e7e9f2, #262d47);
-  --border-strong: light-dark(#d6d9e6, #343c5c);
+  --border-strong: light-dark(#d3d7e5, #343c5c);
 
-  /* glass surfaces — always pair --glass-bg with backdrop-filter blur and
-     --glass-border; text on glass must use --ink/--ink-soft (AA on both
-     modes against the blurred app background). */
-  --glass-bg: light-dark(rgba(255, 255, 255, 0.66), rgba(21, 26, 46, 0.58));
-  --glass-bg-heavy: light-dark(rgba(255, 255, 255, 0.82), rgba(21, 26, 46, 0.78));
+  /* ---- glass (FLOATING LAYERS ONLY: topbar-on-scroll, drawer, dialog,
+          palette, toast — never on data cards) --------------------------- */
+  --glass-bg: light-dark(rgba(255, 255, 255, 0.66), rgba(21, 26, 46, 0.6));
+  --glass-bg-heavy: light-dark(rgba(255, 255, 255, 0.85), rgba(21, 26, 46, 0.82));
   --glass-border: light-dark(rgba(255, 255, 255, 0.6), rgba(255, 255, 255, 0.08));
   --glass-blur: 14px;
   --glass-highlight: inset 0 1px 0 light-dark(rgba(255, 255, 255, 0.7), rgba(255, 255, 255, 0.06));
+  --scrim: light-dark(rgba(14, 19, 42, 0.42), rgba(4, 6, 14, 0.6));
 
-  /* --- ink (AA-checked against --bg / --card / glass in both modes) --- */
+  /* ---- ink (AA on --bg/--card/glass, both modes) ----------------------- */
   --ink: light-dark(#111530, #e9ecfa);
-  --ink-soft: light-dark(#5b6280, #a2abca);
-  --ink-faint: light-dark(#98a0b8, #6d769a);
-  --ink-on-accent: #ffffff;
+  --ink-soft: light-dark(#565e7d, #a2abca);
+  --ink-faint: light-dark(#8b93ad, #6d769a);
 
-  /* --- status --- */
-  --ok: #0e7a55;
+  /* ---- ink & washes ON dark brand fields (sidebar, auth aside, hero
+          gradients) — these fields are dark in BOTH modes ----------------- */
+  --ink-on-field: #eef1fb;
+  --ink-on-field-soft: rgba(238, 241, 251, 0.72);
+  --field-hover: rgba(255, 255, 255, 0.06);
+  --field-border: rgba(255, 255, 255, 0.08);
+  --field-kbd-bg: rgba(255, 255, 255, 0.08);
+
+  /* ---- status (identity fixed — never tenant-brandable) ---------------- */
+  --ok: light-dark(#0e7a55, #34c793);
   --ok-soft: light-dark(#d8f3e8, #113729);
-  --warn: #b45309;
+  --warn: light-dark(#b45309, #e8a33d);
   --warn-soft: light-dark(#fdeed7, #3a2b12);
-  --danger: #bf2334;
+  --danger: light-dark(#bf2334, #f07683);
   --danger-soft: light-dark(#fbe1e4, #3a1720);
+  --info: light-dark(#0369a1, #67b7e8);
+  --info-soft: light-dark(#dbeffb, #10293b);
 
-  /* --- chrome (tenant-brandable: header_start / header_end) --- */
+  /* ---- chrome (FROZEN names --header-start/--header-end) --------------- */
   --header-start: light-dark(#10152e, #0a0e1e);
   --header-end: light-dark(#0b0f21, #070a14);
   --sidebar-bg: linear-gradient(180deg, var(--header-start), var(--header-end));
   --sidebar-ink: #c8cee6;
   --sidebar-ink-faint: #838db1;
+  --sidebar-w: 248px;
+  --sidebar-w-collapsed: 68px;
+  --topbar-h: 60px;
 
-  /* --- radii & elevation ramp --- */
-  --radius: 16px;
-  --radius-sm: 11px;
+  /* ---- expressive register (login, hero mastheads, empty states, billing;
+          all accent-derived so white-labeling propagates) ----------------- */
+  --aurora-field:
+    radial-gradient(58% 62% at 18% 12%, color-mix(in srgb, var(--accent) 34%, transparent), transparent 70%),
+    radial-gradient(46% 52% at 85% 28%, color-mix(in srgb, var(--accent-strong) 22%, transparent), transparent 72%),
+    radial-gradient(70% 70% at 55% 95%, color-mix(in srgb, var(--brand-blue) 18%, transparent), transparent 75%),
+    linear-gradient(160deg, var(--header-start), var(--header-end));
+  --aurora-wash:
+    radial-gradient(50% 55% at 12% 0%, color-mix(in srgb, var(--accent) 9%, transparent), transparent 70%),
+    radial-gradient(45% 50% at 92% 15%, color-mix(in srgb, var(--accent-strong) 6%, transparent), transparent 72%);
+  --grad-hero-ink: linear-gradient(115deg, var(--accent-ink),
+    color-mix(in oklab, var(--accent) 45%, var(--ink)));
+
+  /* ---- kbd / shortcut chips -------------------------------------------- */
+  --kbd-bg: var(--surface);
+  --kbd-border: var(--border-strong);
+  --kbd-ink: var(--ink-soft);
+
+  /* ---- density (44px comfortable; [data-density="dense"] → 36px) ------- */
+  --row-h: 44px;
+
+  /* ---- radii ramp ------------------------------------------------------ */
+  --radius-xs: 6px;    /* badges, kbd, chips */
+  --radius-sm: 10px;   /* buttons, inputs, nav items, kanban cards */
+  --radius-md: 12px;   /* KPI tiles, popovers, toasts */
+  --radius-lg: 16px;   /* cards, dialogs, drawers */
+  --radius-full: 999px;
+  --radius: var(--radius-lg); /* legacy alias */
+
+  /* ---- elevation ramp -------------------------------------------------- */
   --shadow-xs: 0 1px 2px light-dark(rgba(16, 21, 48, 0.05), rgba(0, 0, 0, 0.3));
   --shadow-sm: 0 1px 2px light-dark(rgba(16, 21, 48, 0.06), rgba(0, 0, 0, 0.4)),
-    0 1px 3px light-dark(rgba(16, 21, 48, 0.07), rgba(0, 0, 0, 0.4));
+               0 1px 3px light-dark(rgba(16, 21, 48, 0.07), rgba(0, 0, 0, 0.4));
   --shadow-md: 0 8px 26px light-dark(rgba(16, 21, 48, 0.09), rgba(0, 0, 0, 0.45));
+  --shadow-pop: 0 4px 12px light-dark(rgba(16, 21, 48, 0.10), rgba(0, 0, 0, 0.5)),
+                0 12px 32px light-dark(rgba(16, 21, 48, 0.10), rgba(0, 0, 0, 0.45));
   --shadow-lg: 0 24px 64px light-dark(rgba(16, 21, 48, 0.18), rgba(0, 0, 0, 0.55));
 
-  /* --- focus ring --- */
-  --ring: 3px solid var(--accent-soft);
+  /* ---- focus (one visible ring app-wide; double halo reads on any
+          surface). Usage: :focus-visible { outline: none;
+          box-shadow: var(--focus-ring); }  On dark brand fields use
+          --focus-ring-field instead. ------------------------------------- */
+  --focus-ring: 0 0 0 2px light-dark(#ffffff, #0a0d18), 0 0 0 4px var(--accent-ink);
+  --focus-ring-field: 0 0 0 2px var(--header-end), 0 0 0 4px var(--ink-on-field);
+  --ring: 3px solid var(--accent-soft); /* legacy alias — delete in final sweep */
+
+  /* ---- z-index ramp (no literal z-index anywhere else) ----------------- */
+  --z-sticky: 10;    /* sticky table headers, filter rows */
+  --z-shell: 20;     /* sidebar rail */
+  --z-topbar: 30;
+  --z-dropdown: 60;  /* menus, popovers, chart tooltips */
+  --z-drawer: 70;
+  --z-dialog: 80;
+  --z-palette: 90;
+  --z-toast: 100;
+  --z-tooltip: 110;
+
+  /* ---- charts (VALIDATED palette — verbatim, deliberately NOT derived
+          from --accent: tenant rebrands must not repaint series identity.
+          Chart surface is --card.) ---------------------------------------- */
+  --chart-1: light-dark(#4f46e5, #7c78f0);
+  --chart-2: #0d9488;
+  --chart-3: #d97706;
+  --chart-4: light-dark(#be185d, #db2777);
+  --chart-5: #0284c7;
+  --chart-6: #65a30d;
+  --chart-grid: light-dark(#eef0f6, #20263e);  /* hairline, one step off --card */
+  --chart-axis-ink: var(--ink-faint);
+  --chart-prior: light-dark(#c9cbd6, #3a3d4a); /* previous-period / pace / sparkline history */
+  --chart-area-opacity: 0.1;
+  --chart-surface: var(--card);                /* gap + end-dot ring color */
 }
 
-/* User toggle (theme.ts persists the choice): narrowing color-scheme flips
-   every light-dark() token at once. No data-theme attr = follow the OS. */
-:root[data-theme="light"] {
-  color-scheme: light;
-}
+:root[data-theme="light"] { color-scheme: light; }
+:root[data-theme="dark"]  { color-scheme: dark; }
 
-:root[data-theme="dark"] {
-  color-scheme: dark;
+/* Density: stamped on <html> by the topbar toggle (persisted per user).
+   Client-role sessions never get the attribute. */
+:root[data-density="dense"] { --row-h: 36px; }
+
+/* Derived defaults for the two frozen-name variant tokens: a tenant that
+   sets only `primary` (inline --accent) gets coherent strong/soft for free.
+   Guarded as belt-and-braces for older evergreens; the literals above are
+   the fallback. Inline tenant styles still beat both. */
+@supports (color: color-mix(in oklab, red 50%, white)) {
+  :root {
+    --accent-strong: light-dark(
+      color-mix(in oklab, var(--accent), black 14%),
+      color-mix(in oklab, var(--accent), white 14%));
+    --accent-soft: light-dark(
+      color-mix(in oklab, var(--accent) 13%, white),
+      color-mix(in oklab, var(--accent) 26%, #151a2e));
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
   :root {
     --dur-fast: 0s;
     --dur-med: 0s;
+    --dur-slow: 0s;
+    --dur-ambient: 0s;
   }
 }

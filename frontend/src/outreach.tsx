@@ -169,7 +169,7 @@ function InboxPanel({
   isAdmin: boolean;
   accounts: IgAccount[];
 }) {
-  const { toast } = useToast();
+  const toast = useToast();
   const [convos, setConvos] = useState<OutreachConvo[] | null>(null);
   const [search, setSearch] = useState("");
   const [selected, setSelected] = useState<OutreachConvo | null>(null);
@@ -469,7 +469,7 @@ const EMPTY_RULE: Partial<OutreachRule> = {
 };
 
 function RulesPanel({ clientId, accounts }: { clientId: string; accounts: IgAccount[] }) {
-  const { toast } = useToast();
+  const toast = useToast();
   const [rules, setRules] = useState<OutreachRule[] | null>(null);
   const [sequences, setSequences] = useState<OutreachSequence[]>([]);
   const [editing, setEditing] = useState<Partial<OutreachRule> | null>(null);
@@ -733,7 +733,7 @@ function RulesPanel({ clientId, accounts }: { clientId: string; accounts: IgAcco
 // --- Sequences ---
 
 function SequencesPanel({ clientId, accounts }: { clientId: string; accounts: IgAccount[] }) {
-  const { toast } = useToast();
+  const toast = useToast();
   const [sequences, setSequences] = useState<OutreachSequence[] | null>(null);
   const [editing, setEditing] = useState<OutreachSequence | null>(null);
   const [steps, setSteps] = useState<OutreachStep[]>([]);
@@ -1021,7 +1021,7 @@ function ProspectsPanel({
   clients: Client[];
   accounts: IgAccount[];
 }) {
-  const { toast } = useToast();
+  const toast = useToast();
   const [prospects, setProspects] = useState<OutreachProspect[] | null>(null);
   const [importing, setImporting] = useState(false);
   const [handles, setHandles] = useState("");
@@ -1195,7 +1195,7 @@ function ProspectsPanel({
 // --- Analytics ---
 
 function AnalyticsPanel({ clientId }: { clientId: string }) {
-  const { toast } = useToast();
+  const toast = useToast();
   const [data, setData] = useState<OutreachAnalytics | null>(null);
   const [days, setDays] = useState(30);
 
@@ -1324,7 +1324,7 @@ function AccountsPanel({
   accounts: IgAccount[];
   onChanged: () => void;
 }) {
-  const { toast } = useToast();
+  const toast = useToast();
   const [connectClient, setConnectClient] = useState(clientId);
 
   const connect = async () => {

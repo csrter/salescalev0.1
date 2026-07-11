@@ -1,138 +1,594 @@
-/* Shared UI primitives (Phase 2 UI modernization). Everything here consumes
-   theme.css tokens only — no literal colors — so tenant branding and the
-   light/dark toggle apply automatically. */
+/* ==========================================================================
+   components/ui.css — ALL shared primitives (DESIGN.md §4).
+   Tokens only: every color/size/duration/z-index comes from theme.css vars
+   (grep gate §3.4). Glass appears ONLY on floating layers (dialog, palette,
+   toast) — data surfaces are solid --card.
+   ========================================================================== */
 
-/* --- glass card --- */
+/* ==========================================================================
+   §4.1 Button — .btn
+   ========================================================================== */
 
-.glass-card {
-  background: var(--glass-bg);
-  -webkit-backdrop-filter: blur(var(--glass-blur));
-  backdrop-filter: blur(var(--glass-blur));
-  border: 1px solid var(--glass-border);
-  border-radius: var(--radius);
-  box-shadow: var(--shadow-sm), var(--glass-highlight);
-}
-
-.glass-card.heavy {
-  background: var(--glass-bg-heavy);
-}
-
-/* --- skeleton loading --- */
-
-.skeleton {
+.btn {
+  --_spin: calc(var(--dur-slow) * 2);
   position: relative;
-  overflow: hidden;
-  border-radius: 8px;
-  background: color-mix(in srgb, var(--ink) 7%, transparent);
-}
-
-.skeleton::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  transform: translateX(-100%);
-  background: linear-gradient(
-    90deg,
-    transparent,
-    color-mix(in srgb, var(--card) 60%, transparent),
-    transparent
-  );
-  animation: skeleton-shimmer 1.4s var(--ease-out) infinite;
-}
-
-@keyframes skeleton-shimmer {
-  100% {
-    transform: translateX(100%);
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .skeleton::after {
-    animation: none;
-  }
-}
-
-.skeleton-text {
-  display: flex;
-  flex-direction: column;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   gap: var(--space-2);
-}
-
-.skeleton-text .skeleton {
-  height: 0.85em;
-}
-
-.skeleton-text .skeleton:last-child {
-  width: 60%;
-}
-
-/* --- data table --- */
-
-.data-table-wrap {
-  overflow-x: auto;
-}
-
-table.data-table {
-  width: 100%;
-  border-collapse: collapse;
+  height: 34px;
+  padding-inline: 14px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  font-family: var(--font-sans);
   font-size: var(--text-sm);
-}
-
-table.data-table th,
-table.data-table td {
-  text-align: left;
-  padding: 0.55rem 0.7rem;
-  border-bottom: 1px solid var(--border);
-}
-
-table.data-table th {
-  font-size: var(--text-xs);
-  text-transform: uppercase;
-  letter-spacing: var(--tracking-caps);
-  color: var(--ink-faint);
-  font-weight: 600;
+  font-weight: var(--weight-medium);
+  line-height: var(--leading-tight);
   white-space: nowrap;
-}
-
-table.data-table th.sortable {
   cursor: pointer;
+  -webkit-user-select: none;
   user-select: none;
+  transition:
+    background-color var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out);
 }
 
-table.data-table th.sortable:hover {
+.btn--sm {
+  height: 28px;
+  padding-inline: 12px;
+  font-size: var(--text-xs);
+}
+
+.btn--lg {
+  height: 40px;
+  padding-inline: 18px;
+  font-size: var(--text-md);
+}
+
+.btn--block {
+  display: flex;
+  width: 100%;
+}
+
+.btn--default {
+  background: var(--card);
+  border-color: var(--border-strong);
+  color: var(--ink);
+}
+
+.btn--default:hover {
+  background: var(--surface);
+}
+
+.btn--primary {
+  background: var(--accent);
+  color: var(--ink-on-accent);
+}
+
+.btn--primary:hover {
+  background: var(--accent-strong);
+}
+
+.btn--ghost {
+  background: transparent;
   color: var(--ink-soft);
 }
 
-table.data-table th .sort-arrow {
-  display: inline-block;
-  margin-left: 0.3rem;
-  font-size: 0.6rem;
-  color: var(--accent);
+.btn--ghost:hover {
+  background: var(--accent-ghost);
+  color: var(--accent-ink);
 }
 
-table.data-table th.align-right,
-table.data-table td.align-right {
-  text-align: right;
-  font-variant-numeric: tabular-nums;
+.btn--danger {
+  background: var(--danger);
+  color: var(--ink-on-accent);
 }
 
-table.data-table tbody tr:last-child td {
-  border-bottom: none;
+.btn--danger:hover {
+  background: color-mix(in oklab, var(--danger), var(--ink) 12%);
 }
 
-table.data-table tr.clickable {
-  cursor: pointer;
+.btn--danger-outline {
+  background: var(--card);
+  border-color: var(--danger);
+  color: var(--danger);
 }
 
-table.data-table tr.clickable:hover td {
-  background: color-mix(in srgb, var(--accent) 5%, transparent);
+.btn--danger-outline:hover {
+  background: var(--danger-soft);
 }
 
-table.data-table tr.selected td {
+.btn--link {
+  background: transparent;
+  border: none;
+  padding-inline: 0;
+  height: auto;
+  color: var(--accent-ink);
+}
+
+.btn--link:hover {
+  text-decoration: underline;
+}
+
+.btn:disabled,
+.btn[disabled] {
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+.btn:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+/* Busy: label hidden but kept in flow (width locked), centered spinner. */
+.btn--busy {
+  pointer-events: none;
+  color: transparent;
+}
+
+.btn--busy::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--border-strong);
+  border-top-color: var(--ink-soft);
+  border-radius: var(--radius-full);
+  animation: btn-spin var(--_spin) linear infinite;
+}
+
+.btn--primary.btn--busy::after,
+.btn--danger.btn--busy::after {
+  border-color: color-mix(in srgb, var(--ink-on-accent) 30%, transparent);
+  border-top-color: var(--ink-on-accent);
+}
+
+@keyframes btn-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* ==========================================================================
+   §4.2 Card — .card / .card--interactive / .card--hero
+   ========================================================================== */
+
+.card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-xs);
+  padding: var(--space-6);
+}
+
+.card--interactive {
+  transition:
+    transform var(--dur-fast) var(--ease-out),
+    box-shadow var(--dur-fast) var(--ease-out);
+}
+
+.card--interactive:hover {
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-md);
+}
+
+.card--hero {
+  background: var(--aurora-wash), var(--card);
+  padding: var(--space-8);
+}
+
+.card-header {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  margin-bottom: var(--space-4);
+}
+
+.card-header h2,
+.card-header h3,
+.card-title {
+  margin: 0;
+  font-size: var(--text-lg);
+  font-weight: var(--weight-semibold);
+  color: var(--ink);
+}
+
+.card-sub {
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--ink-soft);
+}
+
+.card-actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+/* ==========================================================================
+   §4.3 KPI stat tile — .kpi / .kpi--hero / .kpi-grid (+ skeleton twin)
+   ========================================================================== */
+
+.kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: var(--space-4);
+}
+
+.kpi {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-xs);
+  padding: var(--space-5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.kpi-label {
+  font-size: var(--text-sm);
+  color: var(--ink-soft);
+}
+
+.kpi-value {
+  font-size: var(--text-3xl);
+  font-weight: var(--weight-semibold);
+  color: var(--ink);
+  letter-spacing: var(--tracking-tight);
+  line-height: var(--leading-tight);
+  /* proportional figures at display size — never tabular-nums here */
+  font-variant-numeric: normal;
+}
+
+.kpi--hero .kpi-value {
+  font-size: var(--text-hero);
+  color: var(--ink);
+}
+
+@supports (background-clip: text) or (-webkit-background-clip: text) {
+  .kpi--hero .kpi-value {
+    background: var(--grad-hero-ink);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+}
+
+.kpi-delta {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+  padding: 2px 8px;
+  border-radius: var(--radius-full);
+  background: var(--surface);
+  color: var(--ink-soft);
+}
+
+.kpi-delta--good {
+  background: var(--ok-soft);
+  color: var(--ok);
+}
+
+.kpi-delta--bad {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.kpi-spark {
+  margin-top: auto;
+}
+
+/* ==========================================================================
+   §4.7 Badge — .badge + tones. Text always names the state.
+   ========================================================================== */
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  height: 20px;
+  padding: 4px 10px;
+  border-radius: var(--radius-full);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+  line-height: var(--leading-tight);
+  white-space: nowrap;
+  background: var(--surface);
+  color: var(--ink-soft);
+}
+
+.badge-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-full);
+  background: currentColor;
+}
+
+.badge--ok {
+  background: var(--ok-soft);
+  color: var(--ok);
+}
+
+.badge--warn {
+  background: var(--warn-soft);
+  color: var(--warn);
+}
+
+.badge--danger {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.badge--info {
+  background: var(--info-soft);
+  color: var(--info);
+}
+
+.badge--neutral {
+  background: var(--surface);
+  color: var(--ink-soft);
+}
+
+.badge--accent {
   background: var(--accent-soft);
+  color: var(--accent-ink);
 }
 
-/* --- toasts --- */
+/* Legacy raw-markup aliases (unmigrated views emit `badge ok` etc. straight
+   from App.css-era markup) — same declarations as the canonical tones. */
+.badge.ok,
+.badge.active,
+.badge.enabled,
+.badge.executed,
+.badge.success,
+.badge.connected {
+  background: var(--ok-soft);
+  color: var(--ok);
+}
+
+.badge.warn,
+.badge.paused,
+.badge.none {
+  background: var(--warn-soft);
+  color: var(--warn);
+}
+
+.badge.error,
+.badge.failed,
+.badge.disconnected,
+.badge.removed,
+.badge.suspended {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.badge.pending {
+  background: var(--info-soft);
+  color: var(--info);
+}
+
+/* ==========================================================================
+   §4.8 Platform chip — .chip (neutral; identity is the label, never color)
+   ========================================================================== */
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 2px 8px 2px 3px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  background: var(--surface);
+  font-size: var(--text-xs);
+  color: var(--ink-soft);
+  white-space: nowrap;
+}
+
+.chip-disc {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: var(--radius-full);
+  background: var(--surface-raised);
+  border: 1px solid var(--border-strong);
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
+  color: var(--ink-soft);
+}
+
+/* ==========================================================================
+   §4.9 Tabs & Segmented — .tabs / .seg
+   ========================================================================== */
+
+.tabs {
+  display: flex;
+  gap: var(--space-1);
+  border-bottom: 1px solid var(--border);
+}
+
+.tab {
+  position: relative;
+  appearance: none;
+  background: transparent;
+  border: none;
+  padding: var(--space-2) var(--space-3);
+  font-family: var(--font-sans);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  color: var(--ink-soft);
+  cursor: pointer;
+  border-radius: var(--radius-xs);
+}
+
+.tab:hover {
+  color: var(--ink);
+}
+
+.tab::after {
+  content: "";
+  position: absolute;
+  left: var(--space-2);
+  right: var(--space-2);
+  bottom: -1px;
+  height: 2px;
+  background: var(--accent);
+  opacity: 0;
+  transition: opacity var(--dur-fast) var(--ease-out);
+}
+
+.tab[aria-selected="true"] {
+  color: var(--ink);
+}
+
+.tab[aria-selected="true"]::after {
+  opacity: 1;
+}
+
+.seg {
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  background: var(--surface);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+}
+
+.seg-item {
+  appearance: none;
+  border: 1px solid transparent;
+  background: transparent;
+  padding: var(--space-1) var(--space-3);
+  border-radius: var(--radius-xs);
+  font-family: var(--font-sans);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+  color: var(--ink-soft);
+  cursor: pointer;
+  transition:
+    background-color var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out);
+}
+
+.seg-item[aria-checked="true"] {
+  background: var(--card);
+  border-color: var(--border-strong);
+  box-shadow: var(--shadow-xs);
+  color: var(--ink);
+}
+
+/* ==========================================================================
+   §4.6 Field / Input / Select / Textarea
+   ========================================================================== */
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  font-size: var(--text-sm);
+  color: var(--ink);
+}
+
+.field > span:first-child,
+.field-label {
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  color: var(--ink);
+}
+
+.field .opt {
+  font-style: normal;
+  font-weight: var(--weight-normal);
+  color: var(--ink-faint);
+}
+
+.field-desc {
+  font-size: var(--text-xs);
+  color: var(--ink-soft);
+}
+
+.field-error {
+  font-size: var(--text-xs);
+  color: var(--danger);
+}
+
+.field-error:empty {
+  display: none;
+}
+
+.input,
+.select,
+.textarea,
+.field input:not([type="checkbox"]):not([type="radio"]),
+.field select,
+.field textarea {
+  width: 100%;
+  min-height: 36px;
+  padding: var(--space-2) var(--space-3);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-sans);
+  font-size: var(--text-md);
+  color: var(--ink);
+  transition: border-color var(--dur-fast) var(--ease-out);
+}
+
+.input::placeholder,
+.textarea::placeholder,
+.field input::placeholder,
+.field textarea::placeholder {
+  color: var(--ink-faint);
+}
+
+.input:focus-visible,
+.select:focus-visible,
+.textarea:focus-visible,
+.field input:focus-visible,
+.field select:focus-visible,
+.field textarea:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: var(--focus-ring);
+}
+
+.textarea,
+.field textarea {
+  min-height: 72px;
+  resize: vertical;
+}
+
+.field input[type="checkbox"],
+.field input[type="radio"],
+input[type="checkbox"].input,
+input[type="radio"].input {
+  accent-color: var(--accent);
+  width: 16px;
+  height: 16px;
+  min-height: 0;
+}
+
+.input[aria-invalid="true"],
+.field input[aria-invalid="true"],
+.field select[aria-invalid="true"],
+.field textarea[aria-invalid="true"] {
+  border-color: var(--danger);
+}
+
+/* ==========================================================================
+   §4.10 Toast / Alert
+   ========================================================================== */
 
 .toasts {
   position: fixed;
@@ -141,88 +597,725 @@ table.data-table tr.selected td {
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
-  z-index: 60;
+  z-index: var(--z-toast);
 }
 
 .toast {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: var(--space-2);
-  min-width: 240px;
-  max-width: 380px;
-  padding: 0.65rem 0.9rem;
-  border-radius: var(--radius-sm);
+  width: 320px;
+  padding: var(--space-3) var(--space-3) var(--space-3) var(--space-4);
+  border-radius: var(--radius-md);
   background: var(--glass-bg-heavy);
   -webkit-backdrop-filter: blur(var(--glass-blur));
   backdrop-filter: blur(var(--glass-blur));
   border: 1px solid var(--glass-border);
-  box-shadow: var(--shadow-md);
+  border-left: 4px solid var(--info);
+  box-shadow: var(--shadow-pop), var(--glass-highlight);
   color: var(--ink);
   font-size: var(--text-sm);
-  animation: toast-in var(--dur-med) var(--ease-out);
+  transition:
+    opacity var(--dur-med) var(--ease-out),
+    transform var(--dur-med) var(--ease-out);
 }
 
-.toast.ok {
-  border-left: 3px solid var(--ok);
-}
-
-.toast.error {
-  border-left: 3px solid var(--danger);
-}
-
-@keyframes toast-in {
-  from {
+@starting-style {
+  .toast {
     opacity: 0;
     transform: translateY(8px);
   }
 }
 
-/* --- command palette (Cmd+K) --- */
+.toast--ok {
+  border-left-color: var(--ok);
+}
+
+.toast--danger {
+  border-left-color: var(--danger);
+}
+
+.toast--info {
+  border-left-color: var(--info);
+}
+
+.toast-msg {
+  flex: 1;
+  padding-top: 2px;
+}
+
+.toast-close {
+  flex: none;
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: none;
+  background: transparent;
+  border-radius: var(--radius-xs);
+  color: var(--ink-faint);
+  cursor: pointer;
+}
+
+.toast-close:hover {
+  background: var(--accent-ghost);
+  color: var(--ink);
+}
+
+.alert {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-sm);
+  background: var(--info-soft);
+  color: var(--info);
+}
+
+.alert--ok {
+  background: var(--ok-soft);
+  color: var(--ok);
+}
+
+.alert--warn {
+  background: var(--warn-soft);
+  color: var(--warn);
+}
+
+.alert--danger {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.alert--info {
+  background: var(--info-soft);
+  color: var(--info);
+}
+
+.alert-title {
+  font-weight: var(--weight-semibold);
+}
+
+/* ==========================================================================
+   §4.11 EmptyState — .empty
+   ========================================================================== */
+
+.empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-3);
+  padding: var(--space-12);
+  text-align: center;
+}
+
+.empty--hero {
+  background: var(--aurora-wash), var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+}
+
+.empty-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 48px;
+  height: 48px;
+  border-radius: var(--radius-full);
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+}
+
+.empty h3 {
+  margin: 0;
+  font-size: var(--text-lg);
+  font-weight: var(--weight-semibold);
+  color: var(--ink);
+}
+
+.empty p {
+  margin: 0;
+  max-width: 44ch;
+  font-size: var(--text-sm);
+  color: var(--ink-soft);
+}
+
+/* ==========================================================================
+   §4.12 Skeleton — .skel (shimmer; static under reduced motion)
+   ========================================================================== */
+
+.skel {
+  --_shimmer: calc(var(--dur-slow) * 3);
+  position: relative;
+  overflow: hidden;
+  display: block;
+  border-radius: var(--radius-xs);
+  background: var(--surface);
+}
+
+.skel::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(
+    90deg,
+    transparent,
+    color-mix(in srgb, var(--ink) 6%, transparent),
+    transparent
+  );
+  animation: skel-shimmer var(--_shimmer) var(--ease-out) infinite;
+}
+
+@keyframes skel-shimmer {
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .skel::after {
+    animation: none;
+    /* static two-tone */
+    transform: none;
+    background: color-mix(in srgb, var(--ink) 3%, transparent);
+  }
+}
+
+.skel-text {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.skel-text .skel {
+  height: 0.85em;
+}
+
+.skel-text .skel:last-child {
+  width: 60%;
+}
+
+/* ==========================================================================
+   §4.14 Tree rows — .tree
+   ========================================================================== */
+
+.tree {
+  display: flex;
+  flex-direction: column;
+}
+
+.tree-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  height: 36px;
+  padding-inline: var(--space-2);
+  border-radius: var(--radius-xs);
+  font-size: var(--text-sm);
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.tree-row:hover {
+  background: var(--accent-ghost);
+}
+
+.tree-row[aria-selected="true"] {
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+}
+
+.tree-indent {
+  flex: none;
+  width: 20px;
+  align-self: stretch;
+  border-left: 1px solid var(--border);
+}
+
+.tree-chevron {
+  flex: none;
+  display: inline-flex;
+  color: var(--ink-faint);
+  transition: transform var(--dur-fast) var(--ease-out);
+}
+
+.tree-row[aria-expanded="true"] .tree-chevron {
+  transform: rotate(90deg);
+}
+
+.tree-type {
+  font-size: var(--text-2xs);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-caps);
+  color: var(--ink-faint);
+}
+
+.tree-spend {
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ==========================================================================
+   §4.15 Kanban — .kanban-lane / .kanban-card
+   ========================================================================== */
+
+.kanban-lane {
+  background: var(--surface);
+  border-radius: var(--radius-md);
+  padding: var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.kanban-lane-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-2xs);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-caps);
+  color: var(--ink-faint);
+  font-weight: var(--weight-semibold);
+  padding: var(--space-1) var(--space-1) var(--space-2);
+}
+
+.kanban-card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-xs);
+  padding: var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  cursor: grab;
+  transition:
+    transform var(--dur-fast) var(--ease-out),
+    box-shadow var(--dur-fast) var(--ease-out);
+}
+
+.kanban-card-name {
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+  color: var(--ink);
+}
+
+.kanban-card-value {
+  font-size: var(--text-sm);
+  color: var(--ink-soft);
+  font-variant-numeric: tabular-nums;
+}
+
+.kanban-card--dragging {
+  box-shadow: var(--shadow-md);
+  transform: rotate(2deg);
+}
+
+.kanban-lane--drop {
+  outline: 2px dashed var(--accent-line);
+  outline-offset: -2px;
+  background: var(--accent-ghost);
+}
+
+.kanban-age-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-full);
+  background: var(--border-strong);
+}
+
+.kanban-age-dot--stale {
+  background: var(--warn);
+}
+
+/* ==========================================================================
+   §4.16 Kbd chip — .kbd
+   ========================================================================== */
+
+.kbd {
+  display: inline-block;
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  line-height: var(--leading-tight);
+  padding: 2px 6px;
+  border-radius: var(--radius-xs);
+  background: var(--kbd-bg);
+  border: 1px solid var(--kbd-border);
+  color: var(--kbd-ink);
+}
+
+/* On dark brand fields (sidebar, auth aside) */
+.kbd--field {
+  background: var(--field-kbd-bg);
+  border-color: var(--field-border);
+  color: var(--sidebar-ink);
+}
+
+/* ==========================================================================
+   §4.4 DataTable — .table (wrapper is a padding-0 card)
+   ========================================================================== */
+
+.table-wrap {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-xs);
+  padding: 0;
+  overflow: auto;
+}
+
+table.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--text-sm);
+  color: var(--ink);
+}
+
+table.table th,
+table.table td {
+  text-align: left;
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--border);
+}
+
+table.table thead th {
+  position: sticky;
+  top: 0;
+  z-index: var(--z-sticky);
+  background: var(--surface);
+  font-size: var(--text-2xs);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-caps);
+  color: var(--ink-faint);
+  font-weight: var(--weight-semibold);
+  white-space: nowrap;
+  padding-block: var(--space-2);
+}
+
+.table-sort {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  width: 100%;
+  margin: calc(-1 * var(--space-2)) calc(-1 * var(--space-3));
+  padding: var(--space-2) var(--space-3);
+  border: none;
+  background: transparent;
+  font: inherit;
+  text-transform: inherit;
+  letter-spacing: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+
+.table-sort:hover {
+  color: var(--ink-soft);
+}
+
+th[aria-sort] .table-sort {
+  color: var(--ink-soft);
+}
+
+.table-sort-arrow {
+  display: inline-flex;
+  color: var(--accent-ink);
+}
+
+table.table th.align-right .table-sort {
+  justify-content: flex-end;
+}
+
+table.table tbody tr {
+  height: var(--row-h);
+}
+
+table.table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+table.table th.align-right,
+table.table td.align-right {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+table.table tr.clickable {
+  cursor: pointer;
+}
+
+table.table tr.clickable:hover td {
+  background: var(--accent-ghost);
+}
+
+table.table tr.selected td {
+  background: var(--accent-soft);
+}
+
+table.table tr.selected td:first-child {
+  box-shadow: inset 2px 0 var(--accent);
+}
+
+table.table tr:focus-visible {
+  outline: none;
+}
+
+table.table tr:focus-visible td {
+  box-shadow: inset 0 0 0 2px var(--accent-ink);
+}
+
+table.table tr:focus-visible td:first-child {
+  box-shadow:
+    inset 0 0 0 2px var(--accent-ink),
+    inset 2px 0 var(--accent);
+}
+
+.table-refetching tbody {
+  opacity: 0.5;
+}
+
+table.table td.muted {
+  color: var(--ink-faint);
+}
+
+/* ==========================================================================
+   §4.5 Dialog — .dialog (floating layer: glass allowed)
+   ========================================================================== */
+
+.dialog-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-dialog);
+  background: var(--scrim);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: var(--space-16) var(--space-4) var(--space-8);
+  overflow-y: auto;
+}
+
+.dialog {
+  width: 100%;
+  max-width: 640px;
+  background: var(--glass-bg-heavy);
+  -webkit-backdrop-filter: blur(var(--glass-blur));
+  backdrop-filter: blur(var(--glass-blur));
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg), var(--glass-highlight);
+  color: var(--ink);
+  transition:
+    opacity var(--dur-med) var(--ease-out),
+    transform var(--dur-med) var(--ease-out);
+}
+
+@starting-style {
+  .dialog {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+}
+
+.dialog--sm {
+  max-width: 480px;
+}
+
+.dialog--lg {
+  max-width: 840px;
+}
+
+.dialog-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-5) var(--space-6) var(--space-3);
+}
+
+.dialog-title {
+  margin: 0;
+  flex: 1;
+  font-size: var(--text-lg);
+  font-weight: var(--weight-semibold);
+  color: var(--ink);
+}
+
+.dialog-close {
+  width: 32px;
+  height: 32px;
+  padding-inline: 0;
+  flex: none;
+}
+
+.dialog-body {
+  padding: var(--space-2) var(--space-6) var(--space-5);
+  font-size: var(--text-md);
+}
+
+.dialog-foot {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-6) var(--space-5);
+}
+
+/* Confirm variant — the Change Receipt */
+.dialog--confirm {
+  border-left: 3px solid var(--warn);
+}
+
+.dialog--confirm.dialog--danger {
+  border-left-color: var(--danger);
+}
+
+.dialog--confirm .dialog-title {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.dialog-warn-icon {
+  color: var(--warn);
+  display: inline-flex;
+}
+
+.dialog--danger .dialog-warn-icon {
+  color: var(--danger);
+}
+
+.receipt {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.receipt-row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-3) 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.receipt-row:last-child {
+  border-bottom: none;
+}
+
+.receipt-meta {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-xs);
+  color: var(--ink-soft);
+}
+
+.receipt-change {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+}
+
+.receipt-old {
+  text-decoration: line-through;
+  color: var(--ink-faint);
+}
+
+.receipt-arrow {
+  color: var(--ink-faint);
+}
+
+.receipt-new {
+  text-decoration: none;
+  font-weight: var(--weight-semibold);
+  color: var(--ink);
+}
+
+.receipt-delta {
+  font-size: var(--text-xs);
+}
+
+.receipt-delta--ok {
+  color: var(--ok);
+}
+
+.receipt-delta--danger {
+  color: var(--danger);
+}
+
+/* ==========================================================================
+   Command palette (floating layer: glass allowed)
+   ========================================================================== */
 
 .cmdk-backdrop {
   position: fixed;
   inset: 0;
-  background: color-mix(in srgb, var(--navy-950) 45%, transparent);
-  -webkit-backdrop-filter: blur(3px);
-  backdrop-filter: blur(3px);
+  background: var(--scrim);
   display: flex;
   justify-content: center;
   align-items: flex-start;
   padding-top: clamp(60px, 16vh, 160px);
-  z-index: 50;
+  z-index: var(--z-palette);
 }
 
 .cmdk {
   width: min(560px, 92vw);
   background: var(--glass-bg-heavy);
-  -webkit-backdrop-filter: blur(calc(var(--glass-blur) * 1.5));
-  backdrop-filter: blur(calc(var(--glass-blur) * 1.5));
+  -webkit-backdrop-filter: blur(var(--glass-blur));
+  backdrop-filter: blur(var(--glass-blur));
   border: 1px solid var(--glass-border);
-  border-radius: var(--radius);
+  border-radius: var(--radius-lg);
   box-shadow: var(--shadow-lg), var(--glass-highlight);
   overflow: hidden;
-  animation: cmdk-in var(--dur-fast) var(--ease-out);
+  transition:
+    opacity var(--dur-fast) var(--ease-out),
+    transform var(--dur-fast) var(--ease-out);
 }
 
-@keyframes cmdk-in {
-  from {
+@starting-style {
+  .cmdk {
     opacity: 0;
     transform: translateY(-6px) scale(0.99);
   }
 }
 
-.cmdk input {
-  border: none;
-  background: transparent;
-  border-radius: 0;
+.cmdk-input-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding-inline: var(--space-4);
   border-bottom: 1px solid var(--border);
-  padding: 0.9rem 1.1rem;
-  font-size: var(--text-lg);
+  color: var(--ink-faint);
 }
 
-.cmdk input:focus {
+.cmdk input {
+  flex: 1;
+  border: none;
+  background: transparent;
+  border-radius: initial;
+  padding: var(--space-4) 0;
+  font-family: var(--font-sans);
+  font-size: var(--text-lg);
+  color: var(--ink);
+}
+
+.cmdk input::placeholder {
+  color: var(--ink-faint);
+}
+
+.cmdk input:focus,
+.cmdk input:focus-visible {
   outline: none;
-  border-color: var(--border);
+  box-shadow: none;
 }
 
 .cmdk-list {
@@ -232,11 +1325,11 @@ table.data-table tr.selected td {
 }
 
 .cmdk-section {
-  font-size: var(--text-xs);
+  font-size: var(--text-2xs);
   text-transform: uppercase;
   letter-spacing: var(--tracking-caps);
   color: var(--ink-faint);
-  font-weight: 650;
+  font-weight: var(--weight-semibold);
   padding: var(--space-2) var(--space-3) var(--space-1);
 }
 
@@ -245,11 +1338,12 @@ table.data-table tr.selected td {
   align-items: center;
   gap: var(--space-3);
   width: 100%;
-  padding: 0.55rem 0.75rem;
+  padding: var(--space-2) var(--space-3);
   border: none;
   background: transparent;
   border-radius: var(--radius-sm);
   color: var(--ink);
+  font-family: var(--font-sans);
   font-size: var(--text-md);
   text-align: left;
   cursor: pointer;
@@ -258,18 +1352,16 @@ table.data-table tr.selected td {
 
 .cmdk-item .cmdk-hint {
   margin-left: auto;
-  color: var(--ink-faint);
-  font-size: var(--text-xs);
 }
 
+.cmdk-item[aria-selected="true"],
 .cmdk-item.active {
   background: var(--accent-soft);
   color: var(--ink);
 }
 
 .cmdk-item:hover {
-  background: color-mix(in srgb, var(--accent) 8%, transparent);
-  border: none;
+  background: var(--accent-ghost);
   color: var(--ink);
 }
 
@@ -289,12 +1381,98 @@ table.data-table tr.selected td {
   font-size: var(--text-xs);
 }
 
-.cmdk-foot kbd {
-  font-family: var(--font-mono);
-  font-size: 0.9em;
-  background: color-mix(in srgb, var(--ink) 7%, transparent);
+.cmdk-foot .kbd {
+  margin-right: var(--space-1);
+}
+
+/* ==========================================================================
+   §4.13 Charts — frame, legend, tooltip, crosshair
+   ========================================================================== */
+
+.chart-frame {
+  position: relative;
+}
+
+.chart-frame:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+  border-radius: var(--radius-sm);
+}
+
+.chart-frame--refetching .chart-plot {
+  opacity: 0.5;
+}
+
+.chart-plot {
+  display: block;
+  transition: opacity var(--dur-fast) var(--ease-out);
+}
+
+.chart-axis {
+  font-family: var(--font-sans);
+  font-size: var(--text-2xs);
+  fill: var(--chart-axis-ink);
+  font-variant-numeric: tabular-nums;
+}
+
+.chart-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-4);
+  margin-bottom: var(--space-3);
+  font-size: var(--text-xs);
+  color: var(--ink-soft);
+}
+
+.chart-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.chart-tooltip {
+  position: absolute;
+  pointer-events: none;
+  z-index: var(--z-dropdown);
+  background: var(--surface-raised);
   border: 1px solid var(--border);
-  border-radius: 5px;
-  padding: 0 0.35em;
-  margin-right: 0.35em;
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-pop);
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--text-xs);
+  color: var(--ink-soft);
+  white-space: nowrap;
+}
+
+.chart-tooltip-label {
+  font-weight: var(--weight-semibold);
+  color: var(--ink);
+  margin-bottom: var(--space-1);
+}
+
+.chart-tooltip-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.chart-tooltip-key {
+  flex: none;
+  width: 10px;
+  height: 2px;
+  border-radius: var(--radius-full);
+}
+
+.chart-tooltip-value {
+  font-weight: var(--weight-semibold);
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+
+.chart-bar {
+  transition: filter var(--dur-fast) var(--ease-out);
+}
+
+.chart-bar--hot {
+  filter: brightness(1.08);
 }

@@ -2,8 +2,6 @@
    Tokens live in theme.css (light+dark via light-dark(), tenant-brandable);
    this file is component styles only. */
 
-@import "./theme.css";
-
 *,
 *::before,
 *::after {

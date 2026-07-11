@@ -5,9 +5,16 @@
  * user may do. Role-gated destinations must be filtered out by the caller
  * (App.tsx builds commands from the same role-filtered nav list the sidebar
  * renders), so the palette can't become a side door around nav gating.
+ *
+ * Contract kept: opens on Cmd/Ctrl+K or the window "cmdk:open" CustomEvent;
+ * `commands` + optional `loadDynamic()` per open. A11y: combobox/listbox with
+ * aria-activedescendant (focus stays on the input), Escape closes anywhere,
+ * body scroll locked while open.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { Search } from "./icons";
+import { Kbd } from "./ui";
 import "./ui.css";
 
 export interface Command {
@@ -52,6 +59,7 @@ export function CommandPalette({
   const [dynamic, setDynamic] = useState<Command[]>([]);
   const [active, setActive] = useState(0);
   const listRef = useRef<HTMLDivElement>(null);
+  const listId = "cmdk-listbox";
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -74,17 +82,21 @@ export function CommandPalette({
     if (!open) return;
     setQuery("");
     setActive(0);
+    setDynamic([]); // never show a previous session's stale results
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    let stale = false;
     if (loadDynamic) {
-      let stale = false;
       loadDynamic()
         .then((cmds) => {
           if (!stale) setDynamic(cmds);
         })
         .catch(() => {});
-      return () => {
-        stale = true;
-      };
     }
+    return () => {
+      stale = true;
+      document.body.style.overflow = prevOverflow;
+    };
   }, [open, loadDynamic]);
 
   const close = useCallback(() => setOpen(false), []);
@@ -101,22 +113,25 @@ export function CommandPalette({
     .sort((a, b) => b.score - a.score)
     .map((m) => m.c);
 
+  // Re-clamp when the match list shrinks under the current index.
+  const activeIdx = Math.min(active, Math.max(0, matches.length - 1));
+  const activeId = matches[activeIdx] ? `cmdk-opt-${matches[activeIdx].id}` : undefined;
+
   const run = (cmd: Command) => {
     close();
     cmd.run();
   };
 
   const onInputKey = (e: React.KeyboardEvent) => {
-    if (e.key === "Escape") close();
-    else if (e.key === "ArrowDown") {
+    if (e.key === "ArrowDown") {
       e.preventDefault();
-      setActive((a) => Math.min(a + 1, matches.length - 1));
+      setActive(Math.min(activeIdx + 1, matches.length - 1));
     } else if (e.key === "ArrowUp") {
       e.preventDefault();
-      setActive((a) => Math.max(a - 1, 0));
-    } else if (e.key === "Enter" && matches[active]) {
+      setActive(Math.max(activeIdx - 1, 0));
+    } else if (e.key === "Enter" && matches[activeIdx]) {
       e.preventDefault();
-      run(matches[active]);
+      run(matches[activeIdx]);
     }
   };
 
@@ -124,24 +139,46 @@ export function CommandPalette({
   let lastSection: string | undefined;
 
   return (
-    <div className="cmdk-backdrop" onClick={close}>
+    <div
+      className="cmdk-backdrop"
+      onMouseDown={(e) => {
+        if (e.target === e.currentTarget) close();
+      }}
+      onKeyDown={(e) => {
+        if (e.key === "Escape") {
+          e.stopPropagation();
+          close();
+        } else if (e.key === "Tab") {
+          // Focus stays on the input (aria-activedescendant pattern).
+          e.preventDefault();
+        }
+      }}
+    >
       <div
         className="cmdk"
         role="dialog"
+        aria-modal="true"
         aria-label="Command palette"
-        onClick={(e) => e.stopPropagation()}
       >
-        <input
-          autoFocus
-          placeholder="Jump to a client, page or action…"
-          value={query}
-          onChange={(e) => {
-            setQuery(e.target.value);
-            setActive(0);
-          }}
-          onKeyDown={onInputKey}
-        />
-        <div className="cmdk-list" ref={listRef}>
+        <div className="cmdk-input-row">
+          <Search size={16} aria-hidden="true" />
+          <input
+            autoFocus
+            role="combobox"
+            aria-expanded="true"
+            aria-controls={listId}
+            aria-activedescendant={activeId}
+            aria-label="Search commands"
+            placeholder="Jump to a client, page or action…"
+            value={query}
+            onChange={(e) => {
+              setQuery(e.target.value);
+              setActive(0);
+            }}
+            onKeyDown={onInputKey}
+          />
+        </div>
+        <div className="cmdk-list" role="listbox" id={listId} ref={listRef}>
           {matches.length === 0 && (
             <div className="cmdk-empty">No matches for “{query}”</div>
           )}
@@ -151,34 +188,43 @@ export function CommandPalette({
             lastSection = c.section;
             return (
               <div key={c.id}>
-                {header && <div className="cmdk-section">{header}</div>}
-                <button
-                  type="button"
-                  className={`cmdk-item ${i === active ? "active" : ""}`}
+                {header && (
+                  <div className="cmdk-section" role="presentation">
+                    {header}
+                  </div>
+                )}
+                <div
+                  role="option"
+                  id={`cmdk-opt-${c.id}`}
+                  aria-selected={i === activeIdx}
+                  className={`cmdk-item ${i === activeIdx ? "active" : ""}`.trim()}
                   onMouseEnter={() => setActive(i)}
                   onClick={() => run(c)}
                   ref={(el) => {
-                    if (i === active)
-                      el?.scrollIntoView({ block: "nearest" });
+                    if (i === activeIdx) el?.scrollIntoView({ block: "nearest" });
                   }}
                 >
                   <span>{c.title}</span>
-                  {c.hint && <span className="cmdk-hint">{c.hint}</span>}
-                </button>
+                  {c.hint && (
+                    <span className="cmdk-hint">
+                      <Kbd>{c.hint}</Kbd>
+                    </span>
+                  )}
+                </div>
               </div>
             );
           })}
         </div>
         <div className="cmdk-foot">
           <span>
-            <kbd>↑</kbd>
-            <kbd>↓</kbd> navigate
+            <Kbd>↑</Kbd>
+            <Kbd>↓</Kbd> navigate
           </span>
           <span>
-            <kbd>↵</kbd> open
+            <Kbd>↵</Kbd> open
           </span>
           <span>
-            <kbd>esc</kbd> close
+            <Kbd>esc</Kbd> close
           </span>
         </div>
       </div>

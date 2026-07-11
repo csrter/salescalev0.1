@@ -1,0 +1,119 @@
+/* ==========================================================================
+   base.css — reset & element defaults (spec §3.1). Tokens only; no literal
+   colors/sizes/durations/z-index (those live in theme.css — grep gate).
+   Loaded by main.tsx right after theme.css, before everything else.
+   ========================================================================== */
+
+/* ---- reset (folds in the old index.css / App.css box-sizing reset) ----- */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+:root {
+  font-family: var(--font-sans);
+}
+
+/* ---- body backdrop: the two corner --bg-grad radials over --bg, at
+        reduced strength (spec §5.3) ------------------------------------- */
+body {
+  margin: 0;
+  min-height: 100vh;
+  background:
+    radial-gradient(1200px 600px at 100% -5%, var(--bg-grad-1), transparent 55%),
+    radial-gradient(1000px 500px at -10% 110%, var(--bg-grad-2), transparent 50%),
+    var(--bg);
+  color: var(--ink);
+  font-family: var(--font-sans);
+  font-size: var(--text-base);
+  line-height: var(--leading-normal);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* ---- headings: ink + tight tracking (spec §3.1). color: inherit resolves
+        to --ink everywhere the body ink cascades (and kills the legacy
+        navy-900 heading rules, which sit in the lower `legacy` layer), while
+        headings on dark brand fields (auth aside, crm-setup, sidebar) keep
+        their container's light ink. No margin/weight reset — legacy rules
+        would lose their explicit margins/weights to any unlayered default;
+        migrated views set their own via primitives. ---------------------- */
+h1, h2, h3, h4, h5, h6 {
+  color: inherit;
+  letter-spacing: var(--tracking-tight);
+  line-height: var(--leading-tight);
+}
+
+/* ---- links -------------------------------------------------------------- */
+a {
+  color: var(--accent-ink);
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
+}
+
+/* ---- selection ---------------------------------------------------------- */
+::selection {
+  background: var(--accent-soft);
+  color: var(--ink);
+}
+
+/* ---- focus: ONE visible ring app-wide (spec §2 focus token usage).
+        Components on dark brand fields override with --focus-ring-field. -- */
+:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+/* ---- media -------------------------------------------------------------- */
+img,
+svg,
+video {
+  max-width: 100%;
+}
+
+/* ---- code / kbd default face -------------------------------------------- */
+code, kbd, samp, pre {
+  font-family: var(--font-mono);
+}
+
+/* ---- scrollbars (quiet, token-driven) ------------------------------------ */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong) transparent;
+}
+
+*::-webkit-scrollbar {
+  width: var(--space-2);
+  height: var(--space-2);
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: var(--radius-full);
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--ink-faint);
+}
+
+/* ---- utilities ----------------------------------------------------------- */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
