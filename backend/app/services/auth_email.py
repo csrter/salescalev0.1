@@ -65,14 +65,18 @@ def send_invite_email(
     raw_token: str,
     inviter_name: str,
     role: str,
-) -> None:
+) -> tuple[bool, str]:
     """Phase 13 team invite. The raw token rides only in this email (the DB
     keeps its hash); the link expires with the invite (7 days). Sender
     branding follows the Organization's configured identity like every other
-    transactional email (services.email.resolve_sender)."""
+    transactional email (services.email.resolve_sender).
+
+    Returns (delivered, link): when delivery isn't configured (dev/desktop,
+    no Resend/SMTP) the caller hands the link back to the inviting Admin to
+    share out-of-band — otherwise the invite is a silent dead end."""
     link = f"{get_settings().app_base_url}/?invite={raw_token}"
     product = branding.merged(org).get("product_name", "Salescale")
-    email_service.send_email(
+    entry = email_service.send_email(
         db,
         org,
         to_address,
@@ -93,6 +97,7 @@ def send_invite_email(
             "can ignore this email.",
         ),
     )
+    return entry.delivered, link
 
 
 def send_reset_email(db: Session, org: Organization, user: User) -> None:

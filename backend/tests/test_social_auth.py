@@ -100,3 +100,55 @@ def test_callback_rejects_bad_state(api, monkeypatch):
         "/api/auth/oauth/google/callback?code=abc&state=not-a-token", follow_redirects=False
     )
     assert r.status_code == 400
+
+
+def test_callback_user_cancel_redirects_to_login_with_reason(api, monkeypatch):
+    """Backing out of the consent screen must land on the login screen with
+    a readable reason — not a 400/422 dead end."""
+    _configure_google(monkeypatch)
+    state = create_action_token("social:google", "nonce", minutes=5)
+    r = api.get(
+        f"/api/auth/oauth/google/callback?state={state}&error=access_denied",
+        follow_redirects=False,
+    )
+    assert r.status_code in (302, 307)
+    loc = r.headers["location"]
+    assert loc.startswith(get_settings().app_base_url)
+    assert "login_error=" in loc and "canceled" in loc
+
+
+def test_callback_exchange_failure_redirects_not_500(api, monkeypatch):
+    _configure_google(monkeypatch)
+
+    def _boom(provider, code):
+        from fastapi import HTTPException
+
+        raise HTTPException(400, "Google token exchange failed")
+
+    monkeypatch.setattr(sa, "_exchange_and_fetch", _boom)
+    state = create_action_token("social:google", "nonce", minutes=5)
+    r = api.get(
+        f"/api/auth/oauth/google/callback?code=bad&state={state}",
+        follow_redirects=False,
+    )
+    assert r.status_code in (302, 307)
+    assert "login_error=" in r.headers["location"]
+
+
+def test_callback_existing_password_account_conflict_redirects(api, monkeypatch):
+    """An unverified provider email colliding with a password account must
+    bounce back to login with the sign-in-with-password message."""
+    _configure_google(monkeypatch)
+    monkeypatch.setattr(
+        sa,
+        # Meta-style unverified email that matches the seeded password account.
+        "_exchange_and_fetch",
+        lambda provider, code: ("owner@atlasreach.com", "Org Owner", False),
+    )
+    state = create_action_token("social:google", "nonce", minutes=5)
+    r = api.get(
+        f"/api/auth/oauth/google/callback?code=abc&state={state}",
+        follow_redirects=False,
+    )
+    assert r.status_code in (302, 307)
+    assert "login_error=" in r.headers["location"]

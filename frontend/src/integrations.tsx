@@ -11,11 +11,13 @@ import { useCallback, useEffect, useState } from "react";
 import {
   deleteIntegration,
   getPlatforms,
+  getRedirectUris,
   listIntegrations,
   setGoogleCreds,
   setMetaCreds,
   type IntegrationStatus,
   type Platform,
+  type RedirectUri,
 } from "./api";
 import { ConfirmDialog } from "./components/Dialog";
 import { useToast } from "./components/Toast";
@@ -70,6 +72,7 @@ export function Integrations() {
         </p>
       </header>
       {error && <Alert tone="danger">{error}</Alert>}
+      <RedirectUrisCard />
       {platforms === null ? (
         <SkeletonText lines={4} />
       ) : (
@@ -96,6 +99,69 @@ export function Integrations() {
         </div>
       )}
     </div>
+  );
+}
+
+const URI_PURPOSE: Record<RedirectUri["purpose"], string> = {
+  connect: "Ad-account connect",
+  signin: "Sign in with",
+};
+
+/** The exact OAuth redirect URIs this deployment sends. Registering them
+ * verbatim on the Meta/Google app is what prevents the classic
+ * redirect_uri_mismatch — connect and sign-in use DIFFERENT callback paths
+ * on the same OAuth app, and each must be listed. */
+function RedirectUrisCard() {
+  const [uris, setUris] = useState<RedirectUri[] | null>(null);
+  useEffect(() => {
+    getRedirectUris()
+      .then(setUris)
+      .catch(() => setUris([])); // informational card — never blocks the page
+  }, []);
+  if (!uris || uris.length === 0) return null;
+  return (
+    <div className="card mg-integration mg-redirects">
+      <div className="mg-integration-head">
+        <div className="mg-integration-title">
+          <h3 className="mg-redirects-title">OAuth redirect URIs</h3>
+          <p className="mg-sub">
+            Add each of these to your app's authorized redirect URIs —
+            Google Cloud Console for Google, App Dashboard for Meta. A missing
+            entry is what causes &ldquo;Error 400: redirect_uri_mismatch&rdquo;
+            on sign-in or connect.
+          </p>
+        </div>
+      </div>
+      <ul className="mg-redirect-list">
+        {uris.map((u) => (
+          <li key={`${u.provider}-${u.purpose}`} className="mg-redirect-row">
+            <span className="mg-redirect-label">
+              {URI_PURPOSE[u.purpose]}{" "}
+              {u.provider === "google" ? "Google" : "Meta"}
+            </span>
+            <code className="mg-redirect-uri">{u.uri}</code>
+            <UriCopy text={u.uri} />
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function UriCopy({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <Button
+      size="sm"
+      variant="ghost"
+      onClick={() => {
+        void navigator.clipboard.writeText(text);
+        setCopied(true);
+        setTimeout(() => setCopied(false), 1500);
+      }}
+    >
+      {copied ? "Copied" : "Copy"}
+    </Button>
   );
 }
 

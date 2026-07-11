@@ -765,6 +765,9 @@ function InviteForm({
   const [role, setRole] = useState<"admin" | "member">("member");
   const [error, setError] = useState<string | null>(null);
   const [sent, setSent] = useState<string | null>(null);
+  // Present when the server couldn't email the invite (no delivery transport
+  // configured) — the admin copies the link and shares it out-of-band.
+  const [link, setLink] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const roles: Role[] = session.role === "owner" ? ["member", "admin"] : ["member"];
 
@@ -775,10 +778,12 @@ function InviteForm({
         e.preventDefault();
         setError(null);
         setSent(null);
+        setLink(null);
         setBusy(true);
         try {
-          await sendInvite({ email, role });
+          const r = await sendInvite({ email, role });
           setSent(email);
+          setLink(r.invite_link ?? null);
           setEmail("");
           setRole("member");
           onSent();
@@ -822,9 +827,21 @@ function InviteForm({
         <Button type="submit" variant="primary" busy={busy} disabled={disabled}>
           Send invite
         </Button>
-        {sent && <Alert tone="ok">Invite sent to {sent}.</Alert>}
+        {sent && !link && <Alert tone="ok">Invite sent to {sent}.</Alert>}
         {error && <Alert tone="danger">{error}</Alert>}
       </div>
+      {link && (
+        <Alert tone="warn" title={`Invite created for ${sent}`}>
+          <p className="adm-sub">
+            Email delivery isn't configured, so nothing was sent — share this
+            link with them directly. It's shown once and expires in 7 days.
+          </p>
+          <div className="adm-secret">
+            <code className="adm-invite-link">{link}</code>
+            <CopyButton text={link} />
+          </div>
+        </Alert>
+      )}
     </form>
   );
 }

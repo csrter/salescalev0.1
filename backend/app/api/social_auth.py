@@ -10,7 +10,7 @@ used for the token/userinfo calls; providers are unconfigured-safe (503).
 """
 import logging
 import secrets
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 
 import httpx
 import jwt as pyjwt
@@ -182,12 +182,21 @@ def start(provider: str, _: None = _oauth_limit):
     return {"url": _auth_url(provider, state)}
 
 
+def _login_error_redirect(message: str) -> RedirectResponse:
+    """Bounce a failed social login back to the login screen with a
+    human-readable reason (query param — nothing sensitive rides in it)."""
+    return RedirectResponse(
+        f"{get_settings().app_base_url}/?login_error={quote(message)}"
+    )
+
+
 @router.get("/{provider}/callback")
 def callback(
     provider: str,
     request: Request,
     code: str = "",
     state: str = "",
+    error: str = "",
     db: Session = Depends(get_db),
     _: None = _oauth_limit,
 ):
@@ -199,8 +208,25 @@ def callback(
     except pyjwt.PyJWTError:
         raise HTTPException(400, "Invalid or expired login state")
 
-    email, full_name, email_verified = _exchange_and_fetch(provider, code)
-    user = find_or_create_social_user(db, email, full_name, provider, email_verified)
+    # The user backed out of the provider's consent screen (or the provider
+    # reported a failure): land back on the login screen with the reason
+    # instead of a 400/500 dead end.
+    if error or not code:
+        if error == "access_denied":
+            msg = f"{provider.title()} sign-in was canceled."
+        else:
+            msg = f"{provider.title()} sign-in failed: {error or 'no authorization code returned'}"
+        return _login_error_redirect(msg)
+
+    try:
+        email, full_name, email_verified = _exchange_and_fetch(provider, code)
+        user = find_or_create_social_user(db, email, full_name, provider, email_verified)
+    except HTTPException as e:
+        # Includes the existing-account 409 — every failure lands back on the
+        # login screen with its reason, never on a bare JSON error page.
+        return _login_error_redirect(str(e.detail))
+    except httpx.HTTPError as e:
+        return _login_error_redirect(f"{provider.title()} is unreachable: {e}")
     sid = sessions.create(db, user, request)
     db.commit()
     token = create_access_token(

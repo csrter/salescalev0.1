@@ -624,7 +624,23 @@ export interface Invite {
   invited_by_user_id: string;
   expires_at: string;
   created_at: string;
+  /** Only on the send/resend response when email delivery isn't configured —
+   * the admin shares it out-of-band. Never present in list responses. */
+  invite_link?: string | null;
 }
+
+// The exact OAuth redirect URIs this deployment sends — an operator registers
+// them verbatim on their Google/Meta app (connect and sign-in use different
+// callback paths; both must be registered or the provider shows
+// redirect_uri_mismatch / "URL blocked").
+export interface RedirectUri {
+  provider: "google" | "meta";
+  purpose: "connect" | "signin";
+  uri: string;
+}
+
+export const getRedirectUris = () =>
+  api<RedirectUri[]>("/api/integrations/redirect-uris");
 
 export interface SeatUsage {
   used: number;

@@ -161,3 +161,12 @@
   font-variant-numeric: tabular-nums;
   margin-right: var(--space-1);
 }
+
+/* Invite-link fallback (no email transport): keep the long URL scrollable
+   inside the alert instead of blowing out the card. */
+.adm-invite-link {
+  display: block;
+  max-width: 46ch;
+  overflow-x: auto;
+  white-space: nowrap;
+}

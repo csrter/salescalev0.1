@@ -74,15 +74,20 @@ def search_text(query: str, location: Optional[str], api_key: str) -> List[Place
             "API key or set GOOGLE_PLACES_API_KEY."
         )
     text = f"{query} in {location}" if location else query
-    resp = httpx.post(
-        _TEXT_SEARCH_URL,
-        json={"textQuery": text, "pageSize": MAX_RESULTS},
-        headers={
-            "X-Goog-Api-Key": api_key,
-            "X-Goog-FieldMask": _FIELD_MASK,
-        },
-        timeout=15,
-    )
+    try:
+        resp = httpx.post(
+            _TEXT_SEARCH_URL,
+            json={"textQuery": text, "pageSize": MAX_RESULTS},
+            headers={
+                "X-Goog-Api-Key": api_key,
+                "X-Goog-FieldMask": _FIELD_MASK,
+            },
+            timeout=15,
+        )
+    except httpx.HTTPError as e:
+        # Network-level failure normalizes to PlacesError so the API's 502
+        # handling covers an unreachable Places endpoint too.
+        raise PlacesError(f"Places API is unreachable: {e}")
     if resp.status_code >= 400:
         try:
             detail = resp.json().get("error", {}).get("message")

@@ -765,3 +765,47 @@ def test_org_invite_rate_limit_bucket(monkeypatch):
         assert False, "31st send in the window should have been limited"
     except HTTPException as e:
         assert e.status_code == 429
+
+
+# --- invite-link fallback (no email transport) ---
+
+
+def test_invite_link_returned_when_email_undelivered_and_works(api):
+    """The suite runs with no SMTP/Resend — exactly the dev/desktop setup
+    where invite emails are composed but never delivered. The send response
+    must hand the Admin the link so the flow isn't a silent dead end, and
+    accepting through that link must actually add the member."""
+    owner = _signup(api, "Linkfall Co", "owner@linkfall.com")
+    h = _headers(owner)
+    r = api.post(
+        "/api/orgs/me/invites",
+        headers=h,
+        json={"email": "member@linkfall.com", "role": "member"},
+    )
+    assert r.status_code == 201, r.text
+    link = r.json()["invite_link"]
+    assert link and "?invite=" in link
+    # Same token the email body would have carried.
+    assert link.split("?invite=")[1] == _last_invite_token("member@linkfall.com")
+
+    # The link never appears anywhere but the send/resend response — the DB
+    # stores only the hash, so the list endpoint cannot leak it.
+    listed = api.get("/api/orgs/me/invites", headers=h).json()
+    assert all(i.get("invite_link") is None for i in listed)
+
+    # Resend regenerates and hands back a fresh link too.
+    invite_id = r.json()["id"]
+    r2 = api.post(f"/api/orgs/me/invites/{invite_id}/resend", headers=h)
+    assert r2.status_code == 200, r2.text
+    link2 = r2.json()["invite_link"]
+    assert link2 and link2 != link
+
+    # Accepting through the (re-sent) link adds the member — end to end.
+    token = link2.split("?invite=")[1]
+    acc = api.post(
+        "/api/orgs/invites/accept-signup",
+        json={"token": token, "full_name": "Linked Member", "password": PW},
+    )
+    assert acc.status_code == 201, acc.text
+    members = api.get("/api/orgs/me/members", headers=h).json()
+    assert "member@linkfall.com" in [m["email"] for m in members]

@@ -44,17 +44,20 @@ def build_oauth_url(state: str) -> str:
 def exchange_code_for_tokens(code: str) -> Dict[str, Any]:
     settings = get_settings()
     creds = integration_creds.current_google()
-    resp = httpx.post(
-        TOKEN_URL,
-        data={
-            "client_id": creds.client_id,
-            "client_secret": creds.client_secret,
-            "redirect_uri": settings.google_redirect_uri,
-            "grant_type": "authorization_code",
-            "code": code,
-        },
-        timeout=30,
-    )
+    try:
+        resp = httpx.post(
+            TOKEN_URL,
+            data={
+                "client_id": creds.client_id,
+                "client_secret": creds.client_secret,
+                "redirect_uri": settings.google_redirect_uri,
+                "grant_type": "authorization_code",
+                "code": code,
+            },
+            timeout=30,
+        )
+    except httpx.HTTPError as e:
+        raise GoogleApiError(f"Google token endpoint is unreachable: {e}")
     data = resp.json()
     if resp.status_code >= 400:
         raise GoogleApiError(data.get("error_description", str(data)))
@@ -82,6 +85,7 @@ def _client(refresh_token: str, login_customer_id: Optional[str] = None):
 
 def _wrap_auth_errors(fn):
     from google.ads.googleads.errors import GoogleAdsException
+    from google.api_core.exceptions import GoogleAPICallError, RetryError
     from google.auth.exceptions import RefreshError
 
     try:
@@ -93,6 +97,10 @@ def _wrap_auth_errors(fn):
             if err.error_code.authentication_error or err.error_code.authorization_error:
                 raise GoogleAuthError(err.message)
         raise GoogleApiError(e.failure.errors[0].message if e.failure.errors else str(e))
+    except (GoogleAPICallError, RetryError) as e:
+        # Transport-level failure (unavailable, deadline exceeded) — normalize
+        # so callers' GoogleApiError handling covers an unreachable API too.
+        raise GoogleApiError(str(e))
 
 
 def list_accessible_customers(refresh_token: str) -> List[str]:

@@ -926,7 +926,13 @@ function Login({ onLogin }: { onLogin: (s: Session) => void }) {
   const [fullName, setFullName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [error, setError] = useState<string | null>(null);
+  // A failed social login redirects back with ?login_error=<reason> — show it
+  // once and strip it from the URL.
+  const [error, setError] = useState<string | null>(() => {
+    const msg = new URLSearchParams(window.location.search).get("login_error");
+    if (msg) window.history.replaceState({}, "", window.location.pathname);
+    return msg;
+  });
   const [resetSent, setResetSent] = useState(false);
   const [challenge, setChallenge] = useState<LoginChallenge | null>(null);
   const [code, setCode] = useState("");

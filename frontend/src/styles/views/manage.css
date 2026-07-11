@@ -244,3 +244,46 @@
   font-family: var(--font-mono);
   color: var(--ink);
 }
+
+/* ---- OAuth redirect URIs card (Integrations) ------------------------------- */
+
+.mg-redirects {
+  margin-bottom: var(--space-4);
+}
+
+.mg-redirects-title {
+  margin: 0 0 var(--space-1);
+  font-size: var(--text-md);
+}
+
+.mg-redirect-list {
+  list-style: none;
+  margin: var(--space-3) 0 0;
+  padding: 0;
+}
+
+.mg-redirect-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.mg-redirect-row:last-child {
+  border-bottom: none;
+}
+
+.mg-redirect-label {
+  flex: 0 0 14rem;
+  font-size: var(--text-sm);
+  color: var(--ink-soft);
+}
+
+.mg-redirect-uri {
+  min-width: 0;
+  overflow-x: auto;
+  white-space: nowrap;
+  font-size: var(--text-xs);
+  margin-right: auto;
+}

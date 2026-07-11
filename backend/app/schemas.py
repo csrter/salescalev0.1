@@ -184,6 +184,11 @@ class InviteOut(BaseModel):
     invited_by_user_id: str
     expires_at: dt.datetime
     created_at: dt.datetime
+    # Present ONLY in the send/resend response when email delivery isn't
+    # configured (dev/desktop) or failed — the inviting Admin shares the link
+    # out-of-band. Never stored (the DB keeps only the token hash), so it can
+    # never appear in list responses.
+    invite_link: Optional[str] = None
 
 
 class InviteLookupOut(BaseModel):

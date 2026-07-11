@@ -598,3 +598,33 @@ def test_reassign_same_client_is_a_noop(api, connect_org):
     )
     assert r.status_code == 200
     assert r.json()["moved"] is False
+
+
+# --- network-level failures normalize to platform error classes ---------------
+
+
+def test_meta_network_error_normalizes_to_api_error(monkeypatch):
+    """An unreachable Graph API must raise MetaApiError (which every caller
+    already handles), never a bare httpx exception → 500."""
+    import httpx
+
+    def _down(*a, **k):
+        raise httpx.ConnectError("dns failure")
+
+    monkeypatch.setattr(httpx, "get", _down)
+    monkeypatch.setattr(httpx, "post", _down)
+    with pytest.raises(meta_api.MetaApiError):
+        meta_api.fetch_me("token")
+    with pytest.raises(meta_api.MetaApiError):
+        meta_api.update_entity("token", "123", {"status": "PAUSED"})
+
+
+def test_google_token_endpoint_network_error_normalizes(monkeypatch):
+    import httpx
+
+    def _down(*a, **k):
+        raise httpx.ConnectError("refused")
+
+    monkeypatch.setattr(httpx, "post", _down)
+    with pytest.raises(google_ads_api.GoogleApiError):
+        google_ads_api.exchange_code_for_tokens("code")

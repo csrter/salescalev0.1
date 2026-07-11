@@ -48,11 +48,20 @@ def _check(resp: httpx.Response) -> Dict[str, Any]:
 
 
 def _get(url: str, params: Dict[str, Any]) -> Dict[str, Any]:
-    return _check(httpx.get(url, params=params, timeout=30))
+    # Network-level failures (DNS, refused, timeout) normalize to MetaApiError
+    # so every caller's existing error handling covers them — an unreachable
+    # Graph API must never surface as a bare 500.
+    try:
+        return _check(httpx.get(url, params=params, timeout=30))
+    except httpx.HTTPError as e:
+        raise MetaApiError(f"Meta API is unreachable: {e}")
 
 
 def _post(url: str, data: Dict[str, Any]) -> Dict[str, Any]:
-    return _check(httpx.post(url, data=data, timeout=60))
+    try:
+        return _check(httpx.post(url, data=data, timeout=60))
+    except httpx.HTTPError as e:
+        raise MetaApiError(f"Meta API is unreachable: {e}")
 
 
 def build_oauth_url(state: str) -> str:

@@ -284,6 +284,25 @@ live activation + the entitlement flip, the Outreach module build
       wired into ClientDetail. Tests: backend/tests/test_connect_flows.py
       (dedicated Connect Co org — the isolation/metrics suites assert
       over Atlas Reach's account counts).
+- [x] Auth/team fix session (post-12): (1) Social sign-in failures no
+      longer dead-end — the callback handles user-cancel, exchange
+      failures, and the existing-password-account 409 by redirecting to
+      the login screen with ?login_error=<reason> (Login shows it once
+      and strips the URL). The classic "Error 400: redirect_uri_mismatch"
+      is an OAuth-app registration gap: connect and sign-in use DIFFERENT
+      callback paths on the same app; GET /api/integrations/redirect-uris
+      + the card at the top of the Integrations page now list all four
+      URIs verbatim with copy buttons so operators can register them.
+      (2) Invites work without an email transport: send/resend responses
+      carry invite_link when delivery isn't configured/failed (dev,
+      desktop) so the Admin shares it out-of-band — shown once in the
+      Team UI (adm-secret pattern), never stored, never in list responses
+      (DB keeps only the token hash). (3) Network-level platform failures
+      (DNS/refused/timeout) normalize into MetaApiError / GoogleApiError /
+      PlacesError inside the service layer, so an unreachable API surfaces
+      through existing handling instead of a bare 500. Tests in
+      test_teams_invites / test_social_auth / test_integrations /
+      test_connect_flows.
 - [ ] Stripe live activation + entitlement flip (after 12–14, so real
       limits land everywhere in one pass)
 - [ ] Outreach module build (dev-mode) — go-live gated on Meta App

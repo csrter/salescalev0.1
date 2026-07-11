@@ -102,3 +102,21 @@ def test_credentials_are_org_scoped(api, team_headers, org2_headers, org2):
     creds = integration_creds.resolve_meta(db, org2["organization_id"])
     db.close()
     assert creds.app_id != "org1app"
+
+
+def test_redirect_uris_listed_for_admin(api, team_headers, member_headers):
+    """The exact redirect URIs to register on the OAuth apps — connect and
+    sign-in use different callback paths and BOTH must be registered, or the
+    provider fails with redirect_uri_mismatch."""
+    r = api.get("/api/integrations/redirect-uris", headers=team_headers)
+    assert r.status_code == 200, r.text
+    by_key = {(u["provider"], u["purpose"]): u["uri"] for u in r.json()}
+    assert by_key[("google", "connect")].endswith("/api/connect/google/callback")
+    assert by_key[("google", "signin")].endswith("/api/auth/oauth/google/callback")
+    assert by_key[("meta", "connect")].endswith("/api/connect/meta/callback")
+    assert by_key[("meta", "signin")].endswith("/api/auth/oauth/meta/callback")
+    # Members don't manage integrations.
+    assert (
+        api.get("/api/integrations/redirect-uris", headers=member_headers).status_code
+        == 403
+    )

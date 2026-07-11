@@ -13,6 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .. import platforms as platform_registry
+from ..config import get_settings
 from ..db import get_db
 from ..deps import require_admin
 from ..models.base import utcnow
@@ -78,6 +79,36 @@ def _upsert(db: Session, org_id: str, provider: str, **fields) -> None:
         setattr(row, k, v)
     row.updated_at = utcnow()
     db.commit()
+
+
+class RedirectUriOut(BaseModel):
+    provider: str  # google | meta
+    purpose: str  # connect | signin
+    uri: str
+
+
+@router.get("/redirect-uris", response_model=List[RedirectUriOut])
+def list_redirect_uris(user: User = Depends(require_admin)):
+    """The exact OAuth redirect URIs this deployment sends, so an operator can
+    register them on their Google/Meta app verbatim. A mismatch is the classic
+    `redirect_uri_mismatch` / "URL blocked" failure: the ad-connect and
+    sign-in flows use DIFFERENT callback paths on the same OAuth app, and
+    both must be registered."""
+    s = get_settings()
+    return [
+        RedirectUriOut(provider="google", purpose="connect", uri=s.google_redirect_uri),
+        RedirectUriOut(
+            provider="google",
+            purpose="signin",
+            uri=f"{s.api_base_url}/api/auth/oauth/google/callback",
+        ),
+        RedirectUriOut(provider="meta", purpose="connect", uri=s.meta_redirect_uri),
+        RedirectUriOut(
+            provider="meta",
+            purpose="signin",
+            uri=f"{s.api_base_url}/api/auth/oauth/meta/callback",
+        ),
+    ]
 
 
 @router.get("", response_model=List[IntegrationStatusOut])

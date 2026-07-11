@@ -640,7 +640,9 @@ def send_invite(
         expires_at=utcnow() + dt.timedelta(days=INVITE_TTL_DAYS),
     )
     db.add(invite)
-    auth_email.send_invite_email(db, org, email, raw, user.full_name, body.role)
+    delivered, link = auth_email.send_invite_email(
+        db, org, email, raw, user.full_name, body.role
+    )
     team.record_event(
         db,
         org.id,
@@ -650,7 +652,14 @@ def send_invite(
         detail={"role": body.role, "superseded": superseded is not None},
     )
     db.commit()
-    return invite
+    out = InviteOut.model_validate(invite)
+    if not delivered:
+        # No email transport (dev/desktop) or delivery failed: hand the link
+        # to the inviting Admin to share out-of-band — same posture as the
+        # temp-password surface on member password reset. Never stored, never
+        # in list responses (the DB keeps only the token hash).
+        out.invite_link = link
+    return out
 
 
 @router.post("/me/invites/{invite_id}/resend", response_model=InviteOut)
@@ -676,12 +685,17 @@ def resend_invite(
     invite.token_hash = token_hash
     invite.status = INVITE_PENDING
     invite.expires_at = utcnow() + dt.timedelta(days=INVITE_TTL_DAYS)
-    auth_email.send_invite_email(db, org, invite.email, raw, user.full_name, invite.role)
+    delivered, link = auth_email.send_invite_email(
+        db, org, invite.email, raw, user.full_name, invite.role
+    )
     team.record_event(
         db, org.id, user, AUDIT_INVITE_RESENT, target_email=invite.email
     )
     db.commit()
-    return invite
+    out = InviteOut.model_validate(invite)
+    if not delivered:
+        out.invite_link = link  # same out-of-band fallback as send_invite
+    return out
 
 
 @router.delete("/me/invites/{invite_id}", response_model=InviteOut)
