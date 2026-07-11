@@ -1,4 +1,15 @@
-import { useCallback, useEffect, useState } from "react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type ReactNode,
+} from "react";
 import {
   ADMIN_ROLES,
   TEAM_ROLES,
@@ -40,8 +51,48 @@ import { TwoFactorSettings } from "./security";
 import { BrandingSettings } from "./branding";
 import { OutreachView } from "./outreach";
 import { CommandPalette, type Command } from "./components/CommandPalette";
-import { ToastProvider } from "./components/Toast";
-import { setThemePref, useBranding, useTheme } from "./theme";
+import { ToastProvider, useToast } from "./components/Toast";
+import {
+  Alert,
+  Badge,
+  Button,
+  EmptyState,
+  Field,
+  Kbd,
+  PlatformChip,
+  Segmented,
+  Skeleton,
+  toneForStatus,
+} from "./components/ui";
+import { Dialog } from "./components/Dialog";
+import {
+  Building2,
+  Check,
+  ChevronLeft,
+  ChevronRight,
+  CreditCard,
+  Eye,
+  GitBranch,
+  Link2,
+  LogOut,
+  Moon,
+  Palette,
+  Plus,
+  Search,
+  Send,
+  Settings,
+  Shield,
+  Sun,
+  Users,
+  type LucideIcon,
+} from "./components/icons";
+import {
+  applyDensity,
+  setThemePref,
+  useBranding,
+  useDensity,
+  useTheme,
+} from "./theme";
 import {
   forgotPassword,
   oauthStart,
@@ -49,69 +100,10 @@ import {
   resendVerification,
   sessionFromToken,
 } from "./api";
+import "./styles/shell.css";
+import "./styles/auth.css";
+import "./styles/views/clients.css";
 import "./legacy.css";
-
-type IconName =
-  | "clients"
-  | "changes"
-  | "audit"
-  | "team"
-  | "billing"
-  | "integrations"
-  | "admin"
-  | "security"
-  | "logout"
-  | "plus"
-  | "chevron"
-  | "search"
-  | "collapse"
-  | "sun"
-  | "moon"
-  | "outreach"
-  | "branding";
-
-const ICON_PATHS: Record<IconName, string> = {
-  clients:
-    "M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2 M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8 M23 21v-2a4 4 0 0 0-3-3.87 M16 3.13a4 4 0 0 1 0 7.75",
-  changes: "M6 3v12 M18 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6 M6 21a3 3 0 1 0 0-6 3 3 0 0 0 0 6 M15 6a9 9 0 0 0-9 9",
-  audit: "M9 11l3 3L22 4 M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11",
-  team: "M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2 M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8 M23 21v-2a4 4 0 0 0-3-3.87 M16 3.13a4 4 0 0 1 0 7.75",
-  admin: "M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z",
-  security:
-    "M19 11H5a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7a2 2 0 0 0-2-2z M7 11V7a5 5 0 0 1 10 0v4",
-  billing: "M2 7a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2z M2 10h20",
-  integrations: "M10 13a5 5 0 0 0 7 0l3-3a5 5 0 0 0-7-7l-1 1 M14 11a5 5 0 0 0-7 0l-3 3a5 5 0 0 0 7 7l1-1",
-  logout: "M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4 M16 17l5-5-5-5 M21 12H9",
-  plus: "M12 5v14 M5 12h14",
-  chevron: "M9 18l6-6-6-6",
-  search: "M11 19a8 8 0 1 0 0-16 8 8 0 0 0 0 16z M21 21l-4.35-4.35",
-  collapse: "M11 17l-5-5 5-5 M18 17l-5-5 5-5",
-  sun: "M12 17a5 5 0 1 0 0-10 5 5 0 0 0 0 10z M12 1v2 M12 21v2 M4.22 4.22l1.42 1.42 M18.36 18.36l1.42 1.42 M1 12h2 M21 12h2 M4.22 19.78l1.42-1.42 M18.36 5.64l1.42-1.42",
-  moon: "M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z",
-  outreach:
-    "M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z",
-  branding:
-    "M12 2.7l5.66 5.63a8 8 0 1 1-11.31 0z M12 16a3 3 0 0 0 3-3",
-};
-
-function Icon({ name }: { name: IconName }) {
-  return (
-    <svg
-      className="icon"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      {ICON_PATHS[name].split(" M").map((seg, i) => (
-        <path key={i} d={i === 0 ? seg : "M" + seg} />
-      ))}
-    </svg>
-  );
-}
 
 function initials(name: string): string {
   return name
@@ -120,6 +112,11 @@ function initials(name: string): string {
     .slice(0, 2)
     .map((w) => w[0]!.toUpperCase())
     .join("");
+}
+
+/** The live-status tick channel: any successful write pings this. */
+function pingSave(phase: "saving" | "saved" | "error") {
+  window.dispatchEvent(new CustomEvent("save-tick", { detail: { phase } }));
 }
 
 type Tab =
@@ -147,6 +144,24 @@ const PAGE_TITLES: Record<Tab, string> = {
   admin: "Platform admin",
 };
 
+interface NavItem {
+  key: Tab;
+  label: string;
+  icon: LucideIcon;
+  section: string;
+  show: boolean;
+}
+
+/** Breadcrumb segment. Ancestors carry onClick (set view state back). */
+interface Crumb {
+  label: string;
+  onClick?: () => void;
+}
+
+/** ClientDetail extends the breadcrumb (client name › campaign) through
+ * this — the topbar renders base crumbs + the registered trail. */
+const TrailCtx = createContext<(trail: Crumb[]) => void>(() => {});
+
 function clearAuthQuery() {
   window.history.replaceState({}, "", window.location.pathname);
 }
@@ -154,8 +169,10 @@ function clearAuthQuery() {
 export default function App() {
   const [session, setSess] = useState<Session | null>(getSession());
   const [tab, setTab] = useState<Tab>("clients");
-  // Set by the command palette's "jump to client"; Clients consumes it.
-  const [openClientId, setOpenClientId] = useState<string | null>(null);
+  // Lifted so the breadcrumb (topbar) and the command palette can both
+  // set/clear the open client.
+  const [selectedClient, setSelectedClient] = useState<Client | null>(null);
+  const [trail, setTrail] = useState<Crumb[]>([]);
   const [sideCollapsed, setSideCollapsed] = useState(
     () => localStorage.getItem("sidebar-collapsed") === "1"
   );
@@ -180,7 +197,7 @@ export default function App() {
           keywords: "client account",
           run: () => {
             setTab("clients");
-            setOpenClientId(c.id);
+            setSelectedClient(c);
           },
         }))
       ),
@@ -222,6 +239,13 @@ export default function App() {
       .then(setSess)
       .catch(() => {});
   }, []);
+
+  // Density is a team-session preference; Client-role sessions never get the
+  // attribute (cleared on their login, and on logout).
+  const isTeamRole = !!session && TEAM_ROLES.includes(session.role);
+  useEffect(() => {
+    applyDensity(isTeamRole);
+  }, [isTeamRole]);
 
   if (oauthBusy)
     return (
@@ -279,20 +303,24 @@ export default function App() {
   // Role gating for what a user can reach lives HERE (and in the render
   // guards below + the API itself) — the sidebar and the command palette
   // both consume this same filtered list.
-  const nav: { key: Tab; label: string; icon: IconName; section: string; show: boolean }[] = [
-    { key: "clients", label: "Clients", icon: "clients", section: "Workspace", show: true },
-    { key: "outreach", label: "Outreach", icon: "outreach", section: "Workspace", show: isTeam },
-    { key: "changes", label: "Pending changes", icon: "changes", section: "Ads", show: isTeam },
-    { key: "audit", label: "Audit log", icon: "audit", section: "Ads", show: true },
-    { key: "team", label: "Team", icon: "team", section: "Settings", show: isAdmin },
-    { key: "integrations", label: "Integrations", icon: "integrations", section: "Settings", show: isAdmin },
-    { key: "billing", label: "Billing", icon: "billing", section: "Settings", show: isOwner },
-    { key: "branding", label: "Branding", icon: "branding", section: "Settings", show: isAdmin },
-    { key: "security", label: "Security", icon: "security", section: "Settings", show: true },
-    { key: "admin", label: "Admin", icon: "admin", section: "Platform", show: !!session.is_superadmin },
+  const nav: NavItem[] = [
+    { key: "clients", label: "Clients", icon: Building2, section: "Workspace", show: true },
+    { key: "outreach", label: "Outreach", icon: Send, section: "Workspace", show: isTeam },
+    { key: "changes", label: "Pending changes", icon: GitBranch, section: "Ads", show: isTeam },
+    { key: "audit", label: "Audit log", icon: Eye, section: "Ads", show: true },
+    { key: "team", label: "Team", icon: Users, section: "Settings", show: isAdmin },
+    { key: "integrations", label: "Integrations", icon: Link2, section: "Settings", show: isAdmin },
+    { key: "billing", label: "Billing", icon: CreditCard, section: "Settings", show: isOwner },
+    { key: "branding", label: "Branding", icon: Palette, section: "Settings", show: isAdmin },
+    { key: "security", label: "Security", icon: Shield, section: "Settings", show: true },
+    { key: "admin", label: "Admin", icon: Settings, section: "Platform", show: !!session.is_superadmin },
   ];
   const visibleNav = nav.filter((n) => n.show);
-  const sections = [...new Set(visibleNav.map((n) => n.section))];
+
+  const navigate = (k: Tab) => {
+    setSelectedClient(null);
+    setTab(k);
+  };
 
   const logout = () => {
     setSession(null);
@@ -305,10 +333,7 @@ export default function App() {
       title: n.label,
       section: "Go to",
       keywords: n.section,
-      run: () => {
-        setOpenClientId(null);
-        setTab(n.key);
-      },
+      run: () => navigate(n.key),
     })),
     {
       id: "theme:light",
@@ -340,133 +365,319 @@ export default function App() {
     },
   ];
 
+  // Real breadcrumb: workspace › view › (client › campaign via the trail).
+  const crumbs: Crumb[] = [
+    { label: session.organization_name, onClick: () => navigate("clients") },
+    {
+      label: PAGE_TITLES[tab],
+      onClick:
+        tab === "clients" && selectedClient
+          ? () => setSelectedClient(null)
+          : undefined,
+    },
+    ...(tab === "clients" ? trail : []),
+  ];
+
   return (
-    <ManageProvider>
-      <ToastProvider>
-      <div className={`app ${sideCollapsed ? "side-collapsed" : ""}`}>
-        <aside className="sidebar">
-          <div className="side-top">
-            <Logo />
-            <button
-              className="side-collapse"
-              title={sideCollapsed ? "Expand sidebar" : "Collapse sidebar"}
-              onClick={() =>
+    <ToastProvider>
+      <ManageProvider>
+        <TrailCtx.Provider value={setTrail}>
+          <div className={`app ${sideCollapsed ? "side-collapsed" : ""}`}>
+            <Sidebar
+              session={session}
+              nav={visibleNav}
+              tab={tab}
+              onNavigate={navigate}
+              collapsed={sideCollapsed}
+              onToggleCollapsed={() =>
                 setSideCollapsed((v) => {
                   localStorage.setItem("sidebar-collapsed", v ? "" : "1");
                   return !v;
                 })
               }
-            >
-              <Icon name="collapse" />
-            </button>
-          </div>
-          <button
-            className="side-search"
-            onClick={() => window.dispatchEvent(new Event("cmdk:open"))}
-          >
-            <Icon name="search" />
-            <span>Search</span>
-            <kbd>⌘K</kbd>
-          </button>
-          <nav className="side-nav">
-            {sections.map((section) => (
-              <div key={section} className="side-section">
-                <button
-                  className="side-section-head"
-                  onClick={() =>
-                    setClosedSections((cur) => {
-                      const next = cur.includes(section)
-                        ? cur.filter((s) => s !== section)
-                        : [...cur, section];
-                      localStorage.setItem("sidebar-closed", JSON.stringify(next));
-                      return next;
-                    })
-                  }
-                >
-                  <span>{section}</span>
-                  <span
-                    className={`section-chevron ${
-                      closedSections.includes(section) ? "" : "open"
-                    }`}
-                  >
-                    <Icon name="chevron" />
-                  </span>
-                </button>
-                {!closedSections.includes(section) &&
-                  visibleNav
-                    .filter((n) => n.section === section)
-                    .map((n) => (
-                      <button
-                        key={n.key}
-                        className={`nav-item ${tab === n.key ? "active" : ""}`}
-                        title={n.label}
-                        onClick={() => setTab(n.key)}
-                      >
-                        <Icon name={n.icon} />
-                        <span>{n.label}</span>
-                      </button>
-                    ))}
-              </div>
-            ))}
-          </nav>
-          <div className="side-foot">
-            <div className="user-chip">
-              <div className="avatar">{initials(session.full_name)}</div>
-              <div className="user-meta">
-                <strong>{session.full_name}</strong>
-                <span>
-                  {session.role}
-                  {session.is_superadmin ? " · platform" : ""}
-                </span>
-              </div>
-              <ThemeToggle />
-            </div>
-            <button className="logout" onClick={logout}>
-              <Icon name="logout" />
-              <span>Log out</span>
-            </button>
-          </div>
-        </aside>
-        <div className="main">
-          <header className="topbar">
-            <div className="workspace">
-              <span className="workspace-avatar">
-                {initials(session.organization_name)}
-              </span>
-              <div className="workspace-meta">
-                <span className="workspace-label">Workspace</span>
-                <strong>{session.organization_name}</strong>
+              closedSections={closedSections}
+              onToggleSection={(section) =>
+                setClosedSections((cur) => {
+                  const next = cur.includes(section)
+                    ? cur.filter((s) => s !== section)
+                    : [...cur, section];
+                  localStorage.setItem("sidebar-closed", JSON.stringify(next));
+                  return next;
+                })
+              }
+              onLogout={logout}
+            />
+            <div className="main">
+              <Topbar crumbs={crumbs} showDensity={isTeam} />
+              <div className="content">
+                {session.email_verified === false && <VerifyBanner />}
+                {tab === "clients" && (
+                  <Clients
+                    session={session}
+                    selected={selectedClient}
+                    onSelect={setSelectedClient}
+                  />
+                )}
+                {tab === "outreach" && isTeam && <OutreachView isAdmin={isAdmin} />}
+                {tab === "changes" && <PendingChangesPanel />}
+                {tab === "audit" && <AuditLogView />}
+                {tab === "team" && isAdmin && <TeamAdmin session={session} />}
+                {tab === "integrations" && isAdmin && <Integrations />}
+                {tab === "billing" && isOwner && <Billing session={session} />}
+                {tab === "branding" && isAdmin && <BrandingSettings />}
+                {tab === "security" && <TwoFactorSettings session={session} />}
+                {tab === "admin" && session.is_superadmin && <SuperAdmin />}
               </div>
             </div>
-            <span className="breadcrumb">{PAGE_TITLES[tab]}</span>
-          </header>
-          <div className="content">
-            {session.email_verified === false && <VerifyBanner />}
-            {tab === "clients" && (
-              <Clients
-                session={session}
-                openClientId={openClientId}
-                onOpenConsumed={() => setOpenClientId(null)}
-              />
-            )}
-            {tab === "outreach" && isTeam && <OutreachView isAdmin={isAdmin} />}
-            {tab === "changes" && <PendingChangesPanel />}
-            {tab === "audit" && <AuditLogView />}
-            {tab === "team" && isAdmin && <TeamAdmin session={session} />}
-            {tab === "integrations" && isAdmin && <Integrations />}
-            {tab === "billing" && isOwner && <Billing session={session} />}
-            {tab === "branding" && isAdmin && <BrandingSettings />}
-            {tab === "security" && <TwoFactorSettings session={session} />}
-            {tab === "admin" && session.is_superadmin && <SuperAdmin />}
+            <CommandPalette
+              commands={paletteCommands}
+              loadDynamic={loadClientCommands}
+            />
           </div>
-        </div>
-        <CommandPalette
-          commands={paletteCommands}
-          loadDynamic={loadClientCommands}
-        />
+        </TrailCtx.Provider>
+      </ManageProvider>
+    </ToastProvider>
+  );
+}
+
+// --- shell chrome ----------------------------------------------------------
+
+function Sidebar({
+  session,
+  nav,
+  tab,
+  onNavigate,
+  collapsed,
+  onToggleCollapsed,
+  closedSections,
+  onToggleSection,
+  onLogout,
+}: {
+  session: Session;
+  nav: NavItem[];
+  tab: Tab;
+  onNavigate: (t: Tab) => void;
+  collapsed: boolean;
+  onToggleCollapsed: () => void;
+  closedSections: string[];
+  onToggleSection: (section: string) => void;
+  onLogout: () => void;
+}) {
+  const sections = [...new Set(nav.map((n) => n.section))];
+  const navRef = useRef<HTMLElement>(null);
+  // THE sliding pill: one absolutely-positioned, transform-animated element.
+  const [pill, setPill] = useState<{ top: number; height: number } | null>(null);
+  const measurePill = useCallback(() => {
+    const el = navRef.current?.querySelector<HTMLElement>('[aria-current="page"]');
+    setPill((prev) => {
+      if (!el || el.offsetHeight === 0) return null;
+      const next = { top: el.offsetTop, height: el.offsetHeight };
+      return prev && prev.top === next.top && prev.height === next.height
+        ? prev
+        : next;
+    });
+  }, []);
+  useLayoutEffect(() => {
+    measurePill();
+    // Re-measure when rail geometry settles/changes (late stylesheet apply,
+    // font metrics, window resize) — the pill must always track the item.
+    const el = navRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(measurePill);
+    ro.observe(el);
+    el.querySelectorAll(".side-section").forEach((s) => ro.observe(s));
+    return () => ro.disconnect();
+  }, [measurePill, tab, closedSections, collapsed, nav.length]);
+
+  return (
+    <aside className="sidebar">
+      <div className="side-top">
+        <Logo />
+        <button
+          type="button"
+          className="side-icon-btn side-collapse"
+          title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+          aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+          onClick={onToggleCollapsed}
+        >
+          <ChevronLeft size={16} aria-hidden="true" />
+        </button>
       </div>
-      </ToastProvider>
-    </ManageProvider>
+      <button
+        type="button"
+        className="side-search"
+        aria-label="Search (⌘K)"
+        onClick={() => window.dispatchEvent(new Event("cmdk:open"))}
+      >
+        <Search size={15} aria-hidden="true" />
+        <span>Search…</span>
+        <Kbd onField>⌘K</Kbd>
+      </button>
+      <nav className="side-nav" ref={navRef} aria-label="Primary">
+        {pill && (
+          <span
+            className="nav-pill"
+            aria-hidden="true"
+            style={{ height: pill.height, transform: `translateY(${pill.top}px)` }}
+          />
+        )}
+        {sections.map((section) => (
+          <div key={section} className="side-section">
+            <button
+              type="button"
+              className="side-section-head"
+              aria-expanded={!closedSections.includes(section)}
+              onClick={() => onToggleSection(section)}
+            >
+              <span>{section}</span>
+              <span
+                className={`section-chevron ${
+                  closedSections.includes(section) ? "" : "open"
+                }`}
+                aria-hidden="true"
+              >
+                <ChevronRight size={12} />
+              </span>
+            </button>
+            {!closedSections.includes(section) &&
+              nav
+                .filter((n) => n.section === section)
+                .map((n) => {
+                  const IconCmp = n.icon;
+                  return (
+                    <button
+                      key={n.key}
+                      type="button"
+                      className="nav-item"
+                      title={n.label}
+                      aria-label={n.label}
+                      aria-current={tab === n.key ? "page" : undefined}
+                      onClick={() => onNavigate(n.key)}
+                    >
+                      <IconCmp aria-hidden="true" />
+                      <span>{n.label}</span>
+                    </button>
+                  );
+                })}
+          </div>
+        ))}
+      </nav>
+      <div className="side-foot">
+        <div className="user-chip">
+          <div className="avatar" aria-hidden="true">
+            {initials(session.full_name)}
+          </div>
+          <div className="user-meta">
+            <strong>{session.full_name}</strong>
+            <span>
+              {session.role}
+              {session.is_superadmin ? " · platform" : ""}
+            </span>
+          </div>
+          <ThemeToggle />
+        </div>
+        <button type="button" className="logout" onClick={onLogout} aria-label="Log out">
+          <LogOut size={16} aria-hidden="true" />
+          <span>Log out</span>
+        </button>
+      </div>
+    </aside>
+  );
+}
+
+function Topbar({ crumbs, showDensity }: { crumbs: Crumb[]; showDensity: boolean }) {
+  // Transparent at scrollTop 0; glass once content scrolls under
+  // (IntersectionObserver on a 1px sentinel; degrades to always-stuck).
+  const [stuck, setStuck] = useState(false);
+  const sentinelRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = sentinelRef.current;
+    if (!el || typeof IntersectionObserver === "undefined") {
+      setStuck(true);
+      return;
+    }
+    const io = new IntersectionObserver(([entry]) =>
+      setStuck(!entry.isIntersecting)
+    );
+    io.observe(el);
+    return () => io.disconnect();
+  }, []);
+  const { pref, setPref } = useDensity();
+
+  return (
+    <>
+      <div ref={sentinelRef} className="topbar-sentinel" aria-hidden="true" />
+      <header className={`topbar ${stuck ? "topbar--stuck" : ""}`.trim()}>
+        <nav className="crumb" aria-label="Breadcrumb">
+          <ol>
+            {crumbs.map((c, i) => {
+              const last = i === crumbs.length - 1;
+              return (
+                <li key={`${i}-${c.label}`}>
+                  {i > 0 && (
+                    <span className="crumb-sep" aria-hidden="true">
+                      ›
+                    </span>
+                  )}
+                  {!last && c.onClick ? (
+                    <button type="button" onClick={c.onClick}>
+                      {c.label}
+                    </button>
+                  ) : (
+                    <span
+                      className="crumb-here"
+                      aria-current={last ? "page" : undefined}
+                    >
+                      {c.label}
+                    </span>
+                  )}
+                </li>
+              );
+            })}
+          </ol>
+        </nav>
+        <div className="topbar-tools">
+          <SaveTick />
+          {showDensity && (
+            <Segmented
+              ariaLabel="Row density"
+              value={pref}
+              onChange={setPref}
+              options={[
+                { value: "comfortable", label: "Comfortable" },
+                { value: "dense", label: "Dense" },
+              ]}
+            />
+          )}
+        </div>
+      </header>
+    </>
+  );
+}
+
+/** "Saving… → Saved HH:MM:SS" — one aria-live region doubling as the
+ * app-wide SR write-feedback channel. Any write dispatches the window
+ * CustomEvent "save-tick" with detail.phase saving|saved|error. */
+function SaveTick() {
+  const [text, setText] = useState("");
+  useEffect(() => {
+    const onTick = (e: Event) => {
+      const phase = (e as CustomEvent<{ phase?: string }>).detail?.phase;
+      if (phase === "saving") setText("Saving…");
+      else if (phase === "error") setText("");
+      else {
+        const d = new Date();
+        const p = (n: number) => String(n).padStart(2, "0");
+        setText(`Saved ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`);
+      }
+    };
+    window.addEventListener("save-tick", onTick);
+    return () => window.removeEventListener("save-tick", onTick);
+  }, []);
+  return (
+    <span className="save-tick" role="status" aria-live="polite">
+      {text}
+    </span>
   );
 }
 
@@ -478,11 +689,17 @@ function ThemeToggle() {
       : pref === "dark";
   return (
     <button
-      className="theme-toggle"
+      type="button"
+      className="side-icon-btn theme-toggle"
       title={`Theme: ${pref} — switch to ${resolvedDark ? "light" : "dark"}`}
+      aria-label={`Switch to ${resolvedDark ? "light" : "dark"} theme`}
       onClick={() => setPref(resolvedDark ? "light" : "dark")}
     >
-      <Icon name={resolvedDark ? "sun" : "moon"} />
+      {resolvedDark ? (
+        <Sun size={16} aria-hidden="true" />
+      ) : (
+        <Moon size={16} aria-hidden="true" />
+      )}
     </button>
   );
 }
@@ -490,10 +707,11 @@ function ThemeToggle() {
 function VerifyBanner() {
   const [sent, setSent] = useState(false);
   return (
-    <div className="verify-banner">
+    <Alert tone="warn" className="verify-banner">
       <span>Please verify your email address to secure your account.</span>
-      <button
-        className="ghost"
+      <Button
+        variant="ghost"
+        size="sm"
         disabled={sent}
         onClick={async () => {
           try {
@@ -505,8 +723,8 @@ function VerifyBanner() {
         }}
       >
         {sent ? "Sent ✓" : "Resend email"}
-      </button>
-    </div>
+      </Button>
+    </Alert>
   );
 }
 
@@ -529,17 +747,21 @@ function MfaGate({
         </p>
         <TwoFactorSettings session={session} />
         <div className="gate-actions">
-          <button className="primary" onClick={onContinue}>
+          <Button variant="primary" onClick={onContinue}>
             I've set it up — continue
-          </button>
-          <button type="button" className="link" onClick={onLogout}>
+          </Button>
+          <Button variant="link" onClick={onLogout}>
             Log out
-          </button>
+          </Button>
         </div>
       </div>
     </div>
   );
 }
+
+// --- auth (login / signup / forgot / MFA challenge) -------------------------
+// Presentation only: the submit handlers, query/hash parsing and session
+// logic are behavior-identical to the pre-revamp screens.
 
 function Login({ onLogin }: { onLogin: (s: Session) => void }) {
   const branding = useBranding();
@@ -565,234 +787,243 @@ function Login({ onLogin }: { onLogin: (s: Session) => void }) {
     <div className="auth-shell">
       <div className="auth-aside">
         <Logo auth />
-        <h2 className="auth-headline">
-          Revolutionizing the way you run&nbsp;ads.
-        </h2>
+        <h2 className="auth-headline">Every campaign. Every client. One&nbsp;place.</h2>
         <p className="auth-tag">
-          Every client's ads &amp; CRM, in one place. Meta, Google and more —
-          blended cross-platform metrics, server-side conversions and a native
-          CRM, built for modern agencies.
+          Meta, Google and more — blended cross-platform metrics, server-side
+          conversions and a native CRM, built for modern agencies.
         </p>
         <ul className="auth-points">
-          <li>Manage every client's ad accounts from one login</li>
-          <li>Blended CAC / ROAS the platforms can't show you</li>
-          <li>Leads flow straight into the built-in CRM</li>
+          <li>
+            <Check size={16} aria-hidden="true" />
+            <span>Manage every client's ad accounts from one login</span>
+          </li>
+          <li>
+            <Check size={16} aria-hidden="true" />
+            <span>Blended CAC / ROAS the platforms can't show you</span>
+          </li>
+          <li>
+            <Check size={16} aria-hidden="true" />
+            <span>Leads flow straight into the built-in CRM</span>
+          </li>
         </ul>
       </div>
-      {challenge ? (
-        <form
-          className="auth-card"
-          onSubmit={async (e) => {
-            e.preventDefault();
-            setError(null);
-            try {
-              onLogin(await loginMfa(challenge.challenge_token, code));
-            } catch (err) {
-              setError((err as Error).message);
-            }
-          }}
-        >
-          <h1>Two-step verification</h1>
-          <p className="auth-sub">
-            {challenge.method === "totp"
-              ? "Enter the 6-digit code from your authenticator app."
-              : challenge.method === "email"
-              ? "Enter the code we just emailed you."
-              : "Enter the code we just texted you."}
-          </p>
-          <label>
-            Verification code
-            <input
-              value={code}
-              onChange={(e) => setCode(e.target.value)}
-              inputMode="numeric"
-              autoComplete="one-time-code"
-              autoFocus
-              placeholder="123456"
-            />
-          </label>
-          <button type="submit" className="primary block">
-            Verify
-          </button>
-          {error && <p className="error">{error}</p>}
-          <p className="auth-sub">You can also enter one of your backup codes.</p>
-          <button
-            type="button"
-            className="link auth-toggle"
-            onClick={() => {
-              setChallenge(null);
-              setCode("");
+      <div className="auth-panel-wrap">
+        {challenge ? (
+          <form
+            className="auth-card"
+            onSubmit={async (e) => {
+              e.preventDefault();
               setError(null);
+              try {
+                onLogin(await loginMfa(challenge.challenge_token, code));
+              } catch (err) {
+                setError((err as Error).message);
+              }
             }}
           >
-            ← Back to login
-          </button>
-        </form>
-      ) : (
-      <form
-        className="auth-card"
-        onSubmit={async (e) => {
-          e.preventDefault();
-          setError(null);
-          try {
-            if (mode === "forgot") {
-              await forgotPassword(email);
-              setResetSent(true);
-            } else if (mode === "login") {
-              const r = await login(email, password);
-              if (isMfaChallenge(r)) setChallenge(r);
-              else onLogin(r);
-            } else {
-              onLogin(await signup(orgName, email, password, fullName));
-            }
-          } catch (err) {
-            setError((err as Error).message);
-          }
-        }}
-      >
-        <h1>
-          {mode === "login"
-            ? "Welcome back"
-            : mode === "signup"
-            ? "Create your organization"
-            : "Reset your password"}
-        </h1>
-        <p className="auth-sub">
-          {mode === "login"
-            ? `Log in to your ${branding.product_name} workspace.`
-            : mode === "signup"
-            ? "Start managing your agency's clients in minutes."
-            : "We'll email you a link to set a new password."}
-        </p>
-        {mode === "forgot" && resetSent ? (
-          <>
-            <p className="notice">
-              If an account exists for {email}, a reset link is on its way.
+            <h1>Two-step verification</h1>
+            <p className="auth-sub">
+              {challenge.method === "totp"
+                ? "Enter the 6-digit code from your authenticator app."
+                : challenge.method === "email"
+                ? "Enter the code we just emailed you."
+                : "Enter the code we just texted you."}
             </p>
-            <button
-              type="button"
-              className="link auth-toggle"
-              onClick={() => {
-                setMode("login");
-                setResetSent(false);
-              }}
-            >
-              Back to login
-            </button>
-          </>
-        ) : (
-          <>
-            {mode === "signup" && (
-              <>
-                <label className="field">
-                  <span>Agency / organization name</span>
-                  <input
-                    placeholder="Atlas Reach"
-                    value={orgName}
-                    onChange={(e) => setOrgName(e.target.value)}
-                  />
-                </label>
-                <label className="field">
-                  <span>Your name</span>
-                  <input
-                    placeholder="Jane Doe"
-                    value={fullName}
-                    onChange={(e) => setFullName(e.target.value)}
-                  />
-                </label>
-              </>
-            )}
-            <label className="field">
-              <span>Email</span>
+            <Field label="Verification code">
               <input
-                type="email"
-                placeholder="you@agency.com"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
+                value={code}
+                onChange={(e) => setCode(e.target.value)}
+                inputMode="numeric"
+                autoComplete="one-time-code"
+                autoFocus
+                placeholder="123456"
               />
-            </label>
-            {mode !== "forgot" && (
-              <label className="field">
-                <span>Password</span>
-                <input
-                  placeholder="••••••••"
-                  type="password"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                />
-              </label>
-            )}
-            <button type="submit" className="primary block">
-              {mode === "login"
-                ? "Log in"
-                : mode === "signup"
-                ? "Create organization"
-                : "Send reset link"}
-            </button>
-            {error && <p className="error">{error}</p>}
-            {mode !== "forgot" && (
-              <>
-                <div className="oauth-divider">
-                  <span>or</span>
-                </div>
-                <button type="button" className="oauth-btn" onClick={() => oauth("google")}>
-                  Continue with Google
-                </button>
-                <button type="button" className="oauth-btn" onClick={() => oauth("meta")}>
-                  Continue with Meta
-                </button>
-              </>
-            )}
-            {mode === "login" && (
-              <button
-                type="button"
-                className="link"
-                onClick={() => {
-                  setError(null);
-                  setMode("forgot");
-                }}
-              >
-                Forgot password?
-              </button>
-            )}
-            <button
-              type="button"
-              className="link auth-toggle"
+            </Field>
+            <Button type="submit" variant="primary" size="lg" block>
+              Verify
+            </Button>
+            {error && <Alert tone="danger">{error}</Alert>}
+            <p className="auth-sub">You can also enter one of your backup codes.</p>
+            <Button
+              variant="link"
+              className="auth-toggle"
               onClick={() => {
+                setChallenge(null);
+                setCode("");
                 setError(null);
-                setMode(mode === "login" ? "signup" : "login");
               }}
             >
+              ← Back to login
+            </Button>
+          </form>
+        ) : (
+          <form
+            key={mode}
+            className="auth-card"
+            onSubmit={async (e) => {
+              e.preventDefault();
+              setError(null);
+              try {
+                if (mode === "forgot") {
+                  await forgotPassword(email);
+                  setResetSent(true);
+                } else if (mode === "login") {
+                  const r = await login(email, password);
+                  if (isMfaChallenge(r)) setChallenge(r);
+                  else onLogin(r);
+                } else {
+                  onLogin(await signup(orgName, email, password, fullName));
+                }
+              } catch (err) {
+                setError((err as Error).message);
+              }
+            }}
+          >
+            <h1>
               {mode === "login"
-                ? "New agency? Sign up"
+                ? "Welcome back"
                 : mode === "signup"
-                ? "Already have an account? Log in"
-                : "Back to login"}
-            </button>
-          </>
+                ? "Create your organization"
+                : "Reset your password"}
+            </h1>
+            <p className="auth-sub">
+              {mode === "login"
+                ? `Log in to your ${branding.product_name} workspace.`
+                : mode === "signup"
+                ? "Start managing your agency's clients in minutes."
+                : "We'll email you a link to set a new password."}
+            </p>
+            {mode === "forgot" && resetSent ? (
+              <>
+                <Alert tone="ok">
+                  If an account exists for {email}, a reset link is on its way.
+                </Alert>
+                <Button
+                  variant="link"
+                  className="auth-toggle"
+                  onClick={() => {
+                    setMode("login");
+                    setResetSent(false);
+                  }}
+                >
+                  Back to login
+                </Button>
+              </>
+            ) : (
+              <>
+                {mode === "signup" && (
+                  <>
+                    <Field label="Agency / organization name">
+                      <input
+                        placeholder="Atlas Reach"
+                        value={orgName}
+                        onChange={(e) => setOrgName(e.target.value)}
+                      />
+                    </Field>
+                    <Field label="Your name">
+                      <input
+                        placeholder="Jane Doe"
+                        value={fullName}
+                        onChange={(e) => setFullName(e.target.value)}
+                      />
+                    </Field>
+                  </>
+                )}
+                <Field label="Email">
+                  <input
+                    type="email"
+                    autoFocus={mode !== "signup"}
+                    autoComplete="email"
+                    placeholder="you@agency.com"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                  />
+                </Field>
+                {mode !== "forgot" && (
+                  <Field label="Password">
+                    <input
+                      type="password"
+                      autoComplete={
+                        mode === "signup" ? "new-password" : "current-password"
+                      }
+                      placeholder="••••••••"
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
+                    />
+                  </Field>
+                )}
+                <Button type="submit" variant="primary" size="lg" block>
+                  {mode === "login"
+                    ? "Log in"
+                    : mode === "signup"
+                    ? "Create organization"
+                    : "Send reset link"}
+                </Button>
+                {error && <Alert tone="danger">{error}</Alert>}
+                {mode !== "forgot" && (
+                  <>
+                    <div className="oauth-divider">
+                      <span>or</span>
+                    </div>
+                    <Button block onClick={() => oauth("google")}>
+                      Continue with Google
+                    </Button>
+                    <Button block onClick={() => oauth("meta")}>
+                      Continue with Meta
+                    </Button>
+                  </>
+                )}
+                {mode === "login" && (
+                  <Button
+                    variant="link"
+                    onClick={() => {
+                      setError(null);
+                      setMode("forgot");
+                    }}
+                  >
+                    Forgot password?
+                  </Button>
+                )}
+                <Button
+                  variant="link"
+                  className="auth-toggle"
+                  onClick={() => {
+                    setError(null);
+                    setMode(mode === "login" ? "signup" : "login");
+                  }}
+                >
+                  {mode === "login"
+                    ? "New agency? Sign up"
+                    : mode === "signup"
+                    ? "Already have an account? Log in"
+                    : "Back to login"}
+                </Button>
+              </>
+            )}
+          </form>
         )}
-      </form>
-      )}
+      </div>
     </div>
   );
 }
 
+// --- clients grid ------------------------------------------------------------
+
 function Clients({
   session,
-  openClientId,
-  onOpenConsumed,
+  selected,
+  onSelect,
 }: {
   session: Session;
-  /** Command-palette jump target: auto-open this client once loaded. */
-  openClientId?: string | null;
-  onOpenConsumed?: () => void;
+  selected: Client | null;
+  onSelect: (c: Client | null) => void;
 }) {
   const [clients, setClients] = useState<Client[]>([]);
-  const [selected, setSelected] = useState<Client | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const isAdmin = ADMIN_ROLES.includes(session.role);
+  const toast = useToast();
 
   const load = () =>
     api<Client[]>("/api/clients")
@@ -803,22 +1034,13 @@ function Clients({
     load();
   }, []);
 
-  useEffect(() => {
-    if (!openClientId) return;
-    const target = clients.find((c) => c.id === openClientId);
-    if (target) {
-      setSelected(target);
-      onOpenConsumed?.();
-    }
-  }, [openClientId, clients, onOpenConsumed]);
-
   if (selected)
     return (
       <ClientDetail
         client={selected}
         session={session}
         onBack={() => {
-          setSelected(null);
+          onSelect(null);
           load();
         }}
       />
@@ -826,62 +1048,81 @@ function Clients({
 
   return (
     <div>
-      <div className="page-head">
+      <div className="cl-page-head">
         <div>
           <h2>Clients</h2>
-          <p className="page-sub">
+          <p className="cl-page-sub">
             {clients.length} {clients.length === 1 ? "client" : "clients"} in{" "}
             {session.organization_name}
           </p>
         </div>
         {isAdmin && clients.length > 0 && (
-          <button className="primary" onClick={() => setAdding(true)}>
-            <Icon name="plus" /> Add client
-          </button>
+          <Button variant="primary" onClick={() => setAdding(true)}>
+            <Plus size={16} aria-hidden="true" /> Add client
+          </Button>
         )}
       </div>
-      {error && <p className="error">{error}</p>}
-      {loaded && clients.length === 0 ? (
-        <div className="empty-state">
-          <div className="empty-icon">
-            <Icon name="clients" />
-          </div>
-          <h3>No clients yet</h3>
-          <p>
-            {isAdmin
-              ? "Add your first client to start connecting ad accounts and tracking performance."
-              : "No clients have been added to this organization yet."}
-          </p>
-          {isAdmin && (
-            <button className="primary" onClick={() => setAdding(true)}>
-              <Icon name="plus" /> Add your first client
-            </button>
-          )}
-        </div>
-      ) : (
-        <ul className="client-grid">
-          {clients.map((c) => (
-            <li
-              key={c.id}
-              className="client-card"
-              onClick={() => setSelected(c)}
-            >
-              <div className="client-avatar">{initials(c.name)}</div>
-              <div className="client-info">
-                <strong>{c.name}</strong>
-                <span className={`badge ${c.status}`}>{c.status}</span>
+      {error && <Alert tone="danger">{error}</Alert>}
+      {!loaded ? (
+        <ul className="cl-grid" aria-hidden="true">
+          {Array.from({ length: 6 }, (_, i) => (
+            <li key={i}>
+              <div className="card cl-card cl-card--skel">
+                <Skeleton width={44} height={44} />
+                <div className="cl-info">
+                  <Skeleton width="60%" height="0.9em" />
+                  <Skeleton width="35%" height="0.7em" />
+                </div>
               </div>
-              <Icon name="chevron" />
+            </li>
+          ))}
+        </ul>
+      ) : clients.length === 0 ? (
+        <EmptyState
+          hero
+          icon={<Building2 aria-hidden="true" />}
+          title="No clients yet"
+          action={
+            isAdmin ? (
+              <Button variant="primary" onClick={() => setAdding(true)}>
+                <Plus size={16} aria-hidden="true" /> Add your first client
+              </Button>
+            ) : undefined
+          }
+        >
+          {isAdmin
+            ? "Add your first client to start connecting ad accounts and tracking performance."
+            : "No clients have been added to this organization yet."}
+        </EmptyState>
+      ) : (
+        <ul className="cl-grid">
+          {clients.map((c) => (
+            <li key={c.id}>
+              <button
+                type="button"
+                className="card card--interactive cl-card"
+                onClick={() => onSelect(c)}
+              >
+                <span className="cl-avatar" aria-hidden="true">
+                  {initials(c.name)}
+                </span>
+                <span className="cl-info">
+                  <strong className="cl-name">{c.name}</strong>
+                  <Badge tone={toneForStatus(c.status)}>{c.status}</Badge>
+                </span>
+                <ChevronRight className="cl-go" aria-hidden="true" />
+              </button>
             </li>
           ))}
         </ul>
       )}
       {adding && (
-        <AddClientModal
+        <AddClientDialog
           onClose={() => setAdding(false)}
           onCreated={(c) => {
             setAdding(false);
             setClients((prev) => [...prev, c]);
+            toast(`Client "${c.name}" added`, "ok");
           }}
         />
       )}
@@ -889,7 +1130,7 @@ function Clients({
   );
 }
 
-function AddClientModal({
+function AddClientDialog({
   onClose,
   onCreated,
 }: {
@@ -900,70 +1141,91 @@ function AddClientModal({
   const [notes, setNotes] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const nameRef = useRef<HTMLInputElement>(null);
+  const formId = useId();
 
   return (
-    <div className="modal-backdrop" onClick={onClose}>
-      <div className="modal" onClick={(e) => e.stopPropagation()}>
-        <h3>Add a client</h3>
-        <p className="modal-sub">
-          Create a client to connect their ad accounts and track performance.
-        </p>
-        <form
-          className="form-grid"
-          onSubmit={async (e) => {
-            e.preventDefault();
-            setSaving(true);
-            setError(null);
-            try {
-              const c = await createClient({
-                name: name.trim(),
-                internal_notes: notes.trim() || undefined,
-              });
-              onCreated(c);
-            } catch (err) {
-              setError((err as Error).message);
-              setSaving(false);
-            }
-          }}
+    <Dialog
+      open
+      onClose={onClose}
+      title="Add a client"
+      size="sm"
+      initialFocus={nameRef}
+      footer={
+        <>
+          <Button variant="ghost" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button
+            type="submit"
+            form={formId}
+            variant="primary"
+            busy={saving}
+            disabled={saving || !name.trim()}
+          >
+            Add client
+          </Button>
+        </>
+      }
+    >
+      <p className="cl-dialog-sub">
+        Create a client to connect their ad accounts and track performance.
+      </p>
+      <form
+        id={formId}
+        className="cl-form"
+        onSubmit={async (e) => {
+          e.preventDefault();
+          setSaving(true);
+          setError(null);
+          pingSave("saving");
+          try {
+            const c = await createClient({
+              name: name.trim(),
+              internal_notes: notes.trim() || undefined,
+            });
+            pingSave("saved");
+            onCreated(c);
+          } catch (err) {
+            pingSave("error");
+            setError((err as Error).message);
+            setSaving(false);
+          }
+        }}
+      >
+        <Field label="Client name">
+          <input
+            ref={nameRef}
+            placeholder="e.g. Paganelli HVAC"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            required
+          />
+        </Field>
+        <Field
+          label="Internal notes"
+          optional
+          description="Only your team sees this — never the client."
         >
-          <label className="field">
-            <span>Client name</span>
-            <input
-              autoFocus
-              placeholder="e.g. Paganelli HVAC"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              required
-            />
-          </label>
-          <label className="field">
-            <span>
-              Internal notes <em className="opt">optional</em>
-            </span>
-            <textarea
-              rows={3}
-              placeholder="Only your team sees this — never the client."
-              value={notes}
-              onChange={(e) => setNotes(e.target.value)}
-            />
-          </label>
-          {error && <p className="error">{error}</p>}
-          <div className="modal-actions">
-            <button type="button" className="ghost" onClick={onClose}>
-              Cancel
-            </button>
-            <button
-              type="submit"
-              className="primary"
-              disabled={saving || !name.trim()}
-            >
-              {saving ? "Adding…" : "Add client"}
-            </button>
-          </div>
-        </form>
-      </div>
-    </div>
+          <textarea
+            rows={3}
+            value={notes}
+            onChange={(e) => setNotes(e.target.value)}
+          />
+        </Field>
+        {error && <Alert tone="danger">{error}</Alert>}
+      </form>
+    </Dialog>
   );
+}
+
+// --- client detail ------------------------------------------------------------
+
+/** Tree selection payload (breadcrumb shows campaign selections). */
+interface TreeSel {
+  id: string;
+  name: string;
+  type: string;
 }
 
 function ClientDetail({
@@ -980,9 +1242,24 @@ function ClientDetail({
   const [platformFilter, setPlatformFilter] = useState<string>("all");
   const [view, setView] = useState<"dashboard" | "crm">("dashboard");
   const [error, setError] = useState<string | null>(null);
+  const [treeSel, setTreeSel] = useState<TreeSel | null>(null);
   // Connecting platforms is Admin/Owner surface — mirrors the API gate.
   const isAdmin = ADMIN_ROLES.includes(session.role);
   const isTeam = TEAM_ROLES.includes(session.role);
+
+  // Extend the topbar breadcrumb: client name › selected campaign.
+  const setTrail = useContext(TrailCtx);
+  useEffect(() => {
+    const campaign = treeSel && treeSel.type === "campaign" ? treeSel : null;
+    setTrail([
+      {
+        label: client.name,
+        onClick: campaign ? () => setTreeSel(null) : undefined,
+      },
+      ...(campaign ? [{ label: campaign.name }] : []),
+    ]);
+    return () => setTrail([]);
+  }, [client.name, treeSel, setTrail]);
 
   const loadConnections = useCallback(() => {
     api<Connection[]>(`/api/clients/${client.id}/connections`)
@@ -1007,6 +1284,11 @@ function ClientDetail({
     getPlatforms().then(setPlatforms).catch((e) => setError(e.message));
   }, []);
 
+  const platformName = useCallback(
+    (id: string) => platforms.find((p) => p.id === id)?.name ?? id,
+    [platforms]
+  );
+
   const connect = async (platform: string) => {
     const { url } = await api<{ url: string }>(
       `/api/connect/${platform}/start?client_id=${client.id}`
@@ -1015,51 +1297,54 @@ function ClientDetail({
   };
 
   return (
-    <div>
-      <div className="client-head">
-        <button className="link" onClick={onBack}>
-          ← All clients
-        </button>
-        <h2>{client.name}</h2>
-        <nav className="toggle">
-          <button
-            className={view === "dashboard" ? "active" : ""}
-            onClick={() => setView("dashboard")}
-          >
-            Dashboard
-          </button>
-          <button
-            className={view === "crm" ? "active" : ""}
-            onClick={() => setView("crm")}
-          >
-            CRM
-          </button>
-        </nav>
-        {/* One filter governs every widget and the account tree below —
-            no reload, no separate views. */}
-        {view === "dashboard" && (
-          <nav className="toggle platform-toggle">
-            <button
-              className={platformFilter === "all" ? "active" : ""}
-              onClick={() => setPlatformFilter("all")}
-            >
-              Blended
-            </button>
-            {platforms
-              .filter((p) => p.connectable)
-              .map((p) => (
-                <button
-                  key={p.id}
-                  className={platformFilter === p.id ? "active" : ""}
-                  onClick={() => setPlatformFilter(p.id)}
-                >
-                  {p.name} only
-                </button>
-              ))}
-          </nav>
-        )}
-      </div>
-      {error && <p className="error">{error}</p>}
+    <div className="cl-detail">
+      <header className="card card--hero cl-hero">
+        <div className="cl-hero-top">
+          <Button variant="ghost" size="sm" onClick={onBack}>
+            <ChevronLeft size={16} aria-hidden="true" /> All clients
+          </Button>
+          <Segmented
+            ariaLabel="Client view"
+            value={view}
+            onChange={setView}
+            options={[
+              { value: "dashboard", label: "Dashboard" },
+              { value: "crm", label: "CRM" },
+            ]}
+          />
+        </div>
+        <div className="cl-hero-main">
+          <h2 className="cl-hero-name">{client.name}</h2>
+          <Badge tone={toneForStatus(client.status)}>{client.status}</Badge>
+        </div>
+        <div className="cl-hero-chips">
+          {connections.length > 0 ? (
+            connections.map((c) => (
+              <PlatformChip key={c.id} name={platformName(c.platform)} />
+            ))
+          ) : (
+            <span className="cl-hero-none">No platforms connected yet</span>
+          )}
+        </div>
+      </header>
+      {/* One filter governs every widget and the account tree below —
+          no reload, no separate views. */}
+      {view === "dashboard" && platforms.length > 0 && (
+        <div className="cl-toolbar">
+          <Segmented
+            ariaLabel="Platform filter"
+            value={platformFilter}
+            onChange={setPlatformFilter}
+            options={[
+              { value: "all", label: "Blended" },
+              ...platforms
+                .filter((p) => p.connectable)
+                .map((p) => ({ value: p.id, label: `${p.name} only` })),
+            ]}
+          />
+        </div>
+      )}
+      {error && <Alert tone="danger">{error}</Alert>}
       {view === "crm" && <CrmView clientId={client.id} session={session} />}
       {view === "dashboard" && (
         <Dashboard
@@ -1069,58 +1354,104 @@ function ClientDetail({
         />
       )}
       {view === "dashboard" && (
-      <section>
-        <h3>Platform connections</h3>
-        {platforms.map((platform) => {
-          const conn = connections.find((c) => c.platform === platform.id);
-          return (
-            <div key={platform.id} className="connection">
-              <strong>{platform.name}</strong>
-              {platform.coming_soon ? (
-                <span className="badge none">coming soon</span>
-              ) : conn ? (
-                <span className={`badge ${conn.status}`}>
-                  {conn.status}
-                  {conn.error_detail ? ` — ${conn.error_detail}` : ""}
-                </span>
-              ) : (
-                <span className="badge none">not connected</span>
-              )}
-              {isAdmin && platform.connectable && (
-                <button onClick={() => connect(platform.id)}>
-                  {conn ? "Reconnect" : "Connect"}
-                </button>
-              )}
-            </div>
-          );
-        })}
-      </section>
+        <section className="card cl-section">
+          <div className="card-header">
+            <h3 className="card-title">Platform connections</h3>
+          </div>
+          <div className="cl-connections">
+            {platforms.map((platform) => {
+              const conn = connections.find((c) => c.platform === platform.id);
+              return (
+                <div key={platform.id} className="cl-connection">
+                  <PlatformChip name={platform.name} />
+                  {platform.coming_soon ? (
+                    <Badge tone="info">coming soon</Badge>
+                  ) : conn ? (
+                    <Badge tone={toneForStatus(conn.status)}>{conn.status}</Badge>
+                  ) : (
+                    <Badge tone="neutral">not connected</Badge>
+                  )}
+                  {conn?.error_detail && (
+                    <span className="cl-conn-err" title={conn.error_detail}>
+                      {conn.error_detail}
+                    </span>
+                  )}
+                  {isAdmin && platform.connectable && (
+                    <Button size="sm" onClick={() => connect(platform.id)}>
+                      {conn ? "Reconnect" : "Connect"}
+                    </Button>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </section>
       )}
       {view === "dashboard" && (
-      <section>
-        <h3>Accounts &amp; campaigns</h3>
-        <AccountTree
-          clientId={client.id}
-          platformFilter={platformFilter}
-          canManage={isTeam}
-        />
-      </section>
+        <section className="card cl-section">
+          <div className="card-header">
+            <h3 className="card-title">Accounts &amp; campaigns</h3>
+          </div>
+          <AccountTree
+            clientId={client.id}
+            platformFilter={platformFilter}
+            canManage={isTeam}
+            platformName={platformName}
+            selection={treeSel}
+            onSelect={setTreeSel}
+          />
+        </section>
       )}
     </div>
   );
 }
 
+// --- account tree (§4.14: role=tree, full keyboard model) ---------------------
+
+interface TreeMeta {
+  id: string;
+  parentId: string | null;
+  level: number;
+  canExpand: boolean;
+  name: string;
+  type: string;
+}
+
+interface TreeCtxVal {
+  openIds: Set<string>;
+  setOpen: (id: string, open: boolean) => void;
+  focusId: string | null;
+  setFocusId: (id: string) => void;
+  firstId: string | null;
+  selectedId: string | null;
+  select: (sel: TreeSel) => void;
+  register: (meta: TreeMeta) => () => void;
+  rowKeyDown: (e: ReactKeyboardEvent<HTMLDivElement>, meta: TreeMeta) => void;
+}
+
+const TreeCtx = createContext<TreeCtxVal | null>(null);
+
 function AccountTree({
   clientId,
   platformFilter,
   canManage,
+  platformName,
+  selection,
+  onSelect,
 }: {
   clientId: string;
   platformFilter: string;
   canManage: boolean;
+  platformName: (id: string) => string;
+  selection: TreeSel | null;
+  onSelect: (sel: TreeSel | null) => void;
 }) {
-  const [accounts, setAccounts] = useState<AdAccount[]>([]);
+  const [accounts, setAccounts] = useState<AdAccount[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [openIds, setOpenIds] = useState<Set<string>>(new Set());
+  const [focusId, setFocusId] = useState<string | null>(null);
+  const registry = useRef(new Map<string, TreeMeta>());
+  const treeRef = useRef<HTMLUListElement>(null);
 
   useEffect(() => {
     api<AdAccount[]>(`/api/ad-accounts?client_id=${clientId}`)
@@ -1128,18 +1459,221 @@ function AccountTree({
       .catch((e) => setError(e.message));
   }, [clientId]);
 
-  const visible = accounts.filter(
+  // If the tab-stop row unmounts (ancestor collapsed, filter changed), fall
+  // back to the first visible row.
+  useEffect(() => {
+    if (focusId && !registry.current.has(focusId)) setFocusId(null);
+  });
+
+  const setOpen = useCallback((id: string, open: boolean) => {
+    setOpenIds((prev) => {
+      const next = new Set(prev);
+      if (open) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+  }, []);
+
+  const register = useCallback((meta: TreeMeta) => {
+    registry.current.set(meta.id, meta);
+    return () => {
+      registry.current.delete(meta.id);
+    };
+  }, []);
+
+  const visible = (accounts ?? []).filter(
     (a) => platformFilter === "all" || a.platform === platformFilter
   );
+  const firstId = visible[0]?.id ?? null;
 
-  if (error) return <p className="error">{error}</p>;
-  if (!visible.length) return <p className="muted">No ad accounts yet.</p>;
+  const rowKeyDown = (e: ReactKeyboardEvent<HTMLDivElement>, meta: TreeMeta) => {
+    const rows = Array.from(
+      treeRef.current?.querySelectorAll<HTMLElement>('[role="treeitem"]') ?? []
+    );
+    const idx = rows.findIndex((el) => el.dataset.treeId === meta.id);
+    const focusRow = (el: HTMLElement | undefined) => {
+      if (!el?.dataset.treeId) return;
+      setFocusId(el.dataset.treeId);
+      el.focus();
+    };
+    switch (e.key) {
+      case "ArrowDown":
+        e.preventDefault();
+        focusRow(rows[idx + 1]);
+        break;
+      case "ArrowUp":
+        e.preventDefault();
+        focusRow(rows[idx - 1]);
+        break;
+      case "Home":
+        e.preventDefault();
+        focusRow(rows[0]);
+        break;
+      case "End":
+        e.preventDefault();
+        focusRow(rows[rows.length - 1]);
+        break;
+      case "ArrowRight":
+        e.preventDefault();
+        if (meta.canExpand && !openIds.has(meta.id)) setOpen(meta.id, true);
+        else if (meta.canExpand && openIds.has(meta.id)) focusRow(rows[idx + 1]);
+        break;
+      case "ArrowLeft":
+        e.preventDefault();
+        if (meta.canExpand && openIds.has(meta.id)) setOpen(meta.id, false);
+        else {
+          for (let i = idx - 1; i >= 0; i--) {
+            if (Number(rows[i].dataset.level) === meta.level - 1) {
+              focusRow(rows[i]);
+              break;
+            }
+          }
+        }
+        break;
+      case "Enter":
+        e.preventDefault();
+        onSelect({ id: meta.id, name: meta.name, type: meta.type });
+        break;
+      case "*":
+        e.preventDefault();
+        registry.current.forEach((m) => {
+          if (m.parentId === meta.parentId && m.canExpand) setOpen(m.id, true);
+        });
+        break;
+    }
+  };
+
+  if (error) return <Alert tone="danger">{error}</Alert>;
+  if (accounts === null)
+    return (
+      <ul className="tree cl-tree" aria-hidden="true">
+        <TreeSkeletonRows level={1} />
+      </ul>
+    );
+  if (!visible.length)
+    return (
+      <EmptyState title="No ad accounts yet">
+        {platformFilter === "all"
+          ? "Connect a platform above to pull this client's ad accounts in."
+          : "No ad accounts on this platform yet."}
+      </EmptyState>
+    );
+
+  const ctx: TreeCtxVal = {
+    openIds,
+    setOpen,
+    focusId,
+    setFocusId,
+    firstId,
+    selectedId: selection?.id ?? null,
+    select: (sel) => onSelect(sel),
+    register,
+    rowKeyDown,
+  };
+
   return (
-    <ul className="tree">
-      {visible.map((a) => (
-        <AccountNode key={a.id} account={a} canManage={canManage} />
+    <TreeCtx.Provider value={ctx}>
+      <ul
+        className="tree cl-tree"
+        role="tree"
+        aria-label="Accounts and campaigns"
+        ref={treeRef}
+      >
+        {visible.map((a) => (
+          <AccountNode
+            key={a.id}
+            account={a}
+            canManage={canManage}
+            platformName={platformName}
+          />
+        ))}
+      </ul>
+    </TreeCtx.Provider>
+  );
+}
+
+/** One 36px tree row (§4.14): indent rails, rotating chevron, type tag. */
+function TreeRow({
+  id,
+  parentId,
+  level,
+  canExpand,
+  name,
+  entityType,
+  typeTag,
+  children,
+}: {
+  id: string;
+  parentId: string | null;
+  level: number;
+  canExpand: boolean;
+  name: string;
+  entityType: string;
+  typeTag: string;
+  children: ReactNode;
+}) {
+  const ctx = useContext(TreeCtx)!;
+  const open = ctx.openIds.has(id);
+  const selected = ctx.selectedId === id;
+  const tabbable = (ctx.focusId ?? ctx.firstId) === id;
+
+  useEffect(
+    () => ctx.register({ id, parentId, level, canExpand, name, type: entityType }),
+    // ctx.register is stable (useCallback in AccountTree).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [id, parentId, level, canExpand, name, entityType]
+  );
+
+  const meta: TreeMeta = { id, parentId, level, canExpand, name, type: entityType };
+
+  return (
+    <div
+      role="treeitem"
+      className="tree-row"
+      data-tree-id={id}
+      data-level={level}
+      aria-level={level}
+      aria-expanded={canExpand ? open : undefined}
+      aria-selected={selected}
+      tabIndex={tabbable ? 0 : -1}
+      onClick={() => {
+        ctx.setFocusId(id);
+        ctx.select({ id, name, type: entityType });
+        if (canExpand) ctx.setOpen(id, !open);
+      }}
+      onKeyDown={(e) => ctx.rowKeyDown(e, meta)}
+    >
+      {Array.from({ length: level - 1 }, (_, i) => (
+        <span key={i} className="tree-indent" aria-hidden="true" />
       ))}
-    </ul>
+      {canExpand ? (
+        <span className="tree-chevron" aria-hidden="true">
+          <ChevronRight size={16} />
+        </span>
+      ) : (
+        <span className="tree-chevron tree-chevron--leaf" aria-hidden="true" />
+      )}
+      <span className="tree-type">{typeTag}</span>
+      {children}
+    </div>
+  );
+}
+
+/** 2 inline skeleton rows while async children load (§4.14). */
+function TreeSkeletonRows({ level }: { level: number }) {
+  return (
+    <>
+      {[0, 1].map((i) => (
+        <li role="none" key={i}>
+          <div className="tree-row" aria-hidden="true">
+            {Array.from({ length: level - 1 }, (_, j) => (
+              <span key={j} className="tree-indent" />
+            ))}
+            <Skeleton width={i === 0 ? "52%" : "38%"} height="0.8em" />
+          </div>
+        </li>
+      ))}
+    </>
   );
 }
 
@@ -1181,10 +1715,6 @@ function useLazyChildren<T>(basePath: string | null) {
   return { items, loading, warning, error, reload: load };
 }
 
-function PlatformBadge({ platform }: { platform: "meta" | "google" }) {
-  return <span className={`platform ${platform}`}>{platform}</span>;
-}
-
 function NewCampaignForm({
   account,
   onExecuted,
@@ -1197,20 +1727,25 @@ function NewCampaignForm({
   const [budget, setBudget] = useState("");
   const [error, setError] = useState<string | null>(null);
   return (
-    <div className="inline-form">
-      <input
-        placeholder="Campaign name"
-        value={name}
-        onChange={(e) => setName(e.target.value)}
-      />
-      <input
-        placeholder="Daily budget $"
-        type="number"
-        min="1"
-        value={budget}
-        onChange={(e) => setBudget(e.target.value)}
-      />
-      <button
+    <div className="cl-inline-form">
+      <Field label="Campaign name">
+        <input
+          placeholder="Campaign name"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+        />
+      </Field>
+      <Field label="Daily budget ($)">
+        <input
+          placeholder="e.g. 50"
+          type="number"
+          min="1"
+          value={budget}
+          onChange={(e) => setBudget(e.target.value)}
+        />
+      </Field>
+      <Button
+        variant="primary"
         disabled={!name || !budget}
         onClick={() =>
           stage(
@@ -1233,9 +1768,9 @@ function NewCampaignForm({
         }
       >
         Stage create
-      </button>
-      <span className="muted">created paused; enable it when ready</span>
-      {error && <p className="error">{error}</p>}
+      </Button>
+      <span className="cl-inline-hint">created paused; enable it when ready</span>
+      {error && <Alert tone="danger">{error}</Alert>}
     </div>
   );
 }
@@ -1256,16 +1791,21 @@ function EditForm({
     initialBudgetMicros != null ? String(initialBudgetMicros / 1_000_000) : ""
   );
   return (
-    <div className="inline-form">
-      <input value={name} onChange={(e) => setName(e.target.value)} />
-      <input
-        placeholder="Daily budget $"
-        type="number"
-        min="1"
-        value={budget}
-        onChange={(e) => setBudget(e.target.value)}
-      />
-      <button
+    <div className="cl-inline-form">
+      <Field label="Name">
+        <input value={name} onChange={(e) => setName(e.target.value)} />
+      </Field>
+      <Field label="Daily budget ($)">
+        <input
+          placeholder="e.g. 50"
+          type="number"
+          min="1"
+          value={budget}
+          onChange={(e) => setBudget(e.target.value)}
+        />
+      </Field>
+      <Button
+        variant="primary"
         onClick={() => {
           const payload: Record<string, unknown> = {};
           if (name !== initialName) payload.name = name;
@@ -1275,7 +1815,7 @@ function EditForm({
         }}
       >
         Stage {label}
-      </button>
+      </Button>
     </div>
   );
 }
@@ -1283,28 +1823,47 @@ function EditForm({
 function AccountNode({
   account,
   canManage,
+  platformName,
 }: {
   account: AdAccount;
   canManage: boolean;
+  platformName: (id: string) => string;
 }) {
-  const [open, setOpen] = useState(false);
+  const ctx = useContext(TreeCtx)!;
+  const open = ctx.openIds.has(account.id);
   const [showNew, setShowNew] = useState(false);
   const [showCreatives, setShowCreatives] = useState(false);
   const { items, loading, warning, error, reload } = useLazyChildren<Campaign>(
     open ? `/api/ad-accounts/${account.id}/campaigns` : null
   );
   return (
-    <li>
-      <div className="node" onClick={() => setOpen(!open)}>
-        {open ? "▾" : "▸"} <PlatformBadge platform={account.platform} />
-        <strong>{account.name}</strong>
-        <span className="muted">{account.external_id}</span>
-      </div>
+    <li role="none">
+      <TreeRow
+        id={account.id}
+        parentId={null}
+        level={1}
+        canExpand
+        name={account.name}
+        entityType="account"
+        typeTag="ACCT"
+      >
+        <PlatformChip name={platformName(account.platform)} />
+        <strong className="tree-name">{account.name}</strong>
+        <span className="tree-ext">{account.external_id}</span>
+      </TreeRow>
       {open && (
-        <ul>
-          {loading && <li className="muted">Loading live from API…</li>}
-          {warning && <li className="warning">{warning}</li>}
-          {error && <li className="error">{error}</li>}
+        <ul role="group" className="cl-tree-group">
+          {loading && <TreeSkeletonRows level={2} />}
+          {warning && (
+            <li role="none" className="cl-tree-note cl-tree-note--warn">
+              {warning}
+            </li>
+          )}
+          {error && (
+            <li role="none" className="cl-tree-note cl-tree-note--err">
+              {error}
+            </li>
+          )}
           {items?.map((c) => (
             <CampaignNode
               key={c.id}
@@ -1314,20 +1873,26 @@ function AccountNode({
               onChanged={reload}
             />
           ))}
-          {items?.length === 0 && <li className="muted">No campaigns</li>}
+          {items?.length === 0 && (
+            <li role="none" className="cl-tree-note">
+              No campaigns
+            </li>
+          )}
           {canManage && (
-            <li className="node-actions">
-              <button className="link" onClick={() => setShowNew(!showNew)}>
-                {showNew ? "Cancel" : "+ New campaign"}
-              </button>
-              {account.platform === "meta" && (
-                <button
-                  className="link"
-                  onClick={() => setShowCreatives(!showCreatives)}
-                >
-                  {showCreatives ? "Hide creatives" : "Creatives"}
-                </button>
-              )}
+            <li role="none" className="cl-tree-actions">
+              <span className="cl-tree-actions-row">
+                <Button variant="link" onClick={() => setShowNew(!showNew)}>
+                  {showNew ? "Cancel" : "+ New campaign"}
+                </Button>
+                {account.platform === "meta" && (
+                  <Button
+                    variant="link"
+                    onClick={() => setShowCreatives(!showCreatives)}
+                  >
+                    {showCreatives ? "Hide creatives" : "Creatives"}
+                  </Button>
+                )}
+              </span>
               {showNew && (
                 <NewCampaignForm
                   account={account}
@@ -1358,10 +1923,11 @@ function CampaignNode({
   onChanged: () => void;
 }) {
   const { stage } = useManage();
-  const [open, setOpen] = useState(false);
-  const [panel, setPanel] = useState<
-    "none" | "edit" | "terms" | "assets"
-  >("none");
+  const ctx = useContext(TreeCtx)!;
+  const open = ctx.openIds.has(campaign.id);
+  const [panel, setPanel] = useState<"none" | "edit" | "terms" | "assets">(
+    "none"
+  );
   const { items, loading, warning, error, reload } = useLazyChildren<AdGroup>(
     open ? `/api/campaigns/${campaign.id}/ad-groups` : null
   );
@@ -1385,80 +1951,105 @@ function CampaignNode({
     ).catch((e) => setActionError((e as Error).message));
 
   return (
-    <li>
-      <div className="node" onClick={() => setOpen(!open)}>
-        {open ? "▾" : "▸"} {campaign.name}
-        <span className={`badge ${campaign.status?.toLowerCase()}`}>
-          {campaign.status}
-        </span>
-        {budget && <span className="muted">{budget}</span>}
+    <li role="none">
+      <TreeRow
+        id={campaign.id}
+        parentId={account.id}
+        level={2}
+        canExpand
+        name={campaign.name}
+        entityType="campaign"
+        typeTag="CMP"
+      >
+        <span className="tree-name">{campaign.name}</span>
+        {campaign.status && (
+          <Badge tone={toneForStatus(campaign.status)}>{campaign.status}</Badge>
+        )}
+        {budget && <span className="tree-spend">{budget}</span>}
         {canManage && (
-          <span className="row-actions" onClick={(e) => e.stopPropagation()}>
-            <button
-              className="link"
+          <span className="tree-actions" onClick={(e) => e.stopPropagation()}>
+            <Button
+              variant="link"
               onClick={() => stageAction(paused ? "resume" : "pause")}
             >
               {paused ? "Resume" : "Pause"}
-            </button>
-            <button
-              className="link"
+            </Button>
+            <Button
+              variant="link"
               onClick={() => setPanel(panel === "edit" ? "none" : "edit")}
             >
               Edit
-            </button>
+            </Button>
             {account.platform === "google" && (
               <>
-                <button
-                  className="link"
+                <Button
+                  variant="link"
                   onClick={() => setPanel(panel === "terms" ? "none" : "terms")}
                 >
                   Search terms
-                </button>
-                <button
-                  className="link"
+                </Button>
+                <Button
+                  variant="link"
                   onClick={() => setPanel(panel === "assets" ? "none" : "assets")}
                 >
                   Asset groups
-                </button>
+                </Button>
               </>
             )}
           </span>
         )}
-      </div>
-      {actionError && <p className="error">{actionError}</p>}
+      </TreeRow>
+      {actionError && <Alert tone="danger">{actionError}</Alert>}
       {panel === "edit" && (
-        <EditForm
-          label="update"
-          initialName={campaign.name}
-          initialBudgetMicros={campaign.daily_budget_micros}
-          onStage={(payload) => {
-            setPanel("none");
-            stageAction("update", payload);
-          }}
-        />
+        <div className="cl-tree-panel">
+          <EditForm
+            label="update"
+            initialName={campaign.name}
+            initialBudgetMicros={campaign.daily_budget_micros}
+            onStage={(payload) => {
+              setPanel("none");
+              stageAction("update", payload);
+            }}
+          />
+        </div>
       )}
       {panel === "terms" && (
-        <SearchTermsPanel campaignId={campaign.id} adAccountId={account.id} />
+        <div className="cl-tree-panel">
+          <SearchTermsPanel campaignId={campaign.id} adAccountId={account.id} />
+        </div>
       )}
       {panel === "assets" && (
-        <AssetGroupsPanel campaignId={campaign.id} adAccountId={account.id} />
+        <div className="cl-tree-panel">
+          <AssetGroupsPanel campaignId={campaign.id} adAccountId={account.id} />
+        </div>
       )}
       {open && (
-        <ul>
-          {loading && <li className="muted">Loading…</li>}
-          {warning && <li className="warning">{warning}</li>}
-          {error && <li className="error">{error}</li>}
+        <ul role="group" className="cl-tree-group">
+          {loading && <TreeSkeletonRows level={3} />}
+          {warning && (
+            <li role="none" className="cl-tree-note cl-tree-note--warn">
+              {warning}
+            </li>
+          )}
+          {error && (
+            <li role="none" className="cl-tree-note cl-tree-note--err">
+              {error}
+            </li>
+          )}
           {items?.map((g) => (
             <AdGroupNode
               key={g.id}
               adGroup={g}
+              campaign={campaign}
               account={account}
               canManage={canManage}
               onChanged={reload}
             />
           ))}
           {items?.length === 0 && (
-            <li className="muted">No ad sets / ad groups</li>
+            <li role="none" className="cl-tree-note">
+              No ad sets / ad groups
+            </li>
           )}
         </ul>
       )}
@@ -1468,17 +2059,20 @@ function CampaignNode({
 
 function AdGroupNode({
   adGroup,
+  campaign,
   account,
   canManage,
   onChanged,
 }: {
   adGroup: AdGroup;
+  campaign: Campaign;
   account: AdAccount;
   canManage: boolean;
   onChanged: () => void;
 }) {
   const { stage } = useManage();
-  const [open, setOpen] = useState(false);
+  const ctx = useContext(TreeCtx)!;
+  const open = ctx.openIds.has(adGroup.id);
   const [showKeywords, setShowKeywords] = useState(false);
   const { items, loading, warning, error, reload } = useLazyChildren<AdRow>(
     open ? `/api/ad-groups/${adGroup.id}/ads` : null
@@ -1498,50 +2092,73 @@ function AdGroupNode({
     ).catch((e) => setActionError((e as Error).message));
 
   return (
-    <li>
-      <div className="node" onClick={() => setOpen(!open)}>
-        {open ? "▾" : "▸"} {adGroup.name}
-        <span className={`badge ${adGroup.status?.toLowerCase()}`}>
-          {adGroup.status}
-        </span>
+    <li role="none">
+      <TreeRow
+        id={adGroup.id}
+        parentId={campaign.id}
+        level={3}
+        canExpand
+        name={adGroup.name}
+        entityType="ad_group"
+        typeTag="ADSET"
+      >
+        <span className="tree-name">{adGroup.name}</span>
+        {adGroup.status && (
+          <Badge tone={toneForStatus(adGroup.status)}>{adGroup.status}</Badge>
+        )}
         {canManage && (
-          <span className="row-actions" onClick={(e) => e.stopPropagation()}>
-            <button
-              className="link"
+          <span className="tree-actions" onClick={(e) => e.stopPropagation()}>
+            <Button
+              variant="link"
               onClick={() => stageAction(paused ? "resume" : "pause")}
             >
               {paused ? "Resume" : "Pause"}
-            </button>
+            </Button>
             {account.platform === "google" && (
-              <button
-                className="link"
+              <Button
+                variant="link"
                 onClick={() => setShowKeywords(!showKeywords)}
               >
                 Keywords
-              </button>
+              </Button>
             )}
           </span>
         )}
-      </div>
-      {actionError && <p className="error">{actionError}</p>}
+      </TreeRow>
+      {actionError && <Alert tone="danger">{actionError}</Alert>}
       {showKeywords && (
-        <KeywordsPanel adGroupId={adGroup.id} adAccountId={account.id} />
+        <div className="cl-tree-panel">
+          <KeywordsPanel adGroupId={adGroup.id} adAccountId={account.id} />
+        </div>
       )}
       {open && (
-        <ul>
-          {loading && <li className="muted">Loading…</li>}
-          {warning && <li className="warning">{warning}</li>}
-          {error && <li className="error">{error}</li>}
+        <ul role="group" className="cl-tree-group">
+          {loading && <TreeSkeletonRows level={4} />}
+          {warning && (
+            <li role="none" className="cl-tree-note cl-tree-note--warn">
+              {warning}
+            </li>
+          )}
+          {error && (
+            <li role="none" className="cl-tree-note cl-tree-note--err">
+              {error}
+            </li>
+          )}
           {items?.map((ad) => (
             <AdLeaf
               key={ad.id}
               ad={ad}
+              adGroup={adGroup}
               account={account}
               canManage={canManage}
               onChanged={reload}
             />
           ))}
-          {items?.length === 0 && <li className="muted">No ads</li>}
+          {items?.length === 0 && (
+            <li role="none" className="cl-tree-note">
+              No ads
+            </li>
+          )}
         </ul>
       )}
     </li>
@@ -1550,11 +2167,13 @@ function AdGroupNode({
 
 function AdLeaf({
   ad,
+  adGroup,
   account,
   canManage,
   onChanged,
 }: {
   ad: AdRow;
+  adGroup: AdGroup;
   account: AdAccount;
   canManage: boolean;
   onChanged: () => void;
@@ -1563,30 +2182,40 @@ function AdLeaf({
   const [actionError, setActionError] = useState<string | null>(null);
   const paused = ad.status?.toUpperCase() === "PAUSED";
   return (
-    <li>
-      {ad.name}{" "}
-      <span className={`badge ${ad.status?.toLowerCase()}`}>{ad.status}</span>
-      {canManage && (
-        <span className="row-actions">
-          <button
-            className="link"
-            onClick={() =>
-              stage(
-                {
-                  ad_account_id: account.id,
-                  entity_type: "ad",
-                  action: paused ? "resume" : "pause",
-                  entity_id: ad.id,
-                },
-                onChanged
-              ).catch((e) => setActionError((e as Error).message))
-            }
-          >
-            {paused ? "Resume" : "Pause"}
-          </button>
-        </span>
-      )}
-      {actionError && <p className="error">{actionError}</p>}
+    <li role="none">
+      <TreeRow
+        id={ad.id}
+        parentId={adGroup.id}
+        level={4}
+        canExpand={false}
+        name={ad.name}
+        entityType="ad"
+        typeTag="AD"
+      >
+        <span className="tree-name">{ad.name}</span>
+        {ad.status && <Badge tone={toneForStatus(ad.status)}>{ad.status}</Badge>}
+        {canManage && (
+          <span className="tree-actions" onClick={(e) => e.stopPropagation()}>
+            <Button
+              variant="link"
+              onClick={() =>
+                stage(
+                  {
+                    ad_account_id: account.id,
+                    entity_type: "ad",
+                    action: paused ? "resume" : "pause",
+                    entity_id: ad.id,
+                  },
+                  onChanged
+                ).catch((e) => setActionError((e as Error).message))
+              }
+            >
+              {paused ? "Resume" : "Pause"}
+            </Button>
+          </span>
+        )}
+      </TreeRow>
+      {actionError && <Alert tone="danger">{actionError}</Alert>}
     </li>
   );
 }

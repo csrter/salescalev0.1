@@ -1,1 +1,642 @@
-/* shell.css — app shell: .app grid, .sidebar*, .topbar*, .crumb*, .content, arrange chrome (spec §5). Owner: Commit 2 (shell/auth agent). */
+/* ==========================================================================
+   shell.css — app grid, sidebar, topbar, breadcrumb, content well
+   (DESIGN.md §5). Tokens only: no literal colors/sizes/durations/z-index.
+   Glass appears ONLY on the stuck topbar (floating layer) — the sidebar is
+   a solid brand field.
+   ========================================================================== */
+
+/* ---- app frame ---------------------------------------------------------- */
+
+.app {
+  display: flex;
+  min-height: 100vh;
+}
+
+.main {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.content {
+  padding: var(--space-8);
+  width: 100%;
+  min-width: 0;
+}
+
+@media (max-width: 1100px) {
+  .content {
+    padding: var(--space-5);
+  }
+}
+
+/* ---- sidebar (§5.1) — dark brand field, NEVER glass --------------------- */
+
+.sidebar {
+  position: sticky;
+  top: 0;
+  z-index: var(--z-shell);
+  flex: none;
+  width: var(--sidebar-w);
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: 0 var(--space-3) var(--space-4);
+  background: var(--sidebar-bg);
+  color: var(--sidebar-ink);
+  border-right: 1px solid var(--field-border);
+  transition: width var(--dur-med) var(--ease-out);
+  overflow: hidden;
+}
+
+/* Focus on the dark rail uses the field ring. */
+.sidebar :focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring-field);
+}
+
+/* Brand block: 60px, aligns with the topbar. */
+.side-top {
+  flex: none;
+  height: var(--topbar-h);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  padding: 0 var(--space-2);
+  font-size: var(--text-lg);
+  font-weight: var(--weight-bold);
+  letter-spacing: var(--tracking-tight);
+  color: var(--ink); /* light surfaces (MFA gate etc.) */
+}
+
+.sidebar .brand,
+.auth-aside .brand {
+  color: var(--ink-on-field);
+}
+
+.brand-mark {
+  flex: none;
+  color: currentColor;
+}
+
+.brand-name {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.brand-name-accent {
+  color: var(--brand-blue);
+}
+
+.brand-logo {
+  display: block;
+  width: auto;
+  max-height: 28px;
+  max-width: 140px;
+  object-fit: contain;
+}
+
+/* Small ghost icon buttons on the rail (collapse, theme toggle). */
+.side-icon-btn {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--sidebar-ink-faint);
+  cursor: pointer;
+  transition:
+    background-color var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out);
+}
+
+.side-icon-btn:hover {
+  background: var(--field-hover);
+  color: var(--ink-on-field);
+  border: none;
+}
+
+.side-collapse svg {
+  transition: transform var(--dur-fast) var(--ease-out);
+}
+
+.side-collapsed .side-collapse svg {
+  transform: rotate(180deg);
+}
+
+/* Search ghost — the palette entry (real button styled as an input). */
+.side-search {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  height: 32px;
+  padding: 0 var(--space-2);
+  border: 1px solid var(--field-border);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--sidebar-ink-faint);
+  font-family: var(--font-sans);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-normal);
+  text-align: left;
+  cursor: pointer;
+  transition:
+    background-color var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out);
+}
+
+.side-search:hover {
+  background: var(--field-hover);
+  color: var(--sidebar-ink);
+  border-color: var(--field-border);
+}
+
+.side-search span {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.side-search .kbd {
+  flex: none;
+}
+
+/* Nav — hosts THE sliding pill (one absolutely-positioned element). */
+.side-nav {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding-bottom: var(--space-2);
+}
+
+.nav-pill {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--accent) 28%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+  pointer-events: none;
+  transition:
+    transform var(--dur-med) var(--ease-spring),
+    height var(--dur-med) var(--ease-spring);
+  will-change: transform;
+}
+
+.side-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.side-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-2) var(--space-1);
+  border: none;
+  background: transparent;
+  color: var(--sidebar-ink-faint);
+  font-family: var(--font-sans);
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-caps);
+  text-align: left;
+  cursor: pointer;
+  border-radius: var(--radius-xs);
+}
+
+.side-section-head:hover {
+  color: var(--sidebar-ink);
+  background: transparent;
+  border: none;
+}
+
+.section-chevron {
+  display: inline-flex;
+  transition: transform var(--dur-fast) var(--ease-out);
+}
+
+.section-chevron.open {
+  transform: rotate(90deg);
+}
+
+.nav-item {
+  position: relative; /* paints above the pill */
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  width: 100%;
+  height: 36px;
+  flex: none;
+  padding: 0 var(--space-3);
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--sidebar-ink);
+  font-family: var(--font-sans);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  text-align: left;
+  cursor: pointer;
+  transition:
+    background-color var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out);
+}
+
+.nav-item svg {
+  flex: none;
+  opacity: 0.85;
+}
+
+.nav-item:hover {
+  background: var(--field-hover);
+  color: var(--ink-on-field);
+  border: none;
+}
+
+.nav-item span {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Active item: ink flips; the pill (behind) provides the fill. */
+.nav-item[aria-current="page"] {
+  color: var(--ink-on-field);
+  background: transparent;
+}
+
+.nav-item[aria-current="page"] svg {
+  opacity: 1;
+}
+
+/* Footer: user chip + theme toggle + logout. */
+.side-foot {
+  flex: none;
+  border-top: 1px solid var(--field-border);
+  padding-top: var(--space-2);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.user-chip {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-2);
+  min-width: 0;
+}
+
+.avatar {
+  flex: none;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-full);
+  display: grid;
+  place-items: center;
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-bold);
+  background: var(--accent-strong);
+  color: var(--ink-on-accent);
+}
+
+.user-meta {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+}
+
+.user-meta strong {
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+  color: var(--ink-on-field);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.user-meta span {
+  font-size: var(--text-2xs);
+  color: var(--sidebar-ink-faint);
+  text-transform: capitalize;
+}
+
+.logout {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: var(--space-2);
+  height: 34px;
+  padding: 0 var(--space-3);
+  border: 1px solid var(--field-border);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--sidebar-ink);
+  font-family: var(--font-sans);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  cursor: pointer;
+  transition:
+    background-color var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out);
+}
+
+.logout:hover {
+  background: var(--field-hover);
+  color: var(--ink-on-field);
+  border-color: var(--field-border);
+}
+
+/* Collapsed rail (68px): icons + aria-labels; the pill persists. */
+.side-collapsed .sidebar {
+  width: var(--sidebar-w-collapsed);
+  padding-inline: var(--space-2);
+}
+
+.side-collapsed .brand-name,
+.side-collapsed .brand-logo,
+.side-collapsed .side-search span,
+.side-collapsed .side-search .kbd,
+.side-collapsed .side-section-head span,
+.side-collapsed .section-chevron,
+.side-collapsed .nav-item span,
+.side-collapsed .user-meta,
+.side-collapsed .logout span {
+  display: none;
+}
+
+.side-collapsed .side-top {
+  flex-direction: column;
+  height: auto;
+  padding: var(--space-3) 0 0;
+  gap: var(--space-2);
+  align-items: center;
+}
+
+.side-collapsed .brand {
+  padding: 0;
+}
+
+.side-collapsed .side-search,
+.side-collapsed .nav-item,
+.side-collapsed .logout {
+  justify-content: center;
+  padding-inline: 0;
+}
+
+.side-collapsed .side-section-head {
+  justify-content: center;
+  padding-inline: 0;
+}
+
+.side-collapsed .side-section-head::after {
+  content: "";
+  display: block;
+  width: var(--space-4);
+  border-top: 1px solid var(--field-border);
+}
+
+.side-collapsed .user-chip {
+  flex-direction: column;
+  gap: var(--space-1);
+  padding-inline: 0;
+}
+
+/* ---- topbar (§5.2) — transparent at top, glass once stuck --------------- */
+
+.topbar-sentinel {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 1px;
+  height: 1px;
+  pointer-events: none;
+}
+
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: var(--z-topbar);
+  height: var(--topbar-h);
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  padding: 0 var(--space-8);
+  background: transparent;
+  border-bottom: 1px solid transparent;
+  transition:
+    background-color var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out),
+    box-shadow var(--dur-fast) var(--ease-out);
+}
+
+.topbar--stuck {
+  background: var(--glass-bg-heavy);
+  -webkit-backdrop-filter: blur(var(--glass-blur));
+  backdrop-filter: blur(var(--glass-blur));
+  border-bottom-color: var(--glass-border);
+  box-shadow: var(--shadow-xs);
+}
+
+@media (max-width: 1100px) {
+  .topbar {
+    padding-inline: var(--space-5);
+  }
+}
+
+/* Breadcrumb — real nav>ol; ancestors are buttons that set view state. */
+.crumb {
+  min-width: 0;
+}
+
+.crumb ol {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  flex-wrap: wrap;
+}
+
+.crumb li {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+  font-size: var(--text-xs);
+  color: var(--ink-soft);
+}
+
+.crumb-sep {
+  color: var(--ink-faint);
+}
+
+.crumb button {
+  appearance: none;
+  border: none;
+  background: transparent;
+  padding: var(--space-1);
+  margin: 0;
+  border-radius: var(--radius-xs);
+  font-family: var(--font-sans);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-normal);
+  color: var(--ink-soft);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: color var(--dur-fast) var(--ease-out);
+}
+
+.crumb button:hover {
+  color: var(--ink);
+  background: transparent;
+  border: none;
+  text-decoration: underline;
+}
+
+.crumb-here {
+  color: var(--ink);
+  font-weight: var(--weight-semibold);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  padding: var(--space-1);
+}
+
+/* Right cluster: live status tick + density toggle. */
+.topbar-tools {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex: none;
+}
+
+.save-tick {
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  color: var(--ink-faint);
+  white-space: nowrap;
+}
+
+.save-tick:empty {
+  display: none;
+}
+
+/* ---- email-verify banner (Alert composition) ---------------------------- */
+
+.verify-banner {
+  margin-bottom: var(--space-4);
+}
+
+.verify-banner > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  width: 100%;
+}
+
+/* ---- legacy element-selector neutralizer (chrome scope only; the legacy
+        layer's `button:active { transform }` fights the pill) -------------- */
+
+.sidebar button:active,
+.topbar button:active {
+  transform: none;
+}
+
+/* ---- small screens: stacked fallback (rail becomes a wrapping icon row) -- */
+
+@media (max-width: 760px) {
+  .app {
+    flex-direction: column;
+  }
+
+  .sidebar {
+    position: static;
+    width: 100%;
+    height: auto;
+    flex-direction: row;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+    padding: var(--space-2) var(--space-3);
+    border-right: none;
+    border-bottom: 1px solid var(--field-border);
+  }
+
+  .side-top {
+    height: auto;
+  }
+
+  .side-nav {
+    flex-direction: row;
+    flex-wrap: wrap;
+    overflow: visible;
+  }
+
+  .side-section {
+    flex-direction: row;
+    align-items: center;
+  }
+
+  .side-section-head,
+  .nav-pill,
+  .nav-item span,
+  .user-meta {
+    display: none;
+  }
+
+  .nav-item {
+    width: auto;
+  }
+
+  .nav-item[aria-current="page"] {
+    background: color-mix(in srgb, var(--accent) 28%, transparent);
+  }
+
+  .side-foot {
+    border-top: none;
+    padding-top: 0;
+    margin-left: auto;
+    flex-direction: row;
+    align-items: center;
+  }
+
+  .logout span {
+    display: none;
+  }
+}

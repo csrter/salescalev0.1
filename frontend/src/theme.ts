@@ -57,6 +57,63 @@ export function useTheme(): { pref: ThemePref; setPref: (p: ThemePref) => void }
   return { pref, setPref: setThemePref };
 }
 
+// --- row density (topbar toggle; DESIGN.md §5.2) ---
+// Stamped as data-density on <html>; theme.css maps it onto --row-h.
+// Client-role sessions never get the attribute: App calls applyDensity(false)
+// for them, which clears it regardless of the stored preference.
+
+export type DensityPref = "comfortable" | "dense";
+
+const DENSITY_KEY = "density";
+
+let densityListeners: Array<() => void> = [];
+let densityAllowed = false;
+
+function readDensity(): DensityPref {
+  return localStorage.getItem(DENSITY_KEY) === "dense" ? "dense" : "comfortable";
+}
+
+function stampDensity(): void {
+  const root = document.documentElement;
+  if (densityAllowed && readDensity() === "dense") root.dataset.density = "dense";
+  else delete root.dataset.density;
+}
+
+export function getDensityPref(): DensityPref {
+  return readDensity();
+}
+
+export function setDensityPref(pref: DensityPref): void {
+  if (pref === "dense") localStorage.setItem(DENSITY_KEY, "dense");
+  else localStorage.removeItem(DENSITY_KEY);
+  stampDensity();
+  densityListeners.forEach((l) => l());
+}
+
+/** Gate density by session role: true for team sessions, false for
+ * client-role sessions and logged-out screens (clears the attribute). */
+export function applyDensity(allowed: boolean): void {
+  densityAllowed = allowed;
+  stampDensity();
+}
+
+/** The user's density preference + setter, for the topbar Segmented. */
+export function useDensity(): {
+  pref: DensityPref;
+  setPref: (p: DensityPref) => void;
+} {
+  const pref = useSyncExternalStore(
+    (cb) => {
+      densityListeners.push(cb);
+      return () => {
+        densityListeners = densityListeners.filter((l) => l !== cb);
+      };
+    },
+    readDensity
+  );
+  return { pref, setPref: setDensityPref };
+}
+
 // --- tenant branding ---
 
 export interface PublicBranding {

@@ -1,1 +1,321 @@
-/* clients.css — .cl-* client grid + client detail + account tree host (spec §3.3, §7). Owner: clients view agent. */
+/* ==========================================================================
+   clients.css — .cl-* client grid + client detail + account-tree host
+   (DESIGN.md §7 "Clients grid + Client detail + tree", §4.14). Layout and
+   composition only — primitives (.card, .badge, .chip, .tree-row, .btn)
+   live in components/ui.css. Tokens only.
+   ========================================================================== */
+
+/* ---- page head ----------------------------------------------------------- */
+
+.cl-page-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--space-4);
+  margin: 0 0 var(--space-6);
+}
+
+.cl-page-head h2 {
+  margin: 0;
+  font-size: var(--text-2xl);
+  font-weight: var(--weight-bold);
+  color: var(--ink);
+}
+
+.cl-page-sub {
+  margin: var(--space-1) 0 0;
+  color: var(--ink-soft);
+  font-size: var(--text-sm);
+}
+
+/* ---- clients grid --------------------------------------------------------- */
+
+.cl-grid {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: var(--space-4);
+}
+
+/* Card is a real <button> composed with .card .card--interactive. */
+.cl-card {
+  appearance: none;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  width: 100%;
+  padding: var(--space-4) var(--space-5);
+  font-family: var(--font-sans);
+  text-align: left;
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.cl-card:active {
+  transform: none;
+}
+
+/* Accent-derived initials disc (white-label safe — no hardcoded violet). */
+.cl-avatar {
+  flex: none;
+  width: 44px;
+  height: 44px;
+  border-radius: var(--radius-md);
+  display: grid;
+  place-items: center;
+  font-size: var(--text-md);
+  font-weight: var(--weight-bold);
+  color: var(--ink-on-accent);
+  background: linear-gradient(135deg, var(--accent), var(--accent-strong));
+}
+
+.cl-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-1);
+}
+
+.cl-name {
+  font-size: var(--text-base);
+  font-weight: var(--weight-semibold);
+  max-width: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cl-go {
+  flex: none;
+  color: var(--ink-faint);
+  transition: color var(--dur-fast) var(--ease-out);
+}
+
+.cl-card:hover .cl-go {
+  color: var(--accent-ink);
+}
+
+/* Skeleton twin for the grid while clients load. */
+.cl-card--skel {
+  cursor: default;
+}
+
+.cl-card--skel .skel {
+  display: block;
+}
+
+/* ---- client detail: hero masthead (§4.2 .card--hero) ---------------------- */
+
+.cl-detail > * + * {
+  margin-top: var(--space-5);
+}
+
+.cl-hero-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  margin-bottom: var(--space-4);
+}
+
+.cl-hero-main {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.cl-hero-name {
+  margin: 0;
+  font-size: var(--text-2xl);
+  font-weight: var(--weight-bold);
+  letter-spacing: var(--tracking-tight);
+  color: var(--ink);
+}
+
+.cl-hero-chips {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  margin-top: var(--space-3);
+}
+
+.cl-hero-none {
+  font-size: var(--text-xs);
+  color: var(--ink-faint);
+}
+
+.cl-toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+/* Detail sections are solid cards; kill the legacy section margin rhythm. */
+.cl-section {
+  margin: 0;
+}
+
+/* ---- platform connections -------------------------------------------------- */
+
+.cl-connections {
+  display: flex;
+  flex-direction: column;
+}
+
+.cl-connection {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-height: var(--row-h);
+  padding: var(--space-1) 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.cl-connection:last-child {
+  border-bottom: none;
+}
+
+.cl-connection .chip {
+  min-width: 0;
+}
+
+.cl-conn-err {
+  font-size: var(--text-xs);
+  color: var(--danger);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cl-connection .btn {
+  margin-left: auto;
+}
+
+/* ---- account tree host (§4.14; row primitives in ui.css) ------------------- */
+
+.cl-tree,
+.cl-tree ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.cl-tree .tree-name {
+  font-weight: var(--weight-medium);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cl-tree .tree-ext {
+  font-size: var(--text-xs);
+  color: var(--ink-faint);
+  white-space: nowrap;
+}
+
+.tree-chevron--leaf {
+  width: 16px;
+  flex: none;
+}
+
+.tree-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-left: var(--space-2);
+}
+
+.tree-actions .btn--link {
+  font-size: var(--text-xs);
+}
+
+/* Spend column stays glued right even when actions follow it. */
+.cl-tree .tree-spend {
+  flex: none;
+}
+
+.cl-tree-note {
+  display: flex;
+  align-items: center;
+  min-height: 28px;
+  padding-inline: var(--space-2);
+  font-size: var(--text-xs);
+  color: var(--ink-faint);
+}
+
+.cl-tree-note--warn {
+  color: var(--warn);
+}
+
+.cl-tree-note--err {
+  color: var(--danger);
+}
+
+.cl-tree-actions {
+  padding: var(--space-1) var(--space-2);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-2);
+}
+
+.cl-tree-actions-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.cl-tree-panel {
+  margin: var(--space-1) 0 var(--space-3) var(--space-6);
+  padding-left: var(--space-3);
+  border-left: 2px solid var(--accent-soft);
+}
+
+/* ---- inline stage forms (labeled Fields; §4.6) ----------------------------- */
+
+.cl-inline-form {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  padding: var(--space-2) 0;
+}
+
+.cl-inline-form .field {
+  flex: 1 1 160px;
+  max-width: 260px;
+}
+
+.cl-inline-form .btn {
+  margin-bottom: var(--space-4); /* aligns with inputs above the error slot */
+}
+
+.cl-inline-hint {
+  font-size: var(--text-xs);
+  color: var(--ink-faint);
+  margin-bottom: var(--space-4);
+}
+
+/* ---- add-client dialog form -------------------------------------------------- */
+
+.cl-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.cl-dialog-sub {
+  margin: 0 0 var(--space-4);
+  color: var(--ink-soft);
+  font-size: var(--text-sm);
+}

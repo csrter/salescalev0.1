@@ -1,1 +1,237 @@
-/* auth.css — .auth-* login/verify/reset/MFA screens + aurora field (spec §5.4). Owner: Commit 2 (shell/auth agent). */
+/* ==========================================================================
+   auth.css — login / signup / forgot / MFA challenge / verify / reset /
+   OAuth splash (DESIGN.md §5.4). The flagship expressive surface: aurora
+   aside on the left, SOLID --card panel on the right (forms need max
+   legibility — never glass). Tokens only.
+
+   NOTE: .auth-center / .auth-card are also emitted by account.tsx
+   (VerifyEmail / ResetPassword), which this stage does not own — these
+   rules restyle that markup purely via CSS.
+   ========================================================================== */
+
+/* ---- split layout -------------------------------------------------------- */
+
+.auth-shell {
+  min-height: 100vh;
+  display: grid;
+  grid-template-columns: minmax(420px, 48%) 1fr;
+}
+
+/* ---- aurora aside (tenant-branded automatically via --aurora-field) ------ */
+
+.auth-aside {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: var(--space-5);
+  padding: clamp(var(--space-8), 6vw, var(--space-16));
+  color: var(--ink-on-field);
+  background: var(--aurora-field);
+  overflow: hidden;
+}
+
+/* Optional drift — decorative garnish only; the static field is the design.
+   Double-gated: media query + the token itself zeroes under reduced motion. */
+@media (prefers-reduced-motion: no-preference) {
+  .auth-aside {
+    background-size: 160% 160%;
+    animation: auth-aurora-drift var(--dur-ambient) ease-in-out infinite
+      alternate;
+  }
+}
+
+@keyframes auth-aurora-drift {
+  from {
+    background-position: 0% 0%;
+  }
+  to {
+    background-position: 100% 100%;
+  }
+}
+
+.auth-brand {
+  padding: 0;
+  color: var(--ink-on-field);
+}
+
+.auth-headline {
+  margin: var(--space-2) 0 0;
+  font-size: var(--text-3xl);
+  line-height: var(--leading-tight);
+  letter-spacing: var(--tracking-tight);
+  font-weight: var(--weight-bold);
+  color: var(--ink-on-field);
+  max-width: 18ch;
+}
+
+.auth-tag {
+  margin: 0;
+  color: var(--ink-on-field-soft);
+  font-size: var(--text-base);
+  line-height: var(--leading-normal);
+  max-width: 44ch;
+}
+
+.auth-points {
+  list-style: none;
+  padding: 0;
+  margin: var(--space-2) 0 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.auth-points li {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 0;
+  color: var(--ink-on-field-soft);
+  font-size: var(--text-sm);
+}
+
+/* Kill the legacy layer's ::before disc / ::after "✓" — the check glyph is
+   real markup now. */
+.auth-points li::before,
+.auth-points li::after {
+  content: none;
+}
+
+.auth-points li svg {
+  flex: none;
+  color: var(--ink-on-field);
+}
+
+/* ---- right panel: SOLID card -------------------------------------------- */
+
+.auth-panel-wrap {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-8) var(--space-4);
+}
+
+.auth-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  align-self: center;
+  justify-self: center;
+  width: min(380px, 100%);
+  padding: var(--space-10);
+  background: var(--card);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+  color: var(--ink);
+}
+
+.auth-card h1 {
+  margin: 0;
+  font-size: var(--text-2xl);
+  font-weight: var(--weight-bold);
+  letter-spacing: var(--tracking-tight);
+  color: var(--ink);
+}
+
+.auth-sub {
+  margin: 0 0 var(--space-2);
+  color: var(--ink-soft);
+  font-size: var(--text-sm);
+}
+
+/* 40px inputs in auth (§4.6 sanctioned exception to the 36px default). */
+.auth-card .field input:not([type="checkbox"]):not([type="radio"]) {
+  min-height: 40px;
+}
+
+.auth-toggle {
+  align-self: center;
+  margin-top: var(--space-1);
+}
+
+.oauth-divider {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  color: var(--ink-faint);
+  font-size: var(--text-xs);
+  margin: var(--space-1) 0;
+}
+
+.oauth-divider::before,
+.oauth-divider::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+}
+
+/* ---- single-purpose centered screens (verify / reset / OAuth splash) ----- */
+
+.auth-center {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: var(--space-6);
+  background: var(--aurora-wash), var(--bg);
+}
+
+.auth-center .auth-card {
+  width: min(400px, 100%);
+}
+
+/* account.tsx's reset form uses legacy `.field` label markup; keep its
+   inputs at the auth height too. */
+.auth-center .auth-card input {
+  min-height: 40px;
+}
+
+/* ---- MFA gate (org 2FA policy wall) -------------------------------------- */
+
+.mfa-gate {
+  min-height: 100vh;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: var(--space-12) var(--space-6);
+  background: var(--aurora-wash), var(--bg);
+}
+
+.mfa-gate-inner {
+  width: 100%;
+  max-width: 720px;
+}
+
+.mfa-gate-inner > h1 {
+  margin: var(--space-5) 0 var(--space-1);
+  font-size: var(--text-2xl);
+  color: var(--ink);
+}
+
+.gate-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  margin-top: var(--space-6);
+}
+
+/* ---- narrow screens: the aside disappears, panel fills ------------------- */
+
+@media (max-width: 960px) {
+  .auth-shell {
+    grid-template-columns: 1fr;
+  }
+
+  .auth-aside {
+    display: none;
+  }
+
+  .auth-panel-wrap {
+    min-height: 100vh;
+    background: var(--aurora-wash), var(--bg);
+  }
+}
