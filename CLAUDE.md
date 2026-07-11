@@ -1,291 +1,201 @@
-# Project: Salescale — Multi-Tenant Ads + CRM SaaS Platform
+# CLAUDE.md — Salescale
 
-_(Working name: this project used "Atlas Reach Ads Platform + Salescale
-CRM" and "Salescale" for the CRM module in earlier planning. Since this is
-now launching as a SaaS any agency can sign up for, this file uses
-**Salescale** as the product name for the whole platform going forward —
-confirm or rename before this goes further; every reference below assumes
-this name.)_
+Persistent project context, auto-loaded by Claude Code. Everything in
+this file is fixed context and standing guardrails for every session.
+Where this file and the actual codebase disagree on implementation
+details, the codebase is the source of truth — read it before assuming.
 
-Claude Code auto-loads this file at the start of every session in this repo.
-Keep it accurate as the build progresses — update it at the end of each
-phase rather than letting it go stale.
+## WHAT SALESCALE IS
 
-## WHAT THIS IS
+Salescale is a multi-tenant B2B SaaS platform for marketing agencies:
+ads management with real write access across platforms, a native CRM,
+server-side conversion tracking, outreach tooling, and white-label
+client portals — one product, per-agency branded. Tagline:
+"Revolutionizing the way you run ads." Brand: navy/cobalt, glassmorphic,
+typography-first (Stripe/Linear/Ramp reference class).
 
-Salescale is a multi-tenant SaaS platform that any marketing agency can
-sign up for to manage paid ad campaigns across multiple platforms — Meta,
-Google, Snapchat, Reddit, LinkedIn, Microsoft Advertising, and Nextdoor —
-for their own clients, plus a built-in CRM, from one place. It replaces
-manual work split across each ad platform's own separate manager UI and a
-separate CRM.
+Atlas Reach (a performance marketing agency serving home-service
+contractors, expanding multi-vertical) is tenant #1 and dogfoods
+everything. Nothing in the product may special-case Atlas Reach: if a
+feature only makes sense "the way Atlas Reach does it," it must become
+an Organization-level setting (custom pipeline stages, configurable
+guarantee tracker, custom qualified-lead criteria), never a hardcoded
+assumption.
 
-This is not built around any one vertical. Atlas Reach (a B2B marketing
-agency serving HVAC and home-services clients) is the first customer —
-"tenant #1" — and its own usage should stay realistic and unspecial-cased,
-but nothing in the core product should assume HVAC, home services, or
-Atlas Reach's specific workflows. Anything specific to how Atlas Reach
-runs its business (its guarantee terms, its qualified-lead definition, its
-pipeline stages) is data an organization configures, not something coded
-into the product.
+## CURRENT STATE — READ THIS FIRST
 
-## SCOPE
+The platform is BUILT through Phase 11. This is no longer a greenfield
+spec; it is a working product approaching release. Every session
+operates on an existing codebase with an existing design system.
+Practical consequences:
 
-This is a genuine multi-tenant SaaS product: any marketing agency can sign
-up, creating their own **Organization**. Organization-to-organization
-isolation is a hard requirement — Atlas Reach must never be able to see or
-reach another organization's data, and vice versa, with no exceptions for
-being tenant #1. Self-serve signup, subscription billing, and org-level
-account management are all in scope (see Phase 8).
+- Do not scaffold, re-architect, or "improve" existing subsystems while
+  executing a phase file. Extend the patterns that exist.
+- The UI has been through a full glassmorphic navy/cobalt modernization
+  pass with tenant-theme-awareness via CSS variables. New surfaces must
+  use the existing design tokens/components — no hardcoded colors, no
+  parallel component sets.
+- A security audit pass has been completed. Do not casually touch
+  auth, token storage, webhook verification, or RLS policies outside a
+  task that explicitly targets them.
+- Stripe billing (Phase 8) is built but NOT live. All tier gating
+  currently flows through entitlement-check stubs
+  (`checkEntitlement(org, <limit>)`) returning default limits. New
+  features must gate through the same stubs — never hardcode limits —
+  so the live flip is a single change.
 
-Three tiers of access exist:
-- **Organization** — the tenant. Atlas Reach is one Organization; any
-  other agency that signs up is another. Each Organization has its own
-  clients, ad accounts, Salescale data, team members, and billing
-  subscription, fully isolated from every other Organization.
-- **Organization team member** (roles: Owner, Admin, Member — refine
-  exact permission differences in Phase 1) — access scoped to their own
-  Organization only: its clients, ad accounts, Salescale data, and write
-  actions (subject to the confirmation guardrails below). An Organization
-  Owner manages billing and team membership; other roles may be more
-  limited — define this in Phase 1 rather than giving every team member
-  identical permissions by default.
-- **Client** — a contact of an Organization's (e.g. Paganelli HVAC is a
-  client of Atlas Reach). Scoped to read-only access to their own account
-  only within their Organization: their ad performance, metrics, and
-  Salescale pipeline. No access to any other client's data, no access to
-  Organization-internal fields (see Phase 6), and no write access to ad
-  accounts or budgets.
+## SCOPE & ROLES
 
-Nothing in the product should special-case Atlas Reach. If a feature only
-makes sense "the way Atlas Reach does it," that's a sign it needs to be an
-Organization-level setting (e.g. custom pipeline stages, a configurable
-performance-guarantee tracker, custom qualified-lead criteria) rather than
-a hardcoded assumption.
+The root tenant entity is the **Organization** (an agency). Every
+domain table carries `organization_id`, enforced at the data-access
+layer — never UI-only — with Postgres Row-Level Security as an
+additional enforcement layer. Cross-tenant access is the single worst
+class of bug this product can have; treat any new table without
+org-scoping + RLS as a blocking defect.
 
-## PRODUCT GOAL
+Roles:
+- **Organization team** — Owner, Admin, Member. Scoped to their own
+  Organization: its clients, ad accounts, CRM data, and write actions
+  (subject to the write guardrails below). Owner manages billing and
+  membership. The full permission matrix is formalized in Phase 13.
+- **Client** — a contact of an Organization (e.g. Paganelli HVAC for
+  Atlas Reach). Read-only portal scoped to their own account: their ad
+  performance, metrics, and pipeline. No other client's data, no
+  Organization-internal fields, no write access to ad accounts or
+  budgets. Client-facing surfaces render the Organization's white-label
+  branding (Phase 9), never Salescale's, when configured.
 
-1. Connect and manage multiple clients' ad accounts across every supported
-   platform (Meta, Google, Snapchat, Reddit, LinkedIn, Microsoft
-   Advertising, Nextdoor) from one login.
-2. View, create, and edit campaigns and their platform-specific
-   sub-structures (Meta ad sets, Google ad groups, LinkedIn campaign
-   groups, etc.) across all connected accounts, through one interface.
-3. Advanced, agency-specific metrics no single platform surfaces natively —
-   blended cross-platform CAC/ROAS, funnel-tier performance, creative
-   fatigue scores, lead-quality-adjusted CPL, cross-client benchmarking.
-4. Customizable dashboard layout per user or per client.
-5. Server-side conversion tracking to every connected platform's own
-   conversion API equivalent (see `PLATFORMS.md`), with deduplication
-   against client-side events on each.
-6. UTM tracking as the platform-agnostic source of truth alongside each
-   platform's own attribution — capturing UTM parameters at landing time,
-   enforcing consistent naming conventions across clients and campaigns,
-   and reconciling what each connected platform claims credit for against
-   what the UTM data actually shows.
-7. A native CRM, called **Salescale CRM**, as part of the same platform:
-   leads generated from Meta Instant Forms, Google Lead Form ads, or
-   landing-page submissions flow directly into the CRM as contacts/leads,
-   arriving with their attribution data (UTM + click ID) already
-   attached — no manual re-entry, no separate system to reconcile against.
-   The CRM owns a configurable qualified-lead workflow — each Organization
-   defines its own qualified-lead criteria and any performance-guarantee
-   terms it offers its clients (Atlas Reach's is the 14-Day Trial Sprint;
-   another Organization's will differ or may not exist at all) — feeding
-   that status directly into the lead-quality-adjusted CPL metric and an
-   Organization-configurable guarantee tracker, rather than either being
-   hardcoded to one Organization's terms.
-8. Self-serve Organization signup, team invites, and flat-tier
-   subscription billing (Starter/Pro/Agency — see Phase 8), so a new
-   agency can sign up, pick a plan, and start connecting ad accounts
-   without Salescale's own team doing anything manually.
-9. White-labeling (Phase 9): custom domain, logo/color branding, and
-   branded transactional email per Organization, so an agency's own
-   clients see that agency's brand — not Salescale's — anywhere they
-   interact with the platform.
-10. An AI insights layer (Phase 9), built on the Claude API: natural
-    language explanations of metrics and auto-generated report summaries,
-    grounded in each Organization's own real computed data — never
-    free-generated numbers, and never able to cross tenant boundaries.
-11. Client-relationship intelligence (Phase 10): call tracking attributed
-    back to the original campaign/UTM, a transparent composite account
-    health score per client, a client-facing creative approval workflow,
-    satisfaction/NPS tracking, and GDPR/CCPA data export and deletion —
-    giving Organizations a fuller picture of each client relationship, not
-    just isolated campaign metrics.
+## STANDING GUARDRAILS (apply in every session)
 
-## ARCHITECTURE (proposed defaults — confirm/adjust in Phase 1, then treat as fixed)
+1. **Tenant isolation** — org-scoping + RLS on every table, verified,
+   as above.
+2. **Write-action confirmation** — no code path may take an ad live,
+   change a budget, or spend money without an explicit confirmation
+   step enforced server-side. A pending-approval creative (Phase 10)
+   must be unpublishable through any path, including direct API calls.
+3. **Secrets server-side only** — platform tokens encrypted at rest,
+   refresh handling in place, revoked access surfaced to the user
+   rather than failing silently. No secrets in client bundles, ever.
+4. **Adapter pattern for ad platforms** — one common interface;
+   Meta and Google are the reference implementations. New platforms are
+   adapters (Phase 7). Platform-specific logic must not leak into
+   shared code.
+5. **Entitlements through the stub** — see Current State. Also expose
+   self-service usage visibility ("X of Y used") for any metered thing.
+6. **No scraping of Instagram, Facebook, or any Meta surface, ever, in
+   any form or feature flag.** Salescale's Instagram Outreach module
+   depends on Meta App Review approval; scraping endangers that
+   approval and every existing Meta integration. Lead data comes from
+   licensed APIs (Google Places), the target business's own public
+   website, or a provider the Organization connects with its own key.
+7. **AI insights ground in real computed data** for the Organization
+   asking — never free-generated numbers, never across tenant
+   boundaries.
+8. **Audit logging** — membership, write actions, and CRM changes log
+   actor/target/org/timestamp in the established per-action audit
+   pattern. This is the SOC 2 groundwork; keep it consistent.
+9. **Compliance posture** — GDPR/CCPA export/deletion (Phase 10) must
+   cascade to every table a contact touches; verify by query, not
+   assumption. No cold-outreach feature may bypass consent and opt-out
+   requirements.
 
-- Backend: Node.js/TypeScript, or Python/FastAPI if SDK support at build
-  time favors it. Whichever is chosen, don't switch mid-project.
-- Frontend: React with a genuinely rearrangeable/resizable widget system —
-  not a fixed grid pretending to be customizable.
-- Database: Postgres, multi-tenant schema — **Organization** is the root
-  tenant entity; every other table (clients, ad accounts, campaigns,
-  Salescale contacts/deals, etc.) hangs off an `organization_id` and must
-  be scoped by it in every query. This is the single most important
-  architectural rule in this file — an unscoped query is a cross-tenant
-  data leak, not a bug to fix later.
-- Auth: individual user logins (Organization team members and Clients)
-  are separate from per-client platform connections (one OAuth/API
-  credential set per platform per client, scoped under that client's
-  Organization). A "client" can have any combination of connected
-  platforms — none of them is the required/primary one.
-- Billing: Stripe for subscription billing, flat tiers (Starter/Pro/Agency
-  — exact feature/limit breakdown defined in Phase 8). Each Organization
-  has one subscription. Tier limits (number of clients, ad platform
-  connections, team seats, etc.) are enforced server-side, not just hidden
-  in the UI — the same principle as the Client-role scoping below.
-- **Platform adapter pattern.** With seven platforms in scope, do not
-  hardcode platform-specific logic into shared code paths. Define one
-  adapter interface every platform implements: connect (OAuth/API auth),
-  list/create/edit/pause campaigns, fetch insights, send a server-side
-  conversion event. Meta and Google are the first two reference
-  implementations (built in Phases 1/2/3/5); Snapchat, Reddit, LinkedIn,
-  Microsoft Advertising, and Nextdoor are additional adapters built in
-  Phase 7 against the same interface. The dashboard, metrics layer, and
-  reporting should consume the adapter interface generically — adding a
-  platform should never require touching Phase 3/4's code, only adding a
-  new adapter and registering it.
-- Target platforms and per-platform specifics (OAuth requirements,
-  conversion API equivalents, approval processes, fit notes): see
-  `PLATFORMS.md`. Note that `PLATFORMS.md`'s fit commentary is written
-  from Atlas Reach's specific vertical (HVAC/home services) — that's
-  context for Atlas Reach's own usage, not a constraint on which platforms
-  other Organizations can use. Every Organization can connect any
-  supported platform regardless of vertical.
-- Background jobs: a scheduler/queue polling every connected platform's
-  API on an interval. Each platform has independent rate limits and fails
-  differently — the job architecture needs per-platform isolation so one
-  platform's outage or rate-limit hit doesn't stall polling for the
-  others.
-- Attribution data model: a landing-event/session table capturing UTM
-  parameters (source, medium, campaign, content, term) plus each
-  platform's click ID (`fbclid`/`fbc`, `gclid`) at the same capture point,
-  tied to the eventual lead record. This is the platform-agnostic layer
-  that lets you reconcile what Meta/Google each self-report against what
-  actually drove the lead — treat it as core data model, not a bolt-on.
-- Salescale CRM data model: contacts, companies, deals/opportunities, a
-  pipeline with stages customizable per client (any Organization's clients
-  may run a different sales process — this isn't HVAC-specific, every
-  Organization's client base will vary), activity log (calls, notes,
-  emails), tasks/follow-up reminders, and tags. This lives in the same
-  multi-tenant Postgres schema as everything else, scoped by
-  `organization_id` like everything else.
-- External CRM sync (optional, per client): some clients' nurture
-  automation currently lives in an external CRM (e.g., GHL SMS sequences).
-  Salescale should be the source of truth for reporting and the
-  qualified-lead workflow, with optional two-way sync so existing external
-  automation keeps working during a transition rather than requiring a
-  hard cutover. Don't assume every client needs this — build it as an
-  optional per-client connection, not a required dependency.
+## PRODUCT CAPABILITIES (built, Phases 1–11)
 
-## STANDING GUARDRAILS (apply to every phase, not just the phase where they're introduced)
+1. Multi-tenant foundation: Organization tenancy, roles, Meta + Google
+   OAuth, encrypted token storage, account/campaign browser.
+2. Core ad management: real write access (create/edit/pause campaigns,
+   ad sets, ads) on Meta and Google behind the confirmation guardrail.
+3. Advanced metrics: computed metrics layer plus UTM-vs-platform
+   attribution reconciliation.
+4. Customizable UI: per-user dashboard/view preferences.
+5. Server-side conversion tracking: Meta CAPI + Google Enhanced
+   Conversions.
+6. Salescale CRM: leads from Meta Instant Forms, Google lead forms, and
+   landing pages flow in with attribution (UTM + click ID) attached;
+   pipeline with Organization-configurable stages and qualified-lead
+   criteria.
+7. Additional platform adapters (Snapchat, Reddit, LinkedIn, Microsoft
+   Advertising, Nextdoor) — adapter code per build order; live status
+   depends on each platform's developer-access approvals (external).
+8. Stripe billing + self-serve onboarding, flat tiers
+   (Starter/Pro/Agency) — built, awaiting live activation.
+9. White-labeling (custom domain, branding, zero-vendor-branding audit,
+   branded transactional email) + AI insights on the Claude API.
+10. Client trust: call tracking attributed to campaign/UTM, composite
+    account health score, client creative-approval workflow, NPS,
+    GDPR/CCPA export and deletion.
+11. Full SaaS design-system pass (delivered via the security-audit +
+    UI-modernization effort; treat as complete).
 
-- Never commit or hardcode app secrets, access tokens, developer tokens,
-  or client API keys for any platform in source. Environment variables /
-  secrets manager only.
-- Any action that changes live ad spend, pauses/resumes a campaign, or
-  modifies budgets requires explicit UI confirmation before executing.
-  No silent writes to a live ad account, ever, on any platform.
-- Tenant isolation is a hard requirement at **both** levels: one
-  Organization's data must never be reachable from another Organization's
-  context, and within an Organization, one client's credentials or data
-  must never be reachable from another client's context. Every database
-  query touching tenant-scoped tables must filter by `organization_id` —
-  treat a missing scope filter as a security bug, not a style issue.
-- Every platform's API and conversion-tracking spec changes over time.
-  Check current API version and endpoint behavior against that platform's
-  live developer documentation before implementing anything
-  platform-specific — do not rely on training-data memory for exact
-  request shapes, hashing/normalization rules, or permission tiers, for
-  any platform.
-- Build and test each phase/adapter against Atlas Reach's own Organization
-  (as tenant #1, using real or test ad accounts) before wiring in any
-  other Organization or client account.
-- At the end of each phase: update this file's "Current Status" section
-  below, commit with a clear message, and stop for review before starting
-  the next phase file.
+Related module, specced separately (not a numbered phase): the
+**Outreach** module — fully automated Instagram outreach on the
+official Meta Graph API (trigger engine, sequence engine,
+messaging-window awareness, unified inbox, CRM sync) plus a LinkedIn
+assisted-send queue (full LinkedIn automation is out of scope — ToS).
+Build proceeds against dev-mode API; go-live gates on Meta App Review.
 
-## CURRENT STATUS
+## REMAINING WORK
 
-_(Update after each phase — this section is the source of truth for what's
-actually built vs. what's still planned.)_
+12. Lead Finder & email verification (Phase 12): Google Places business
+    search by vertical + geography, website/BYO-provider enrichment,
+    verification pipeline with `verification_status` on contacts, and
+    account email verification at signup. Guardrail 6 applies with
+    force.
+13. Teams & seats (Phase 13): invite flow, Owner/Admin/Member/Client
+    permission matrix enforced at the data-access layer, tier-gated
+    seats, membership audit events.
+14. Custom CRM fields (Phase 14): per-Organization typed field
+    definitions, JSONB values with GIN indexing, filtering/sorting,
+    CSV import mapping, API exposure, per-field client visibility.
 
-- [ ] Phase 1 — Foundation (now includes Organization tenancy)
-- [ ] Phase 2 — Core management features
-- [ ] Phase 3 — Advanced metrics layer
-- [ ] Phase 4 — Customizable UI
-- [ ] Phase 5 — Server-side conversion tracking (CAPI + Google)
-- [ ] Phase 6 — Salescale CRM
-- [~] Phase 7 — Additional platform adapters (Microsoft, LinkedIn,
-      Snapchat, Reddit, TikTok, Pinterest, Nextdoor)
-      - [x] 7a — Adapter interface generalized before adding platforms
-        (the phase's own prerequisite): canonical registry in
-        `backend/app/platforms.py` is the single source of truth; insights,
-        change-execution, and conversion seams are all registry-driven (no
-        `if platform ==` branching; fixed the Google `else` misroute);
-        attribution + click-ID capture are generic (LandingEvent.click_ids
-        JSON map); `GET /api/platforms` + the frontend render the catalog
-        dynamically. All 7 platforms registered as STUBs ("coming soon");
-        backend 157→165 tests green (run with `TZ=UTC`).
-      - [ ] 7b — Per-platform adapter internals (OAuth connect, campaign
-        CRUD, insights, conversion sender) built + doc-verified, one commit
-        each. Gated on the operator's per-platform developer accounts /
-        API-access approvals for live validation.
-- [ ] Phase 8 — Billing & self-serve onboarding (Stripe, subscription
-      tiers, Organization signup)
-- [ ] Phase 9 — White-labeling & AI insights
-- [ ] Phase 10 — Call tracking, account health & client trust
+## STATUS
 
-### Feature module: Outreach (Instagram DM automation) — [~] scaffolded
-Built on the compliant Meta Graph / Instagram Messaging API (extends the
-existing leadgen-webhook trust model; no browser automation/scraping).
-- Backend: `app/models/outreach.py` (+ Alembic `e522d55c44a7`),
-  `services/instagram_api.py` (Graph calls — RE-VERIFY each request shape
-  against live docs when `instagram_manage_messages` App Review access
-  lands, same gating as Phase 7b), `services/outreach_send.py` (single send
-  gateway: 24h-window/cap/audit enforcement; automated sends never use a
-  message tag, queue until the window reopens), `services/outreach_rules.py`
-  (inbound trigger engine), `services/outreach_sequences.py` (step engine +
-  A/B promotion + `run_due` scheduler tick), `services/outreach_ingest.py`
-  (webhook processing), `api/outreach.py` + `api/outreach_webhooks.py`.
-  Scheduler is the asyncio loop in `main.py` (`OUTREACH_SCHEDULER_ENABLED`,
-  off in tests). CRM stage change exits sequences (hook in `api/crm.py`).
-  18 tests in `tests/test_outreach.py`; full suite 202 green (TZ=UTC).
-- Frontend: `frontend/src/outreach.tsx` (`OutreachView`: Inbox/Rules/
-  Sequences/Prospects/Analytics/Accounts), wired into `App.tsx` Workspace
-  nav (team-only; member = Rep/inbox-only). NOT yet typechecked/built —
-  this box lacks Node; run `npm run build` in `frontend/` to verify.
-- Compliance reality baked in: the IG API cannot cold-DM a user who hasn't
-  engaged, so prospect/target lists are WATCH lists that auto-enroll on
-  first inbound engagement — not cold-send lists. Roles: Owner/Admin =
-  Manager, Member = Rep, Client = no access.
-- Desktop: ships via the existing Electron + PyInstaller DMG flow (repo uses
-  Electron, not Tauri as the module brief assumed — reused rather than
-  parallel-built). No shell changes needed.
-- TODO before production: run frontend build; per-endpoint Graph shape
-  re-verification at App-Review time; webhook-subscription retry UI; Ad
-  Library prospecting source (service stub present, no UI).
+- [x] Phase 1 — Foundation
+- [x] Phase 2 — Core management features
+- [x] Phase 3 — Advanced metrics layer
+- [x] Phase 4 — Customizable UI
+- [x] Phase 5 — Server-side conversion tracking (CAPI + Google)
+- [x] Phase 6 — Salescale CRM
+- [x] Phase 7 — Additional platform adapters (code; platform approvals
+      pending externally)
+- [x] Phase 8 — Billing & onboarding (built — NOT live; stubs active)
+- [x] Phase 9 — White-labeling & AI insights
+- [x] Phase 10 — Call tracking, account health & client trust
+- [x] Phase 11 — Design system pass
+- [x] Phase 13 — Team members, invites & seats: email invites with
+      hashed single-use tokens, multi-org memberships + org switcher,
+      seat metering (pending invites reserve seats; accept re-checks),
+      last-Owner protection + explicit ownership transfer, member
+      removal with immediate session kill + open-task reassignment,
+      membership audit log. Notes: membership truth lives in
+      organization_memberships; User.organization_id/role is the
+      ACTIVE-org mirror (services/team.py owns that invariant — keep
+      every membership change going through it). Invite-signup marks
+      email_verified (token possession proves the inbox). Isolation on
+      the new tables is the app-layer TenantScope pattern like every
+      other table; Postgres RLS stays globally deferred (HANDOFF.md).
+- [ ] Phase 14 — Custom CRM fields
+- [ ] Phase 12 — Lead Finder & email verification
+- [ ] Stripe live activation + entitlement flip (after 12–14, so real
+      limits land everywhere in one pass)
+- [ ] Outreach module build (dev-mode) — go-live gated on Meta App
+      Review (external clock)
+- [ ] Release gate: RLS audit on all new tables, live-card billing test
+      end-to-end, one full Atlas Reach dogfood week
+      (scrape → verify → outreach → CRM → campaign)
 
 ## PHASE FILES
 
-Run these one at a time, in order, as separate Claude Code sessions or
-prompts: `PHASE_1_FOUNDATION.md`, `PHASE_2_CORE_MANAGEMENT.md`,
-`PHASE_3_ADVANCED_METRICS.md`, `PHASE_4_CUSTOMIZABLE_UI.md`,
-`PHASE_5_CONVERSION_TRACKING.md`, `PHASE_6_SALESCALE_CRM.md`,
-`PHASE_7_ADDITIONAL_PLATFORMS.md`, `PHASE_8_BILLING_ONBOARDING.md`,
-`PHASE_9_WHITELABEL_AI_INSIGHTS.md`, `PHASE_10_HEALTH_TRUST.md`. Each is
-self-contained but assumes this file's architecture and guardrails as
-fixed context. See also `PLATFORMS.md` for per-platform reference details
-used across Phases 1, 2, 3, 5, and 7.
+Remaining phase files, run one at a time as separate Claude Code
+sessions, in this order: `PHASE_13_TEAMS_SEATS.md`,
+`PHASE_14_CUSTOM_CRM_FIELDS.md`,
+`PHASE_12_LEAD_FINDER_VERIFICATION.md`. Each is self-contained but
+assumes this file's architecture and guardrails as fixed context. All
+three hard-depend only on Phase 6 plus the entitlement stubs.
+Completed phase files (1–11) and `PLATFORMS.md` remain in the repo as
+reference for the patterns they established.
 
-Note: Phase 9 and Phase 10 are both built to be droppable right after
-Phase 6 — neither hard-depends on Phase 7 or Phase 8. Run them in whatever
-order suits you; each phase file states its real dependencies at the top.
+## BEFORE FINISHING ANY SESSION
 
-Note: Phase 8 (billing/signup) is sequenced last here to match the
-existing phase numbering, but its core requirement — the Organization
-tenant entity — is actually built in **Phase 1**, not Phase 8. Phase 8
-only adds the signup flow, Stripe integration, and tier enforcement on top
-of a tenancy model that needs to exist from the start.
+Update this file's STATUS section to reflect what was completed, note
+anything left half-done explicitly rather than silently, and commit.

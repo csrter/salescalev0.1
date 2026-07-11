@@ -24,7 +24,7 @@ from ..db import get_db
 from ..models.core import ROLE_OWNER, Organization, User
 from ..ratelimit import rate_limit
 from ..security import create_access_token, create_action_token, decode_action_token, hash_password
-from ..services import sessions
+from ..services import sessions, team
 
 router = APIRouter(prefix="/api/auth/oauth", tags=["auth"])
 log = logging.getLogger("salescale.social")
@@ -167,6 +167,8 @@ def find_or_create_social_user(
         auth_provider=provider,
     )
     db.add(user)
+    db.flush()
+    team.add_membership(db, org.id, user, ROLE_OWNER)
     db.commit()
     return user
 

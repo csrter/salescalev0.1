@@ -15,8 +15,11 @@
     },
     {
       "name": "frontend",
-      "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "dev", "--prefix", "frontend"],
+      "runtimeExecutable": "sh",
+      "runtimeArgs": [
+        "-c",
+        "export PATH=/private/tmp/claude-501/-Users-carter-Desktop-salescale/29e2a4ea-fefd-4c6b-b4f2-ea2f0cb0bc7c/scratchpad/node-v20.20.2-darwin-arm64/bin:$PATH; exec npm run dev --prefix frontend"
+      ],
       "port": 5173
     },
     {

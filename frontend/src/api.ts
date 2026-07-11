@@ -553,6 +553,114 @@ export const updateMember = (
     body: JSON.stringify(body),
   });
 
+export const removeMember = (id: string, reassignToUserId?: string) =>
+  api<{ ok: boolean }>(`/api/orgs/me/members/${id}`, {
+    method: "DELETE",
+    body: JSON.stringify({ reassign_to_user_id: reassignToUserId ?? null }),
+  });
+
+export const transferOwnership = (memberId: string) =>
+  api<{ ok: boolean }>("/api/orgs/me/transfer-ownership", {
+    method: "POST",
+    body: JSON.stringify({ member_id: memberId }),
+  });
+
+// --- Phase 13: invites, seats, memberships ---
+
+export interface Invite {
+  id: string;
+  email: string;
+  role: "admin" | "member";
+  status: "pending" | "accepted" | "revoked" | "expired";
+  invited_by_user_id: string;
+  expires_at: string;
+  created_at: string;
+}
+
+export interface SeatUsage {
+  used: number;
+  pending_invites: number;
+  limit: number | null; // null = unlimited
+  plan: string;
+}
+
+export interface MembershipAuditEntry {
+  id: string;
+  actor_email: string;
+  actor_name: string;
+  action: string;
+  target_email: string | null;
+  detail: Record<string, unknown> | null;
+  created_at: string;
+}
+
+export const listInvites = () => api<Invite[]>("/api/orgs/me/invites");
+export const sendInvite = (body: { email: string; role: "admin" | "member" }) =>
+  api<Invite>("/api/orgs/me/invites", { method: "POST", body: JSON.stringify(body) });
+export const resendInvite = (id: string) =>
+  api<Invite>(`/api/orgs/me/invites/${id}/resend`, { method: "POST" });
+export const revokeInvite = (id: string) =>
+  api<Invite>(`/api/orgs/me/invites/${id}`, { method: "DELETE" });
+
+export const getSeatUsage = () => api<SeatUsage>("/api/orgs/me/seats");
+export const listMembershipAudit = () =>
+  api<MembershipAuditEntry[]>("/api/orgs/me/membership-audit");
+
+// Invite redemption (pre-auth; the token is the credential).
+export interface InviteLookup {
+  organization_name: string;
+  email: string;
+  role: "admin" | "member";
+  status: "pending" | "accepted" | "revoked" | "expired";
+  account_exists: boolean;
+}
+
+export const lookupInvite = (token: string) =>
+  api<InviteLookup>(`/api/orgs/invites/lookup?token=${encodeURIComponent(token)}`);
+
+/** Existing, logged-in user joins the inviting org (and switches to it). */
+export async function acceptInvite(token: string): Promise<Session> {
+  const s = await api<Session>("/api/orgs/invites/accept", {
+    method: "POST",
+    body: JSON.stringify({ token }),
+  });
+  setSession(s);
+  return s;
+}
+
+/** New user: the invite doubles as signup (account starts email-verified). */
+export async function acceptInviteSignup(
+  token: string,
+  fullName: string,
+  password: string
+): Promise<Session> {
+  const s = await api<Session>("/api/orgs/invites/accept-signup", {
+    method: "POST",
+    body: JSON.stringify({ token, full_name: fullName, password }),
+  });
+  setSession(s);
+  return s;
+}
+
+// Multi-org membership & the org switcher.
+export interface MyOrg {
+  organization_id: string;
+  organization_name: string;
+  role: Role;
+  is_active_org: boolean;
+}
+
+export const myOrganizations = () => api<MyOrg[]>("/api/orgs/mine");
+
+export async function switchOrganization(organizationId: string): Promise<Session> {
+  const s = await api<Session>("/api/orgs/switch", {
+    method: "POST",
+    body: JSON.stringify({ organization_id: organizationId }),
+  });
+  setSession(s);
+  return s;
+}
+
 // --- Platform super-admin (cross-tenant) ---
 
 export interface AdminStats {

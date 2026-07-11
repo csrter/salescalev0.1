@@ -1,11 +1,19 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import {
   ORG_PLANS,
+  acceptInvite,
+  acceptInviteSignup,
   getSubscription,
+  isMfaChallenge,
+  login,
+  loginMfa,
+  lookupInvite,
   openBillingPortal,
   resetPassword,
   startCheckout,
   verifyEmail,
+  type InviteLookup,
+  type LoginChallenge,
   type OrgPlan,
   type Session,
   type Subscription,
@@ -114,6 +122,232 @@ export function ResetPassword({ token, onDone }: { token: string; onDone: () => 
         {error && <Alert tone="danger">{error}</Alert>}
       </form>
     </div>
+  );
+}
+
+/* ---- pre-auth: team invite (opened from the emailed link) ---- */
+
+export function AcceptInvite({
+  token,
+  session,
+  onJoined,
+  onDone,
+}: {
+  token: string;
+  session: Session | null;
+  onJoined: (s: Session) => void;
+  onDone: () => void;
+}) {
+  const [invite, setInvite] = useState<InviteLookup | null>(null);
+  const [lookupFailed, setLookupFailed] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  // Signup path
+  const [fullName, setFullName] = useState("");
+  // Both paths
+  const [password, setPassword] = useState("");
+  // Login path may hit a 2FA challenge
+  const [challenge, setChallenge] = useState<LoginChallenge | null>(null);
+  const [code, setCode] = useState("");
+
+  useEffect(() => {
+    lookupInvite(token)
+      .then(setInvite)
+      .catch(() => setLookupFailed(true));
+  }, [token]);
+
+  const run = async (fn: () => Promise<void>) => {
+    setBusy(true);
+    setError(null);
+    try {
+      await fn();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const card = (children: ReactNode) => (
+    <div className="auth-center">
+      <div className="auth-card">
+        <Brand />
+        {children}
+      </div>
+    </div>
+  );
+
+  if (lookupFailed)
+    return card(
+      <>
+        <h1>Invalid invite</h1>
+        <p className="auth-sub">
+          This invite link is invalid — ask your organization admin to send a
+          new one.
+        </p>
+        <Button variant="primary" block onClick={onDone}>
+          Back
+        </Button>
+      </>
+    );
+
+  if (!invite) return card(<p className="auth-sub">Checking your invite…</p>);
+
+  if (invite.status !== "pending")
+    return card(
+      <>
+        <h1>
+          {invite.status === "accepted"
+            ? "Invite already used"
+            : invite.status === "expired"
+              ? "Invite expired"
+              : "Invite revoked"}
+        </h1>
+        <p className="auth-sub">
+          {invite.status === "expired"
+            ? "Ask your organization admin to resend it."
+            : "Ask your organization admin for a new invite if you still need access."}
+        </p>
+        <Button variant="primary" block onClick={onDone}>
+          Back
+        </Button>
+      </>
+    );
+
+  const intro = (
+    <>
+      <h1>Join {invite.organization_name}</h1>
+      <p className="auth-sub">
+        You've been invited as {invite.role === "admin" ? "an" : "a"}{" "}
+        <strong>{invite.role}</strong> ({invite.email}).
+      </p>
+    </>
+  );
+
+  // Already logged in: one click. The server enforces that the logged-in
+  // account's email matches the invite.
+  if (session)
+    return card(
+      <>
+        {intro}
+        <Button
+          variant="primary"
+          block
+          busy={busy}
+          onClick={() => run(async () => onJoined(await acceptInvite(token)))}
+        >
+          Accept invite
+        </Button>
+        <Button variant="ghost" block onClick={onDone}>
+          Not now
+        </Button>
+        {error && <Alert tone="danger">{error}</Alert>}
+      </>
+    );
+
+  // Existing account, not logged in: log in as the invited address, then join.
+  if (invite.account_exists) {
+    if (challenge)
+      return card(
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            run(async () => {
+              await loginMfa(challenge.challenge_token, code);
+              onJoined(await acceptInvite(token));
+            });
+          }}
+        >
+          {intro}
+          <Field label="Two-factor code">
+            <input
+              className="input"
+              value={code}
+              onChange={(e) => setCode(e.target.value)}
+              autoFocus
+              required
+            />
+          </Field>
+          <Button type="submit" variant="primary" block busy={busy}>
+            Verify &amp; join
+          </Button>
+          {error && <Alert tone="danger">{error}</Alert>}
+        </form>
+      );
+    return card(
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          run(async () => {
+            const r = await login(invite.email, password);
+            if (isMfaChallenge(r)) {
+              setChallenge(r);
+              return;
+            }
+            onJoined(await acceptInvite(token));
+          });
+        }}
+      >
+        {intro}
+        <p className="auth-sub">Log in to your existing account to accept.</p>
+        <Field label="Password">
+          <input
+            className="input"
+            type="password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            required
+          />
+        </Field>
+        <Button type="submit" variant="primary" block busy={busy}>
+          Log in &amp; join
+        </Button>
+        {error && <Alert tone="danger">{error}</Alert>}
+      </form>
+    );
+  }
+
+  // New user: the invite doubles as signup — the address is already proven
+  // by the token, so no separate verification email round-trip.
+  return card(
+    <form
+      onSubmit={(e) => {
+        e.preventDefault();
+        run(async () =>
+          onJoined(await acceptInviteSignup(token, fullName, password))
+        );
+      }}
+    >
+      {intro}
+      <Field label="Full name">
+        <input
+          className="input"
+          value={fullName}
+          onChange={(e) => setFullName(e.target.value)}
+          required
+        />
+      </Field>
+      <Field label="Password" description="Minimum 8 characters.">
+        <input
+          className="input"
+          type="password"
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          minLength={8}
+          required
+        />
+      </Field>
+      <Button
+        type="submit"
+        variant="primary"
+        block
+        busy={busy}
+        disabled={password.length < 8}
+      >
+        Create account &amp; join
+      </Button>
+      {error && <Alert tone="danger">{error}</Alert>}
+    </form>
   );
 }
 

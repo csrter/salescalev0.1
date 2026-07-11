@@ -58,6 +58,43 @@ def send_verification_email(db: Session, org: Organization, user: User) -> None:
     )
 
 
+def send_invite_email(
+    db: Session,
+    org: Organization,
+    to_address: str,
+    raw_token: str,
+    inviter_name: str,
+    role: str,
+) -> None:
+    """Phase 13 team invite. The raw token rides only in this email (the DB
+    keeps its hash); the link expires with the invite (7 days). Sender
+    branding follows the Organization's configured identity like every other
+    transactional email (services.email.resolve_sender)."""
+    link = f"{get_settings().app_base_url}/?invite={raw_token}"
+    product = branding.merged(org).get("product_name", "Salescale")
+    email_service.send_email(
+        db,
+        org,
+        to_address,
+        f"You've been invited to join {org.name}",
+        f"{inviter_name} invited you to join {org.name} on {product} "
+        f"as {'an' if role == 'admin' else 'a'} {role}.\n\n"
+        f"Accept the invite:\n\n{link}\n\n"
+        "This invite expires in 7 days. If you weren't expecting it, you can "
+        "ignore this email.",
+        html=_html(
+            product,
+            f"Join {org.name}",
+            f"{inviter_name} invited you to join {org.name} on {product} "
+            f"as {'an' if role == 'admin' else 'a'} {role}.",
+            "Accept invite",
+            link,
+            "This invite expires in 7 days. If you weren't expecting it, you "
+            "can ignore this email.",
+        ),
+    )
+
+
 def send_reset_email(db: Session, org: Organization, user: User) -> None:
     # Fingerprint the current password hash into the token so it stops working
     # the moment the password changes — effectively single-use, and it also

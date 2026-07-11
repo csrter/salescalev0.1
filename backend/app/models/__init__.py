@@ -19,6 +19,7 @@ from .dashboard import DashboardLayout
 from .ai import AiUsage
 from .email import EmailLog
 from .integrations import IntegrationCredential
+from .team import MembershipAuditEntry, OrganizationInvite, OrganizationMembership
 from .outreach import (
     InstagramAccount,
     InstagramWebhookEvent,
@@ -42,6 +43,9 @@ __all__ = [
     "OutreachStep",
     "OutreachTriggerRule",
     "IntegrationCredential",
+    "MembershipAuditEntry",
+    "OrganizationInvite",
+    "OrganizationMembership",
     "Organization",
     "User",
     "Client",

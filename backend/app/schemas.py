@@ -166,6 +166,91 @@ class UserOut(BaseModel):
     created_at: dt.datetime
 
 
+# --- Phase 13: invites, memberships, seats ---
+
+
+class InviteCreate(BaseModel):
+    email: EmailStr
+    role: str  # admin | member (ownership moves only via explicit transfer)
+
+
+class InviteOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    email: str
+    role: str
+    status: str
+    invited_by_user_id: str
+    expires_at: dt.datetime
+    created_at: dt.datetime
+
+
+class InviteLookupOut(BaseModel):
+    """Public preview of an invite for the accept page: enough to render the
+    right flow (login vs signup), nothing Organization-internal beyond the
+    name the invitee was already told in the email."""
+
+    organization_name: str
+    email: str
+    role: str
+    status: str  # pending | accepted | revoked | expired
+    account_exists: bool
+
+
+class InviteAcceptRequest(BaseModel):
+    token: str
+
+
+class InviteAcceptSignupRequest(BaseModel):
+    token: str
+    full_name: str = Field(min_length=1, max_length=200)
+    password: Password
+
+
+class MembershipOut(BaseModel):
+    organization_id: str
+    organization_name: str
+    role: str
+    is_active_org: bool
+
+
+class SwitchOrgRequest(BaseModel):
+    organization_id: str
+
+
+class TransferOwnershipRequest(BaseModel):
+    member_id: str
+    # Default: the transferring Owner steps down to Admin. False keeps them a
+    # co-Owner (the last-Owner guard then counts both).
+    demote_self: bool = True
+
+
+class RemoveMemberRequest(BaseModel):
+    # Where the removed member's open work (assigned CRM tasks) goes. None =
+    # the remover. Records are reassigned, never orphaned or deleted.
+    reassign_to_user_id: Optional[str] = None
+
+
+class SeatUsageOut(BaseModel):
+    used: int
+    pending_invites: int
+    limit: Optional[int] = None  # None = unlimited
+    plan: str
+
+
+class MembershipAuditOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    actor_email: str
+    actor_name: str
+    action: str
+    target_email: Optional[str] = None
+    detail: Optional[dict] = None
+    created_at: dt.datetime
+
+
 # --- Platform super-admin (cross-tenant) response models ---
 
 

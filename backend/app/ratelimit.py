@@ -62,3 +62,16 @@ def rate_limit(bucket: str, limit: int, window_seconds: float):
             )
 
     return Depends(dep)
+
+
+def enforce_bucket(key: str, limit: int, window_seconds: float) -> None:
+    """Imperative limiter for keys that aren't the client IP (e.g. per-org
+    invite sends). Same store, same 429, same kill switch — call it inside
+    the endpoint once the tenant key is known."""
+    if not get_settings().rate_limit_enabled:
+        return
+    if not _store.allow(key, limit, window_seconds):
+        raise HTTPException(
+            status.HTTP_429_TOO_MANY_REQUESTS,
+            "Too many requests — please slow down and try again shortly.",
+        )

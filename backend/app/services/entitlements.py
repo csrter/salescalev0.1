@@ -17,7 +17,8 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from ..config import get_settings
-from ..models.core import TEAM_ROLES, Client, Organization, User
+from ..models.core import Client, Organization
+from ..models.team import INVITE_PENDING, OrganizationInvite, OrganizationMembership
 
 # Subscription tier limits, enforced server-side (not just hidden in the UI).
 # `None` means unlimited. Kept generous on Starter deliberately; tune against
@@ -48,21 +49,54 @@ def enforce_can_add_client(db: Session, org: Organization) -> None:
         )
 
 
+def seat_usage(db: Session, org: Organization) -> dict:
+    """Self-service usage visibility: seats occupied by team memberships plus
+    pending invites (an invite reserves a seat so accepts can't oversubscribe).
+    Client-role logins don't count as seats. limit=None means unlimited."""
+    used = db.execute(
+        select(func.count())
+        .select_from(OrganizationMembership)
+        .where(OrganizationMembership.organization_id == org.id)
+    ).scalar_one()
+    pending = db.execute(
+        select(func.count())
+        .select_from(OrganizationInvite)
+        .where(
+            OrganizationInvite.organization_id == org.id,
+            OrganizationInvite.status == INVITE_PENDING,
+        )
+    ).scalar_one()
+    return {"used": used, "pending_invites": pending, "limit": _limits(org)["seats"]}
+
+
 def enforce_can_add_seat(db: Session, org: Organization) -> None:
-    """402 when the org is at its plan's team-seat limit (client-role logins
-    don't count as seats)."""
-    cap = _limits(org)["seats"]
+    """402 when the org is at its plan's team-seat limit. Gates inviting AND
+    directly adding a member; pending invites count against the cap so an
+    org can't oversubscribe by sending invites it has no seats for."""
+    usage = seat_usage(db, org)
+    cap = usage["limit"]
     if cap is None:
         return
-    count = db.execute(
-        select(func.count())
-        .select_from(User)
-        .where(User.organization_id == org.id, User.role.in_(TEAM_ROLES))
-    ).scalar_one()
-    if count >= cap:
+    if usage["used"] + usage["pending_invites"] >= cap:
         raise HTTPException(
             status.HTTP_402_PAYMENT_REQUIRED,
             f"Your {org.plan} plan allows {cap} team seats. Upgrade to add more.",
+        )
+
+
+def enforce_can_accept_seat(db: Session, org: Organization) -> None:
+    """Accept-time seat gate (seats can fill between send and accept, e.g. a
+    plan downgrade). Only occupied seats count here — the accepting invite
+    frees its own pending reservation as it converts to a membership."""
+    usage = seat_usage(db, org)
+    cap = usage["limit"]
+    if cap is None:
+        return
+    if usage["used"] >= cap:
+        raise HTTPException(
+            status.HTTP_402_PAYMENT_REQUIRED,
+            "This organization has no seats available — contact its admin to "
+            "free a seat or upgrade the plan.",
         )
 
 

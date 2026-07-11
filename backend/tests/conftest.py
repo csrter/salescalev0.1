@@ -54,6 +54,7 @@ from app.models.core import (
     PlatformConnection,
     User,
 )
+from app.models.team import OrganizationMembership
 from app.security import encrypt_secret, hash_password
 
 
@@ -112,6 +113,19 @@ def seeded():
         client_id=client_a.id,
     )
     db.add_all([owner_user, member_user, client_a_user])
+    db.flush()
+    # Membership rows mirror what the Phase 13 migration backfills for real
+    # databases: one per team-role user (client users get none).
+    db.add_all(
+        [
+            OrganizationMembership(
+                organization_id=org.id, user_id=owner_user.id, role=ROLE_OWNER
+            ),
+            OrganizationMembership(
+                organization_id=org.id, user_id=member_user.id, role=ROLE_MEMBER
+            ),
+        ]
+    )
 
     # Encrypted fake tokens so executor-path tests can run with the platform
     # API functions monkeypatched (get_access_token requires a stored token).

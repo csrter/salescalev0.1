@@ -20,10 +20,13 @@ import {
   isMfaChallenge,
   login,
   loginMfa,
+  myOrganizations,
   refreshSession,
   setSession,
   signup,
+  switchOrganization,
   type LoginChallenge,
+  type MyOrg,
   type AdAccount,
   type AdGroup,
   type AdRow,
@@ -45,7 +48,7 @@ import { Dashboard } from "./dashboard";
 import { CrmView } from "./crm";
 import { Logo } from "./logo";
 import { SuperAdmin, TeamAdmin } from "./admin";
-import { Billing, ResetPassword, VerifyEmail } from "./account";
+import { AcceptInvite, Billing, ResetPassword, VerifyEmail } from "./account";
 import { Integrations } from "./integrations";
 import { TwoFactorSettings } from "./security";
 import { BrandingSettings } from "./branding";
@@ -203,16 +206,19 @@ export default function App() {
       ),
     []
   );
-  const [authRoute, setAuthRoute] = useState<{ kind: "verify" | "reset"; token: string } | null>(
-    () => {
-      const p = new URLSearchParams(window.location.search);
-      const verify = p.get("verify");
-      const reset = p.get("reset");
-      if (verify) return { kind: "verify", token: verify };
-      if (reset) return { kind: "reset", token: reset };
-      return null;
-    }
-  );
+  const [authRoute, setAuthRoute] = useState<{
+    kind: "verify" | "reset" | "invite";
+    token: string;
+  } | null>(() => {
+    const p = new URLSearchParams(window.location.search);
+    const verify = p.get("verify");
+    const reset = p.get("reset");
+    const invite = p.get("invite");
+    if (verify) return { kind: "verify", token: verify };
+    if (reset) return { kind: "reset", token: reset };
+    if (invite) return { kind: "invite", token: invite };
+    return null;
+  });
   // Social login returns with the token in the URL fragment (#access_token=…).
   const [oauthBusy, setOauthBusy] = useState(() =>
     window.location.hash.includes("access_token=")
@@ -272,6 +278,24 @@ export default function App() {
     return (
       <ResetPassword
         token={authRoute.token}
+        onDone={() => {
+          clearAuthQuery();
+          setAuthRoute(null);
+        }}
+      />
+    );
+  // Team invite: works logged-out (login/signup inline) and logged-in
+  // (one-click accept, which also switches the active org).
+  if (authRoute?.kind === "invite")
+    return (
+      <AcceptInvite
+        token={authRoute.token}
+        session={session}
+        onJoined={(s) => {
+          setSess(s);
+          clearAuthQuery();
+          setAuthRoute(null);
+        }}
         onDone={() => {
           clearAuthQuery();
           setAuthRoute(null);
@@ -421,7 +445,12 @@ export default function App() {
                 {tab === "outreach" && isTeam && <OutreachView isAdmin={isAdmin} />}
                 {tab === "changes" && <PendingChangesPanel />}
                 {tab === "audit" && <AuditLogView />}
-                {tab === "team" && isAdmin && <TeamAdmin session={session} />}
+                {tab === "team" && isAdmin && (
+                  <TeamAdmin
+                    session={session}
+                    onGoToBilling={() => navigate("billing")}
+                  />
+                )}
                 {tab === "integrations" && isAdmin && <Integrations />}
                 {tab === "billing" && isOwner && <Billing session={session} />}
                 {tab === "branding" && isAdmin && <BrandingSettings />}
@@ -579,6 +608,7 @@ function Sidebar({
         ))}
       </nav>
       <div className="side-foot">
+        <OrgSwitcher session={session} />
         <div className="user-chip">
           <div className="avatar" aria-hidden="true">
             {initials(session.full_name)}
@@ -598,6 +628,54 @@ function Sidebar({
         </button>
       </div>
     </aside>
+  );
+}
+
+/** Multi-org accounts get a workspace picker; single-org accounts just see
+ * their org name. Switching repoints the account's active org server-side,
+ * then reloads — every piece of tenant-scoped state must reset. */
+function OrgSwitcher({ session }: { session: Session }) {
+  const [orgs, setOrgs] = useState<MyOrg[] | null>(null);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    myOrganizations()
+      .then(setOrgs)
+      .catch(() => setOrgs(null));
+  }, []);
+
+  if (!orgs || orgs.length < 2)
+    return (
+      <div className="org-switcher org-switcher--single" title={session.organization_name}>
+        <Building2 size={14} aria-hidden="true" />
+        <span>{session.organization_name}</span>
+      </div>
+    );
+
+  return (
+    <div className="org-switcher">
+      <Building2 size={14} aria-hidden="true" />
+      <select
+        className="select org-switcher-select"
+        aria-label="Switch organization"
+        value={session.organization_id}
+        disabled={busy}
+        onChange={async (e) => {
+          setBusy(true);
+          try {
+            await switchOrganization(e.target.value);
+            window.location.reload();
+          } catch {
+            setBusy(false);
+          }
+        }}
+      >
+        {orgs.map((o) => (
+          <option key={o.organization_id} value={o.organization_id}>
+            {o.organization_name} · {o.role}
+          </option>
+        ))}
+      </select>
+    </div>
   );
 }
 

@@ -316,6 +316,33 @@
   min-width: 0;
 }
 
+/* Workspace picker (multi-org accounts) / org label (single-org). */
+.org-switcher {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 0 var(--space-2);
+  min-width: 0;
+  color: var(--ink-on-field-soft);
+}
+
+.org-switcher--single span {
+  font-size: var(--text-xs);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.org-switcher-select {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--text-xs);
+}
+
+.side-collapsed .org-switcher {
+  display: none;
+}
+
 .avatar {
   flex: none;
   width: 32px;

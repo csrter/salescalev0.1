@@ -6,16 +6,27 @@ import {
   adminOrgs,
   adminSignups,
   adminStats,
+  getSeatUsage,
+  listInvites,
   listMembers,
+  listMembershipAudit,
+  removeMember,
+  resendInvite,
   resetUserPassword,
+  revokeInvite,
+  sendInvite,
+  transferOwnership,
   updateMember,
   updateOrg,
   type AdminOrgDetail,
   type AdminOrgRow,
   type AdminSignupPoint,
   type AdminStats,
+  type Invite,
+  type MembershipAuditEntry,
   type OrgPlan,
   type Role,
+  type SeatUsage,
   type Session,
   type TeamMember,
 } from "./api";
@@ -433,29 +444,60 @@ function OrgDetail({ org, onBack }: { org: AdminOrgRow; onBack: () => void }) {
 
 /* ---------------- Org admin console: team management ---------------- */
 
-export function TeamAdmin({ session }: { session: Session }) {
+const INVITE_TONE: Record<Invite["status"], "info" | "ok" | "neutral" | "warn"> = {
+  pending: "info",
+  accepted: "ok",
+  revoked: "neutral",
+  expired: "warn",
+};
+
+export function TeamAdmin({
+  session,
+  onGoToBilling,
+}: {
+  session: Session;
+  onGoToBilling?: () => void;
+}) {
   const [members, setMembers] = useState<TeamMember[] | null>(null);
+  const [invites, setInvites] = useState<Invite[] | null>(null);
+  const [seats, setSeats] = useState<SeatUsage | null>(null);
+  const [audit, setAudit] = useState<MembershipAuditEntry[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [confirm, setConfirm] = useState<{
+    title: string;
+    rows: ReceiptRow[];
+    confirmLabel: string;
+    run: () => Promise<void>;
+  } | null>(null);
+  const [busy, setBusy] = useState(false);
   const isOwner = session.role === "owner";
 
   const load = () =>
-    listMembers().then(setMembers).catch((e) => setError(e.message));
+    Promise.all([
+      listMembers().then(setMembers),
+      listInvites().then(setInvites),
+      getSeatUsage().then(setSeats),
+      listMembershipAudit().then(setAudit),
+    ]).catch((e) => setError(e.message));
   useEffect(() => {
     load();
   }, []);
 
-  const patch = async (
-    id: string,
-    body: { role?: "admin" | "member"; is_active?: boolean },
-  ) => {
+  const act = async (fn: () => Promise<unknown>) => {
     setError(null);
     try {
-      await updateMember(id, body);
+      await fn();
       await load();
     } catch (e) {
       setError((e as Error).message);
     }
   };
+
+  const patch = (id: string, body: { role?: "admin" | "member"; is_active?: boolean }) =>
+    act(() => updateMember(id, body));
+
+  const atLimit =
+    seats?.limit != null && seats.used + seats.pending_invites >= seats.limit;
 
   const columns: Column<TeamMember>[] = [
     { key: "name", header: "Name", render: (m) => m.full_name, sortValue: (m) => m.full_name },
@@ -471,16 +513,18 @@ export function TeamAdmin({ session }: { session: Session }) {
       ),
     },
   ];
-  if (isOwner) {
-    columns.push({
-      key: "actions",
-      header: "Actions",
-      render: (m) => {
-        // The Owner row can't be edited here (also blocks self-edit).
-        if (m.role === "owner") return <span className="adm-sub">—</span>;
-        return (
-          <div className="adm-actions">
-            {m.role === "member" ? (
+  columns.push({
+    key: "actions",
+    header: "Actions",
+    render: (m) => {
+      // Owner rows change only via explicit ownership transfer; client
+      // portal users are managed from the client surface.
+      if (m.role === "owner" || m.role === "client")
+        return <span className="adm-sub">—</span>;
+      return (
+        <div className="adm-actions">
+          {isOwner &&
+            (m.role === "member" ? (
               <Button size="sm" onClick={() => patch(m.id, { role: "admin" })}>
                 Make admin
               </Button>
@@ -488,25 +532,114 @@ export function TeamAdmin({ session }: { session: Session }) {
               <Button size="sm" onClick={() => patch(m.id, { role: "member" })}>
                 Make member
               </Button>
-            )}
-            {m.is_active ? (
-              <Button
-                size="sm"
-                variant="danger-outline"
-                onClick={() => patch(m.id, { is_active: false })}
-              >
+            ))}
+          {isOwner &&
+            (m.is_active ? (
+              <Button size="sm" onClick={() => patch(m.id, { is_active: false })}>
                 Deactivate
               </Button>
             ) : (
               <Button size="sm" onClick={() => patch(m.id, { is_active: true })}>
                 Reactivate
               </Button>
-            )}
-          </div>
-        );
-      },
-    });
-  }
+            ))}
+          {isOwner && m.is_active && (
+            <Button
+              size="sm"
+              onClick={() =>
+                setConfirm({
+                  title: `Transfer ownership to ${m.full_name}?`,
+                  confirmLabel: "Transfer ownership",
+                  rows: [
+                    {
+                      field: "Owner",
+                      oldValue: session.full_name,
+                      newValue: `${m.full_name} (${m.email})`,
+                    },
+                    { field: "Your role", oldValue: "owner", newValue: "admin" },
+                  ],
+                  run: () => transferOwnership(m.id).then(() => {}),
+                })
+              }
+            >
+              Make owner
+            </Button>
+          )}
+          {(isOwner || m.role === "member") && (
+            <Button
+              size="sm"
+              variant="danger-outline"
+              onClick={() =>
+                setConfirm({
+                  title: `Remove ${m.full_name} from the team?`,
+                  confirmLabel: "Remove member",
+                  rows: [
+                    {
+                      field: "Membership",
+                      oldValue: `${m.full_name} (${m.email})`,
+                      newValue: "removed",
+                    },
+                    {
+                      field: "Their sessions",
+                      oldValue: "active",
+                      newValue: "ended immediately",
+                    },
+                    {
+                      field: "Their open tasks",
+                      oldValue: m.full_name,
+                      newValue: "reassigned to you",
+                    },
+                  ],
+                  run: () => removeMember(m.id).then(() => {}),
+                })
+              }
+            >
+              Remove
+            </Button>
+          )}
+        </div>
+      );
+    },
+  });
+
+  const inviteColumns: Column<Invite>[] = [
+    { key: "email", header: "Email", render: (i) => i.email, sortValue: (i) => i.email },
+    { key: "role", header: "Role", render: (i) => <Badge tone="neutral">{i.role}</Badge> },
+    {
+      key: "status",
+      header: "Status",
+      render: (i) => <Badge tone={INVITE_TONE[i.status]}>{i.status}</Badge>,
+    },
+    {
+      key: "expires",
+      header: "Expires",
+      render: (i) =>
+        i.status === "pending" ? new Date(i.expires_at).toLocaleDateString() : "—",
+      sortValue: (i) => i.expires_at,
+    },
+    {
+      key: "actions",
+      header: "Actions",
+      render: (i) => (
+        <div className="adm-actions">
+          {(i.status === "pending" || i.status === "expired") && (
+            <Button size="sm" onClick={() => act(() => resendInvite(i.id))}>
+              Resend
+            </Button>
+          )}
+          {i.status === "pending" && (
+            <Button
+              size="sm"
+              variant="danger-outline"
+              onClick={() => act(() => revokeInvite(i.id))}
+            >
+              Revoke
+            </Button>
+          )}
+        </div>
+      ),
+    },
+  ];
 
   return (
     <div className="adm-view">
@@ -519,6 +652,35 @@ export function TeamAdmin({ session }: { session: Session }) {
 
       {error && <Alert tone="danger">{error}</Alert>}
 
+      <KpiGrid>
+        {seats ? (
+          <>
+            <Kpi
+              label="Seats used"
+              value={`${seats.used} / ${seats.limit ?? "∞"}`}
+            />
+            <Kpi label="Pending invites" value={String(seats.pending_invites)} />
+          </>
+        ) : (
+          <>
+            <KpiSkeleton />
+            <KpiSkeleton />
+          </>
+        )}
+      </KpiGrid>
+
+      {atLimit && (
+        <Alert tone="info" title={`All ${seats!.limit} seats on the ${seats!.plan} plan are taken`}>
+          Pending invites reserve seats too. Free a seat, or upgrade to invite
+          more people.{" "}
+          {onGoToBilling && (
+            <Button variant="link" onClick={onGoToBilling}>
+              View plans
+            </Button>
+          )}
+        </Alert>
+      )}
+
       <DataTable<TeamMember>
         rows={members ?? []}
         rowKey={(m) => m.id}
@@ -527,8 +689,143 @@ export function TeamAdmin({ session }: { session: Session }) {
         columns={columns}
       />
 
+      <InviteForm session={session} disabled={!!atLimit} onSent={load} />
+
+      {invites != null && invites.length > 0 && (
+        <>
+          <h3 className="adm-section-title">Invites</h3>
+          <DataTable<Invite>
+            rows={invites}
+            rowKey={(i) => i.id}
+            columns={inviteColumns}
+            initialSort="-expires"
+          />
+        </>
+      )}
+
       <AddMemberForm session={session} onAdded={load} />
+
+      {audit != null && audit.length > 0 && (
+        <>
+          <h3 className="adm-section-title">Membership activity</h3>
+          <ul className="adm-audit">
+            {audit.map((a) => (
+              <li key={a.id}>
+                <span className="adm-audit-time">
+                  {new Date(a.created_at).toLocaleString()}
+                </span>{" "}
+                <strong>{a.actor_name}</strong> —{" "}
+                {a.action.replace(/_/g, " ")}
+                {a.target_email ? ` · ${a.target_email}` : ""}
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+
+      <ConfirmDialog
+        open={confirm != null}
+        onCancel={() => setConfirm(null)}
+        onConfirm={async () => {
+          if (!confirm) return;
+          setBusy(true);
+          try {
+            await confirm.run();
+            setConfirm(null);
+            await load();
+          } catch (e) {
+            setError((e as Error).message);
+            setConfirm(null);
+          } finally {
+            setBusy(false);
+          }
+        }}
+        rows={confirm?.rows ?? []}
+        title={confirm?.title ?? ""}
+        tone="warn"
+        confirmLabel={confirm?.confirmLabel}
+        cancelLabel="Cancel"
+        busy={busy}
+      />
     </div>
+  );
+}
+
+/** Primary path: email an invite; the recipient sets their own password. */
+function InviteForm({
+  session,
+  disabled,
+  onSent,
+}: {
+  session: Session;
+  disabled: boolean;
+  onSent: () => void;
+}) {
+  const [email, setEmail] = useState("");
+  const [role, setRole] = useState<"admin" | "member">("member");
+  const [error, setError] = useState<string | null>(null);
+  const [sent, setSent] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const roles: Role[] = session.role === "owner" ? ["member", "admin"] : ["member"];
+
+  return (
+    <form
+      className="card adm-invite"
+      onSubmit={async (e) => {
+        e.preventDefault();
+        setError(null);
+        setSent(null);
+        setBusy(true);
+        try {
+          await sendInvite({ email, role });
+          setSent(email);
+          setEmail("");
+          setRole("member");
+          onSent();
+        } catch (err) {
+          setError((err as Error).message);
+        } finally {
+          setBusy(false);
+        }
+      }}
+    >
+      <h3 className="adm-invite-title">Invite by email</h3>
+      <p className="adm-sub">
+        Sends an invite link — they choose their own password. Invites expire
+        after 7 days and reserve a seat until accepted or revoked.
+      </p>
+      <div className="adm-invite-grid">
+        <Field label="Email">
+          <input
+            className="input"
+            type="email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            required
+          />
+        </Field>
+        <Field label="Role">
+          <select
+            className="select"
+            value={role}
+            onChange={(e) => setRole(e.target.value as "admin" | "member")}
+          >
+            {roles.map((r) => (
+              <option key={r} value={r}>
+                {r}
+              </option>
+            ))}
+          </select>
+        </Field>
+      </div>
+      <div className="adm-invite-foot">
+        <Button type="submit" variant="primary" busy={busy} disabled={disabled}>
+          Send invite
+        </Button>
+        {sent && <Alert tone="ok">Invite sent to {sent}.</Alert>}
+        {error && <Alert tone="danger">{error}</Alert>}
+      </div>
+    </form>
   );
 }
 
@@ -565,9 +862,10 @@ function AddMemberForm({
         }
       }}
     >
-      <h3 className="adm-invite-title">Invite a team member</h3>
+      <h3 className="adm-invite-title">Add member directly</h3>
       <p className="adm-sub">
-        Creates the account with a temporary password you set and share.
+        Alternative to the email invite: creates the account now, with a
+        temporary password you set and share.
       </p>
       <div className="adm-invite-grid">
         <Field label="Full name">
