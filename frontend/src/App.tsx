@@ -54,6 +54,7 @@ import { Integrations } from "./integrations";
 import { TwoFactorSettings } from "./security";
 import { BrandingSettings } from "./branding";
 import { LeadFinderView } from "./leadfinder";
+import { AccountPickerDialog } from "./components/AccountPicker";
 import { OutreachView } from "./outreach";
 import { CommandPalette, type Command } from "./components/CommandPalette";
 import { ToastProvider, useToast } from "./components/Toast";
@@ -1398,6 +1399,11 @@ function ClientDetail({
   const [view, setView] = useState<"dashboard" | "crm">("dashboard");
   const [error, setError] = useState<string | null>(null);
   const [treeSel, setTreeSel] = useState<TreeSel | null>(null);
+  // Which platform's account picker is open (agency logins see many ad
+  // accounts; the picker assigns them to the right client), and a bump key
+  // that remounts the account tree after an attach/move.
+  const [pickerPlatform, setPickerPlatform] = useState<string | null>(null);
+  const [treeKey, setTreeKey] = useState(0);
   // Connecting platforms is Admin/Owner surface — mirrors the API gate.
   const isAdmin = ADMIN_ROLES.includes(session.role);
   const isTeam = TEAM_ROLES.includes(session.role);
@@ -1532,9 +1538,21 @@ function ClientDetail({
                     </span>
                   )}
                   {isAdmin && platform.connectable && (
-                    <Button size="sm" onClick={() => connect(platform.id)}>
-                      {conn ? "Reconnect" : "Connect"}
-                    </Button>
+                    <span className="cl-conn-actions">
+                      {conn?.status === "active" &&
+                        ["meta", "google"].includes(platform.id) && (
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => setPickerPlatform(platform.id)}
+                          >
+                            Manage accounts
+                          </Button>
+                        )}
+                      <Button size="sm" onClick={() => connect(platform.id)}>
+                        {conn ? "Reconnect" : "Connect"}
+                      </Button>
+                    </span>
                   )}
                 </div>
               );
@@ -1548,6 +1566,7 @@ function ClientDetail({
             <h3 className="card-title">Accounts &amp; campaigns</h3>
           </div>
           <AccountTree
+            key={treeKey}
             clientId={client.id}
             platformFilter={platformFilter}
             canManage={isTeam}
@@ -1556,6 +1575,17 @@ function ClientDetail({
             onSelect={setTreeSel}
           />
         </section>
+      )}
+      {pickerPlatform && (
+        <AccountPickerDialog
+          open
+          onClose={() => setPickerPlatform(null)}
+          platform={pickerPlatform}
+          platformLabel={platformName(pickerPlatform)}
+          clientId={client.id}
+          clientName={client.name}
+          onChanged={() => setTreeKey((k) => k + 1)}
+        />
       )}
     </div>
   );

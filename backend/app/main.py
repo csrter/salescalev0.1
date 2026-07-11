@@ -19,6 +19,7 @@ from .api import (
     branding,
     browser,
     clients,
+    connect_accounts,
     connect_google,
     connect_meta,
     conversions,
@@ -132,6 +133,7 @@ app.include_router(integrations.router, dependencies=_MFA)
 app.include_router(clients.router, dependencies=_MFA)
 app.include_router(connect_meta.router, dependencies=_MFA)
 app.include_router(connect_google.router, dependencies=_MFA)
+app.include_router(connect_accounts.router, dependencies=_MFA)
 app.include_router(browser.router, dependencies=_MFA)
 app.include_router(manage.router, dependencies=_MFA)
 app.include_router(conversions.router, dependencies=_MFA)

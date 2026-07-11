@@ -1,13 +1,14 @@
+from typing import Optional
+
 import jwt as pyjwt
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..db import get_db
 from ..deps import require_admin, require_verified_email
-from ..models.core import AdAccount, Client, PLATFORM_META, User
+from ..models.core import Client, PLATFORM_META, User
 from ..security import create_state_token, decode_state_token
-from ..services import connections, integration_creds, meta_api
+from ..services import ad_accounts, connections, integration_creds, meta_api
 from .connect_common import post_connect_response
 
 router = APIRouter(prefix="/api/connect/meta", tags=["connect"])
@@ -39,7 +40,11 @@ def start_meta_oauth(
 
 @router.get("/callback")
 def meta_oauth_callback(
-    code: str, state: str, db: Session = Depends(get_db)
+    state: str,
+    code: Optional[str] = None,
+    error: Optional[str] = None,
+    error_description: Optional[str] = None,
+    db: Session = Depends(get_db),
 ):
     # Unauthenticated by necessity (browser redirect from Meta); the signed
     # state token is the integrity check.
@@ -51,13 +56,35 @@ def meta_oauth_callback(
     if client is None or client.organization_id != organization_id:
         raise HTTPException(400, "OAuth state does not match a known tenant")
 
+    # The user backed out of Meta's dialog (or Meta reported a failure) —
+    # land on a clear page instead of a 422/500.
+    if error or not code:
+        msg = (
+            "You canceled the Meta sign-in."
+            if error == "access_denied"
+            else "Meta reported an error: "
+            + (error_description or error or "no authorization code returned")
+            + "."
+        )
+        return post_connect_response(client_id, "meta", error=msg)
+
     integration_creds.bind(db, organization_id)  # use this org's app for exchange
-    token_data = meta_api.exchange_code_for_token(code)
-    long_lived = meta_api.exchange_for_long_lived_token(token_data["access_token"])
+    try:
+        token_data = meta_api.exchange_code_for_token(code)
+        long_lived = meta_api.exchange_for_long_lived_token(token_data["access_token"])
+    except (meta_api.MetaAuthError, meta_api.MetaApiError) as e:
+        return post_connect_response(
+            client_id, "meta", error=f"Meta rejected the sign-in: {e}"
+        )
     access_token = long_lived["access_token"]
     expires_in = long_lived.get("expires_in")
 
-    me = meta_api.fetch_me(access_token)
+    try:
+        me = meta_api.fetch_me(access_token)
+    except (meta_api.MetaAuthError, meta_api.MetaApiError) as e:
+        return post_connect_response(
+            client_id, "meta", error=f"Meta rejected the new token: {e}"
+        )
     conn = connections.upsert_connection(
         db,
         organization_id=organization_id,
@@ -69,40 +96,27 @@ def meta_oauth_callback(
         external_user_id=me.get("id"),
     )
 
-    # Pull the ad accounts this token can see and attach them to the client.
-    for acct in meta_api.fetch_ad_accounts(access_token):
-        existing = db.execute(
-            select(AdAccount).where(
-                AdAccount.platform == PLATFORM_META,
-                AdAccount.external_id == acct["id"],
-            )
-        ).scalar_one_or_none()
-        if existing is None:
-            db.add(
-                AdAccount(
-                    organization_id=organization_id,
-                    client_id=client_id,
-                    connection_id=conn.id,
-                    platform=PLATFORM_META,
-                    external_id=acct["id"],
-                    name=acct.get("name") or acct["id"],
-                    currency=acct.get("currency"),
-                    timezone=acct.get("timezone_name"),
-                    status=str(acct.get("account_status")),
-                )
-            )
-        elif (
-            existing.client_id != client_id
-            or existing.organization_id != organization_id
-        ):
-            # Same ad account surfacing under a second client (or a second
-            # Organization) is a tenant mixup — refuse rather than silently
-            # reassign. The message names only the account the caller just
-            # authorized, never the other tenant.
-            raise HTTPException(
-                409,
-                f"Meta ad account {acct['id']} is already connected elsewhere",
-            )
+    # Pull the ad accounts this token can see. A Business Manager/agency
+    # login sees every client's account — attach only when unambiguous
+    # (exactly one new account); otherwise the Admin assigns accounts to the
+    # right clients in the account picker instead of everything landing on
+    # this one client profile.
+    try:
+        discovered = ad_accounts.discover(db, conn)
+    except meta_api.MetaAuthError as e:
+        connections.mark_disconnected(db, conn, f"Auth failed after OAuth: {e}")
+        return post_connect_response(
+            client_id, "meta", error=f"Meta auth failed: {e}"
+        )
+    except meta_api.MetaApiError as e:
+        connections.mark_disconnected(db, conn, f"Account listing failed: {e}")
+        return post_connect_response(
+            client_id, "meta", error=f"Meta ad-account listing failed: {e}"
+        )
+
+    outcome = ad_accounts.auto_attach(db, organization_id, client_id, conn, discovered)
     db.commit()
 
-    return post_connect_response(client_id, "meta")
+    return post_connect_response(
+        client_id, "meta", select_accounts=outcome.needs_selection
+    )

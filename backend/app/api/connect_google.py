@@ -1,13 +1,14 @@
+from typing import Optional
+
 import jwt as pyjwt
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..db import get_db
 from ..deps import require_admin, require_verified_email
-from ..models.core import AdAccount, Client, PLATFORM_GOOGLE, User
+from ..models.core import Client, PLATFORM_GOOGLE, User
 from ..security import create_state_token, decode_state_token
-from ..services import connections, google_ads_api, integration_creds
+from ..services import ad_accounts, connections, google_ads_api, integration_creds
 from .connect_common import post_connect_response
 
 router = APIRouter(prefix="/api/connect/google", tags=["connect"])
@@ -36,8 +37,13 @@ def start_google_oauth(
 
 @router.get("/callback")
 def google_oauth_callback(
-    code: str, state: str, db: Session = Depends(get_db)
+    state: str,
+    code: Optional[str] = None,
+    error: Optional[str] = None,
+    db: Session = Depends(get_db),
 ):
+    # Unauthenticated by necessity (browser redirect from Google); the signed
+    # state token is the integrity check.
     try:
         organization_id, client_id = decode_state_token(state, "google_oauth")
     except pyjwt.PyJWTError:
@@ -46,14 +52,32 @@ def google_oauth_callback(
     if client is None or client.organization_id != organization_id:
         raise HTTPException(400, "OAuth state does not match a known tenant")
 
+    # The user backed out of Google's consent screen (or Google reported a
+    # failure) — land on a clear page instead of a 422/500.
+    if error or not code:
+        msg = (
+            "You canceled the Google sign-in."
+            if error == "access_denied"
+            else f"Google reported an error: {error or 'no authorization code returned'}."
+        )
+        return post_connect_response(client_id, "google", error=msg)
+
     integration_creds.bind(db, organization_id)  # use this org's app for exchange + calls
-    tokens = google_ads_api.exchange_code_for_tokens(code)
+    try:
+        tokens = google_ads_api.exchange_code_for_tokens(code)
+    except google_ads_api.GoogleApiError as e:
+        return post_connect_response(
+            client_id, "google", error=f"Google rejected the sign-in: {e}"
+        )
     refresh_token = tokens.get("refresh_token")
     if not refresh_token:
-        raise HTTPException(
-            400,
-            "Google did not return a refresh token — remove the app's access "
-            "at myaccount.google.com/permissions and reconnect",
+        return post_connect_response(
+            client_id,
+            "google",
+            error=(
+                "Google did not return a refresh token — remove the app's access "
+                "at myaccount.google.com/permissions and reconnect"
+            ),
         )
 
     conn = connections.upsert_connection(
@@ -67,72 +91,29 @@ def google_oauth_callback(
         scopes=google_ads_api.GOOGLE_ADS_SCOPE,
     )
 
-    # list_accessible_customers is the real auth check — if the token itself is
-    # bad, fail the whole connection here.
+    # Discovery is the real auth check — if the token itself is bad, fail the
+    # whole connection here. It lists accounts shared directly with this login
+    # plus, for any manager (MCC), the enabled ad accounts under it.
     try:
-        customer_ids = google_ads_api.list_accessible_customers(refresh_token)
+        discovered = ad_accounts.discover(db, conn)
     except google_ads_api.GoogleAuthError as e:
         connections.mark_disconnected(db, conn, f"Auth failed after OAuth: {e}")
-        raise HTTPException(502, f"Google Ads auth failed: {e}")
+        return post_connect_response(
+            client_id, "google", error=f"Google Ads auth failed: {e}"
+        )
+    except google_ads_api.GoogleApiError as e:
+        connections.mark_disconnected(db, conn, f"Account listing failed: {e}")
+        return post_connect_response(
+            client_id, "google", error=f"Google Ads account listing failed: {e}"
+        )
 
-    # An agency login routinely sees accounts it can't actually query: a manager
-    # (MCC) account rather than an ad account, or one that's deactivated / not
-    # yet enabled. Skip those individually — one bad account must not abort the
-    # whole connection, which otherwise leaves every good account unconnected.
-    # Collect the ad accounts to attach: accounts shared directly with this
-    # login, plus — for any manager (MCC) — the enabled ad accounts under it
-    # (the agency model: a whole client roster onboards from one connect). One
-    # inaccessible account never aborts the rest.
-    discovered: list[dict] = []
-    for cid in customer_ids:
-        try:
-            details = google_ads_api.fetch_customer_details(refresh_token, cid)
-        except (google_ads_api.GoogleAuthError, google_ads_api.GoogleApiError):
-            continue  # not-enabled / deactivated / inaccessible — skip
-        if details.get("is_manager"):
-            try:
-                discovered.extend(
-                    google_ads_api.list_manager_child_accounts(refresh_token, cid)
-                )
-            except (google_ads_api.GoogleAuthError, google_ads_api.GoogleApiError):
-                continue  # can't read under this manager — skip it
-        else:
-            discovered.append(details)  # a directly-shared single ad account
-
-    seen: set[str] = set()
-    for details in discovered:
-        ext = details["external_id"]
-        if ext in seen:
-            continue  # reachable both directly and under its manager
-        seen.add(ext)
-        existing = db.execute(
-            select(AdAccount).where(
-                AdAccount.platform == PLATFORM_GOOGLE,
-                AdAccount.external_id == ext,
-            )
-        ).scalar_one_or_none()
-        if existing is None:
-            db.add(
-                AdAccount(
-                    organization_id=organization_id,
-                    client_id=client_id,
-                    connection_id=conn.id,
-                    platform=PLATFORM_GOOGLE,
-                    external_id=ext,
-                    name=details["name"],
-                    currency=details.get("currency"),
-                    timezone=details.get("timezone"),
-                    status=details.get("status"),
-                )
-            )
-        elif (
-            existing.client_id != client_id
-            or existing.organization_id != organization_id
-        ):
-            raise HTTPException(
-                409,
-                f"Google Ads account {ext} is already connected elsewhere",
-            )
+    # Attach only when unambiguous (exactly one new account). An MCC/agency
+    # login that can see a whole client roster attaches nothing here — the
+    # Admin distributes accounts to the right clients in the account picker,
+    # instead of every account landing on this one client profile.
+    outcome = ad_accounts.auto_attach(db, organization_id, client_id, conn, discovered)
     db.commit()
 
-    return post_connect_response(client_id, "google")
+    return post_connect_response(
+        client_id, "google", select_accounts=outcome.needs_selection
+    )

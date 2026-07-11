@@ -196,8 +196,81 @@
   white-space: nowrap;
 }
 
-.cl-connection .btn {
+.cl-connection .btn,
+.cl-conn-actions {
   margin-left: auto;
+}
+
+.cl-conn-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-shrink: 0;
+}
+
+.cl-conn-actions .btn {
+  margin-left: 0;
+}
+
+/* ---- account picker (Manage accounts dialog) ------------------------------- */
+
+.acctpick-sub {
+  margin: 0 0 var(--space-4);
+  font-size: var(--text-sm);
+  color: var(--ink-soft);
+}
+
+.acctpick-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.acctpick-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-height: var(--row-h);
+  padding: var(--space-2) 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.acctpick-row:last-child {
+  border-bottom: none;
+}
+
+/* Keeps names aligned on rows that have no checkbox (already attached /
+   unavailable). Width mirrors a native checkbox. */
+.acctpick-nocheck {
+  display: inline-block;
+  width: 13px;
+  flex-shrink: 0;
+}
+
+.acctpick-main {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+  margin-right: auto;
+}
+
+.acctpick-name {
+  font-weight: var(--weight-medium);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.acctpick-meta {
+  font-size: var(--text-xs);
+  color: var(--ink-faint);
+}
+
+.acctpick-hint {
+  margin: var(--space-3) 0 0;
+  font-size: var(--text-xs);
+  color: var(--ink-faint);
 }
 
 /* ---- account tree host (§4.14; row primitives in ui.css) ------------------- */

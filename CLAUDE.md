@@ -259,6 +259,31 @@ live activation + the entitlement flip, the Outreach module build
       contact counts feed the metrics suite's assertions). Guardrail 6
       holds: licensed Places API, the business's own site, BYO providers —
       zero Meta-surface contact anywhere in the pipeline.
+- [x] Connect-flow hardening (post-12 fix session): the Google MCC /
+      Meta Business Manager connect no longer dumps every visible ad
+      account onto the one client being connected. Discovery is decoupled
+      from attachment (services/ad_accounts.py): the OAuth callback
+      auto-attaches only when exactly ONE new account is visible;
+      otherwise nothing attaches and the Admin assigns accounts in the
+      "Manage accounts" picker on the client's connections card
+      (GET/POST /api/connect/{platform}/accounts — live discovery, never
+      cached; same-org attachments annotated by client, other-org
+      attachments shown unavailable and never named). PATCH
+      /api/ad-accounts/{id} moves an account between clients and cascades
+      the denormalized client_id (cached campaign hierarchy, PENDING
+      changes only — executed ones are history, insight rows via
+      hierarchy external ids, quality snapshots incl. best-effort live
+      asset-group resolution) — the repair path for accounts that landed
+      on the wrong client. Both callbacks now handle user-cancel
+      (?error=..., missing code) and platform API failures with a
+      branded error page instead of a 422/500; same-org already-attached
+      accounts are skipped rather than 409-aborting the whole connect
+      (cross-org still refuses). Attach/reassign write audit_log entries
+      (entity_type=ad_account). Frontend: AccountPicker dialog
+      (components/AccountPicker.tsx) with checkbox attach + "Move here",
+      wired into ClientDetail. Tests: backend/tests/test_connect_flows.py
+      (dedicated Connect Co org — the isolation/metrics suites assert
+      over Atlas Reach's account counts).
 - [ ] Stripe live activation + entitlement flip (after 12–14, so real
       limits land everywhere in one pass)
 - [ ] Outreach module build (dev-mode) — go-live gated on Meta App

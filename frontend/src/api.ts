@@ -388,6 +388,50 @@ export interface AdAccount {
   status?: string | null;
 }
 
+// --- Account picker (agency MCC / Business Manager connects) ---
+// An agency login sees many ad accounts; the callback attaches nothing when
+// the choice is ambiguous, and these endpoints let an Admin assign each
+// account to the right client (or move one that landed on the wrong client).
+
+export interface ConnectableAccount {
+  external_id: string;
+  name: string;
+  currency?: string | null;
+  timezone?: string | null;
+  status?: string | null;
+  /** false when another organization already holds this account. */
+  available: boolean;
+  attached?: {
+    account_id: string;
+    client_id: string;
+    client_name: string;
+  } | null;
+}
+
+export const listConnectableAccounts = (platform: string, clientId: string) =>
+  api<ConnectableAccount[]>(
+    `/api/connect/${platform}/accounts?client_id=${clientId}`
+  );
+
+export const attachAccounts = (
+  platform: string,
+  clientId: string,
+  externalIds: string[]
+) =>
+  api<{ attached: number; skipped: string[] }>(
+    `/api/connect/${platform}/accounts`,
+    {
+      method: "POST",
+      body: JSON.stringify({ client_id: clientId, external_ids: externalIds }),
+    }
+  );
+
+export const reassignAdAccount = (accountId: string, clientId: string) =>
+  api<{ moved: boolean }>(`/api/ad-accounts/${accountId}`, {
+    method: "PATCH",
+    body: JSON.stringify({ client_id: clientId }),
+  });
+
 export interface Campaign {
   id: string;
   platform: "meta" | "google";
