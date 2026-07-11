@@ -467,6 +467,9 @@ function Sidebar({
   const navRef = useRef<HTMLElement>(null);
   // THE sliding pill: one absolutely-positioned, transform-animated element.
   const [pill, setPill] = useState<{ top: number; height: number } | null>(null);
+  // Suppress the slide on the very first placement so the pill appears in
+  // position instead of animating from the top of the rail on mount.
+  const pillPlaced = useRef(false);
   const measurePill = useCallback(() => {
     const el = navRef.current?.querySelector<HTMLElement>('[aria-current="page"]');
     setPill((prev) => {
@@ -488,6 +491,15 @@ function Sidebar({
     el.querySelectorAll(".side-section").forEach((s) => ro.observe(s));
     return () => ro.disconnect();
   }, [measurePill, tab, closedSections, collapsed, nav.length]);
+  // After the first placement paints, allow the slide animation for later moves.
+  useEffect(() => {
+    if (pill && !pillPlaced.current) {
+      const id = requestAnimationFrame(() => {
+        pillPlaced.current = true;
+      });
+      return () => cancelAnimationFrame(id);
+    }
+  }, [pill]);
 
   return (
     <aside className="sidebar">
@@ -518,7 +530,11 @@ function Sidebar({
           <span
             className="nav-pill"
             aria-hidden="true"
-            style={{ height: pill.height, transform: `translateY(${pill.top}px)` }}
+            style={{
+              height: pill.height,
+              transform: `translateY(${pill.top}px)`,
+              transition: pillPlaced.current ? undefined : "none",
+            }}
           />
         )}
         {sections.map((section) => (
