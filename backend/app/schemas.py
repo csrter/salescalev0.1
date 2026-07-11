@@ -735,6 +735,120 @@ class ContactCreateIn(BaseModel):
     last_name: Optional[str] = None
     email: Optional[EmailStr] = None
     phone: Optional[str] = None
+    # Phase 14: custom field values keyed by definition key. Validated/coerced
+    # at the data-access layer (services/custom_fields), not trusted as sent.
+    custom_fields: Optional[Dict[str, Any]] = None
+
+
+class ContactUpdateIn(BaseModel):
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    email: Optional[EmailStr] = None
+    phone: Optional[str] = None
+    # Only the keys present are changed; a key set to null clears that value.
+    custom_fields: Optional[Dict[str, Any]] = None
+
+
+# --- Phase 14: custom field definitions ---
+
+CUSTOM_FIELD_TYPES = (
+    "text",
+    "number",
+    "select",
+    "multi_select",
+    "date",
+    "boolean",
+    "url",
+)
+
+
+class CustomFieldOptionIn(BaseModel):
+    key: Optional[str] = None  # generated from label when omitted
+    label: str = Field(min_length=1, max_length=100)
+
+
+class CustomFieldOptionOut(BaseModel):
+    key: str
+    label: str
+
+
+class CustomFieldDefinitionCreate(BaseModel):
+    label: str = Field(min_length=1, max_length=150)
+    field_type: str
+    options: Optional[List[CustomFieldOptionIn]] = None
+    required: bool = False
+    visible_to_clients: bool = False
+    entity_type: str = "contact"
+
+    @field_validator("field_type")
+    @classmethod
+    def _known_type(cls, v: str) -> str:
+        if v not in CUSTOM_FIELD_TYPES:
+            raise ValueError(f"field_type must be one of {', '.join(CUSTOM_FIELD_TYPES)}")
+        return v
+
+
+class CustomFieldDefinitionUpdate(BaseModel):
+    """Rename is label-only (key never changes, task 5). Options can be edited;
+    when a removed option is in use, `option_remap` says how to migrate its
+    stored values (old key -> new key); unmapped removed keys are kept and
+    render as "(removed option)" (task 7)."""
+
+    label: Optional[str] = Field(default=None, min_length=1, max_length=150)
+    options: Optional[List[CustomFieldOptionIn]] = None
+    option_remap: Optional[Dict[str, str]] = None
+    required: Optional[bool] = None
+    visible_to_clients: Optional[bool] = None
+
+
+class CustomFieldReorderIn(BaseModel):
+    # Ordered list of definition ids; index becomes sort_order.
+    ids: List[str]
+
+
+class CustomFieldDefinitionOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    entity_type: str
+    label: str
+    key: str
+    field_type: str
+    options: Optional[List[CustomFieldOptionOut]] = None
+    required: bool
+    visible_to_clients: bool
+    sort_order: int
+    archived_at: Optional[dt.datetime] = None
+    created_at: dt.datetime
+
+
+# --- Phase 14: CSV import ---
+
+
+class CsvNewField(BaseModel):
+    """A field created inline during import mapping (type inferred client-side,
+    confirmed by the user)."""
+
+    column: str
+    label: str = Field(min_length=1, max_length=150)
+    field_type: str
+    options: Optional[List[CustomFieldOptionIn]] = None
+
+    @field_validator("field_type")
+    @classmethod
+    def _known_type(cls, v: str) -> str:
+        if v not in CUSTOM_FIELD_TYPES:
+            raise ValueError(f"field_type must be one of {', '.join(CUSTOM_FIELD_TYPES)}")
+        return v
+
+
+class CsvImportIn(BaseModel):
+    client_id: str
+    # csv column header -> target: "first_name" | "last_name" | "email" |
+    # "phone" | "custom:<key>" | "new" (resolved via new_fields) | "skip".
+    mapping: Dict[str, str]
+    rows: List[Dict[str, Any]]
+    new_fields: Optional[List[CsvNewField]] = None
 
 
 class QualificationIn(BaseModel):

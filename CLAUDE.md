@@ -174,7 +174,28 @@ Build proceeds against dev-mode API; go-live gates on Meta App Review.
       email_verified (token possession proves the inbox). Isolation on
       the new tables is the app-layer TenantScope pattern like every
       other table; Postgres RLS stays globally deferred (HANDOFF.md).
-- [ ] Phase 14 — Custom CRM fields
+- [x] Phase 14 — Custom CRM fields: per-Organization typed field
+      definitions (text/number/select/multi_select/date/boolean/url) on a
+      single `custom_fields` JSONB bag on contacts, GIN-indexed
+      (jsonb_path_ops, Postgres-only; plain JSON on SQLite dev/test).
+      Validation/coercion, collision protection (reserved-key list next
+      to the Contact model), rename-is-label-only, archive-vs-hard-delete
+      (delete scrubs the key from every contact's JSONB in a FastAPI
+      background task), select-option remap-or-keep (409 → prompt), and
+      per-org active-definition cap through the entitlement stub
+      (`custom_fields` tier limit + hard ceiling 100). All value writes go
+      through services/custom_fields.validate_and_merge — the single
+      data-access layer for the API, the contact form, and CSV import.
+      `visible_to_clients` (default false) filters values out of
+      client-role reads/filters at the data layer. Filtering & sorting
+      join the contact list query (build_filter_clauses/build_sort);
+      per-user list-column choice reuses the Phase 4 preference pattern
+      (crm_list_preferences table + /api/dashboard/crm-columns). CSV
+      import (/api/crm/contacts/import) maps columns → system/custom
+      targets with inline field creation and per-row error reporting.
+      Frontend: FieldManager in CRM setup, custom-field render/edit in the
+      contact drawer + new-contact form, custom columns + filter bar +
+      CSV import dialog in the lead list (src/crm_custom.tsx).
 - [ ] Phase 12 — Lead Finder & email verification
 - [ ] Stripe live activation + entitlement flip (after 12–14, so real
       limits land everywhere in one pass)

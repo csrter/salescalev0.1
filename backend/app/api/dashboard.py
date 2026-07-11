@@ -11,10 +11,12 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from pydantic import BaseModel
+
 from ..db import get_db
 from ..deps import TenantScope, get_scope
 from ..models.core import Client
-from ..models.dashboard import DashboardLayout
+from ..models.dashboard import CrmListPreference, DashboardLayout
 from ..schemas import DashboardLayoutIn
 
 router = APIRouter(prefix="/api/dashboard", tags=["dashboard"])
@@ -76,3 +78,59 @@ def save_layout(
         row.widgets = widgets
     db.commit()
     return {"client_id": client_id, "widgets": row.widgets}
+
+
+# --- Phase 14: CRM lead-list column choice (same per-user preference pattern) ---
+
+
+class CrmColumnsIn(BaseModel):
+    columns: list[str]
+
+
+def _cols_row(
+    db: Session, scope: TenantScope, client_id: str
+) -> CrmListPreference | None:
+    return db.execute(
+        select(CrmListPreference).where(
+            CrmListPreference.organization_id == scope.organization_id,
+            CrmListPreference.user_id == scope.user.id,
+            CrmListPreference.client_id == client_id,
+        )
+    ).scalar_one_or_none()
+
+
+@router.get("/crm-columns")
+def get_crm_columns(
+    client_id: str,
+    scope: TenantScope = Depends(get_scope),
+    db: Session = Depends(get_db),
+):
+    """The custom-field column keys this user has chosen to show in the lead
+    list for this client view. null = no saved choice (show none by default)."""
+    _client_for(db, scope, client_id)
+    row = _cols_row(db, scope, client_id)
+    return {"client_id": client_id, "columns": row.columns if row else None}
+
+
+@router.put("/crm-columns")
+def save_crm_columns(
+    client_id: str,
+    body: CrmColumnsIn,
+    scope: TenantScope = Depends(get_scope),
+    db: Session = Depends(get_db),
+):
+    _client_for(db, scope, client_id)
+    columns = [str(c) for c in body.columns]
+    row = _cols_row(db, scope, client_id)
+    if row is None:
+        row = CrmListPreference(
+            organization_id=scope.organization_id,
+            user_id=scope.user.id,
+            client_id=client_id,
+            columns=columns,
+        )
+        db.add(row)
+    else:
+        row.columns = columns
+    db.commit()
+    return {"client_id": client_id, "columns": row.columns}

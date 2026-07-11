@@ -23,10 +23,14 @@ from ..models.team import INVITE_PENDING, OrganizationInvite, OrganizationMember
 # Subscription tier limits, enforced server-side (not just hidden in the UI).
 # `None` means unlimited. Kept generous on Starter deliberately; tune against
 # real cost once billing is live.
+# `custom_fields` is the per-Organization cap on ACTIVE custom field
+# definitions (Phase 14, task 9). Even the top tier keeps a hard ceiling
+# (services/custom_fields.MAX_ACTIVE_DEFINITIONS) to bound query/UI complexity;
+# a tier value of None means "top out at that hard ceiling", not "unlimited".
 TIER_LIMITS: dict[str, dict[str, int | None]] = {
-    "starter": {"clients": 5, "seats": 5},
-    "pro": {"clients": 25, "seats": 15},
-    "agency": {"clients": None, "seats": None},
+    "starter": {"clients": 5, "seats": 5, "custom_fields": 20},
+    "pro": {"clients": 25, "seats": 15, "custom_fields": 50},
+    "agency": {"clients": None, "seats": None, "custom_fields": None},
 }
 
 
@@ -97,6 +101,37 @@ def enforce_can_accept_seat(db: Session, org: Organization) -> None:
             status.HTTP_402_PAYMENT_REQUIRED,
             "This organization has no seats available — contact its admin to "
             "free a seat or upgrade the plan.",
+        )
+
+
+def custom_field_limit(org: Organization) -> int:
+    """Effective cap on active custom field definitions: the tier's number, but
+    never above the absolute hard ceiling (even on unlimited tiers)."""
+    from .custom_fields import MAX_ACTIVE_DEFINITIONS
+
+    cap = _limits(org).get("custom_fields")
+    if cap is None:
+        return MAX_ACTIVE_DEFINITIONS
+    return min(cap, MAX_ACTIVE_DEFINITIONS)
+
+
+def custom_field_usage(db: Session, org: Organization) -> dict:
+    """Self-service "X of Y used" for custom fields (guardrail 5). Counts only
+    active (non-archived) definitions — archived ones don't consume the cap."""
+    from .custom_fields import active_count
+
+    return {"used": active_count(db, org.id), "limit": custom_field_limit(org)}
+
+
+def enforce_can_add_custom_field(db: Session, org: Organization) -> None:
+    """402 when the org is at its active-custom-field cap. Archiving frees the
+    cap; hard delete does too."""
+    usage = custom_field_usage(db, org)
+    if usage["used"] >= usage["limit"]:
+        raise HTTPException(
+            status.HTTP_402_PAYMENT_REQUIRED,
+            f"Your {org.plan} plan allows {usage['limit']} active custom "
+            "fields. Archive one or upgrade to add more.",
         )
 
 

@@ -12,10 +12,16 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from ..db import Base
 from .base import created_at_column, id_column
+
+# JSONB on Postgres (indexable, the production target), plain JSON on SQLite
+# (dev/test). One column type, one migration, both dialects — see the Phase 14
+# migration for the GIN index that only lands on Postgres.
+JsonB = JSON().with_variant(JSONB(), "postgresql")
 
 # Salescale CRM entities. The UI/workflows arrive in Phase 6, but the schema
 # ships now so ad-side tables (landing_events, insights) can reference leads
@@ -82,7 +88,45 @@ class Contact(Base):
     # External CRM sync mapping (optional per-client) — the other system's
     # contact id, so two-way sync updates in place instead of duplicating.
     external_crm_id: Mapped[Optional[str]] = mapped_column(String(100), index=True)
+    # Phase 14 custom fields: a single JSONB bag keyed by CustomFieldDefinition
+    # .key (never an EAV table — keeps list-view reads one query). Values are
+    # validated/coerced at the data-access layer (services/custom_fields.py),
+    # never trusted as sent. GIN-indexed (jsonb_path_ops) on Postgres so
+    # filtered list views stay fast at 40k+ contacts.
+    custom_fields: Mapped[Optional[dict]] = mapped_column(JsonB)
     created_at: Mapped[dt.datetime] = created_at_column()
+
+
+# System contact fields whose names a generated custom-field key must never
+# collide with. Kept next to the model deliberately (task 8): when a new
+# first-class contact column is added, add its name here so a later custom
+# field can't shadow it in the JSONB bag or in API/CSV mapping. `custom_fields`
+# itself and the qualification/attribution machinery are reserved too.
+RESERVED_CONTACT_FIELD_KEYS: frozenset[str] = frozenset(
+    {
+        "id",
+        "organization_id",
+        "client_id",
+        "company_id",
+        "first_name",
+        "last_name",
+        "name",
+        "email",
+        "phone",
+        "source",
+        "source_external_id",
+        "source_detail",
+        "qualification",
+        "qualified",
+        "qualified_at",
+        "verification_status",  # reserved ahead of Phase 12
+        "external_crm_id",
+        "custom_fields",
+        "created_at",
+        "tags",
+        "attribution",
+    }
+)
 
 
 class Pipeline(Base):
@@ -245,3 +289,66 @@ class ContactTag(Base):
     )
     contact_id: Mapped[str] = mapped_column(ForeignKey("contacts.id"), nullable=False)
     tag_id: Mapped[str] = mapped_column(ForeignKey("tags.id"), nullable=False)
+
+
+# Custom-field value types (Phase 14). Kept here so the model, the validation
+# layer, and the API schemas all read one definition.
+CUSTOM_FIELD_TYPES: frozenset[str] = frozenset(
+    {"text", "number", "select", "multi_select", "date", "boolean", "url"}
+)
+# Types that carry an `options` list (values must be one of the option keys).
+CUSTOM_FIELD_OPTION_TYPES: frozenset[str] = frozenset({"select", "multi_select"})
+
+
+class CustomFieldDefinition(Base):
+    """Per-Organization custom field definition (Phase 14).
+
+    This is what lets a plumbing agency track "number of trucks" while a SaaS
+    agency tracks "MRR" in the same product. `entity_type` is 'contact' today;
+    the column exists so 'deal'/'company' can join later without a migration.
+
+    `key` is the immutable machine identifier: generated once from the label at
+    creation, never regenerated on rename (task 5), unique per (org,
+    entity_type), and guarded against colliding with system contact fields
+    (RESERVED_CONTACT_FIELD_KEYS, task 8). Values live in Contact.custom_fields
+    keyed by this `key`.
+    """
+
+    __tablename__ = "custom_field_definitions"
+    __table_args__ = (
+        UniqueConstraint(
+            "organization_id",
+            "entity_type",
+            "key",
+            name="uq_custom_field_org_entity_key",
+        ),
+    )
+
+    id: Mapped[str] = id_column()
+    organization_id: Mapped[str] = mapped_column(
+        ForeignKey("organizations.id"), nullable=False, index=True
+    )
+    entity_type: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="contact"
+    )
+    label: Mapped[str] = mapped_column(String(150), nullable=False)
+    key: Mapped[str] = mapped_column(String(60), nullable=False)
+    field_type: Mapped[str] = mapped_column(String(20), nullable=False)
+    # options: list of {"key": str, "label": str} for select/multi_select.
+    options: Mapped[Optional[list]] = mapped_column(JSON)
+    required: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    # Whether the field renders in Client-portal views/API (task 15). Defaults
+    # to hidden: agencies keep internal notes-grade data in these fields.
+    visible_to_clients: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False
+    )
+    sort_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    # Archive, don't delete (task 6): archived fields hide from forms/default
+    # views but keep their stored values and stay filterable under a toggle.
+    archived_at: Mapped[Optional[dt.datetime]] = mapped_column(
+        DateTime(timezone=True)
+    )
+    created_at: Mapped[dt.datetime] = created_at_column()
+    updated_at: Mapped[Optional[dt.datetime]] = mapped_column(
+        DateTime(timezone=True)
+    )

@@ -24,7 +24,7 @@ import {
   type ReactNode,
 } from "react";
 import { ADMIN_ROLES, TEAM_ROLES, api, type Session } from "./api";
-import { DataTable } from "./components/DataTable";
+import { DataTable, type Column } from "./components/DataTable";
 import { ConfirmDialog, type ReceiptRow } from "./components/Dialog";
 import {
   Alert,
@@ -37,7 +37,17 @@ import {
   SkeletonText,
 } from "./components/ui";
 import { useToast } from "./components/Toast";
-import { ChevronRight, Inbox, Plus } from "./components/icons";
+import { ChevronRight, Inbox, Plus, Settings } from "./components/icons";
+import {
+  CsvImportDialog,
+  CustomFieldInputs,
+  CustomFieldsPanel,
+  FieldManager,
+  customFieldColumns,
+  useCustomFieldDefs,
+  type CustomFieldDef,
+  type CustomValues,
+} from "./crm_custom";
 import "./styles/views/crm.css";
 
 // API base (matches api.ts) — used to build the Google lead-form webhook URL
@@ -75,6 +85,7 @@ interface ContactRow {
   qualified_at: string | null;
   created_at: string;
   qualification?: Record<string, boolean> | null;
+  custom_fields?: CustomValues | null;
   attribution?: {
     platform: string | null;
     utm_source: string | null;
@@ -186,6 +197,10 @@ export function CrmView({
   const [bump, setBump] = useState(0);
   const refresh = useCallback(() => setBump((b) => b + 1), []);
   const closeDrawer = useCallback(() => setSelectedId(null), []);
+  // Custom field definitions (Phase 14) — any role loads them so contact views
+  // can label/render values; the values themselves are visibility-filtered
+  // server-side. Team roles get archived too via the manager's own fetch.
+  const { active: customDefs, reload: reloadDefs } = useCustomFieldDefs(true);
 
   useEffect(() => {
     let alive = true;
@@ -284,6 +299,10 @@ export function CrmView({
           board={board}
           criteria={criteria}
           onChanged={refresh}
+          onFieldsChanged={() => {
+            refresh();
+            reloadDefs();
+          }}
         />
       )}
 
@@ -299,6 +318,8 @@ export function CrmView({
         contacts={contacts}
         clientId={clientId}
         isTeam={isTeam}
+        isAdmin={isAdmin}
+        customDefs={customDefs}
         selectedId={selectedId}
         refetching={refetching}
         onSelect={setSelectedId}
@@ -313,6 +334,7 @@ export function CrmView({
           session={session}
           criteria={criteria}
           stages={board.stages}
+          customDefs={customDefs}
           onClose={closeDrawer}
           onChanged={refresh}
         />
@@ -685,10 +707,47 @@ function MoveStageMenu({
 
 // --- Lead list ---
 
+interface CfFilter {
+  key: string;
+  op: string;
+  value: string;
+}
+
+/** Client-side match mirroring the backend filter semantics, so the loaded
+ * list narrows instantly. The server endpoint applies the same shapes for API
+ * consumers (and uses the GIN index at scale). */
+function matchesFilter(c: ContactRow, def: CustomFieldDef, f: CfFilter): boolean {
+  const v = c.custom_fields?.[f.key];
+  if (f.value === "" && f.op !== "eq") return true;
+  switch (def.field_type) {
+    case "number": {
+      const n = v == null ? null : Number(v);
+      const t = Number(f.value);
+      if (n == null || Number.isNaN(n)) return false;
+      return f.op === "gte" ? n >= t : f.op === "lte" ? n <= t : n === t;
+    }
+    case "boolean":
+      return Boolean(v) === (f.value === "true");
+    case "date": {
+      const s = v ? String(v) : "";
+      if (!s) return false;
+      return f.op === "gte" ? s >= f.value : s <= f.value;
+    }
+    case "select":
+      return String(v ?? "") === f.value;
+    case "multi_select":
+      return Array.isArray(v) && v.includes(f.value);
+    default:
+      return String(v ?? "").toLowerCase().includes(f.value.toLowerCase());
+  }
+}
+
 function LeadList({
   contacts,
   clientId,
   isTeam,
+  isAdmin,
+  customDefs,
   selectedId,
   refetching,
   onSelect,
@@ -697,18 +756,142 @@ function LeadList({
   contacts: ContactRow[];
   clientId: string;
   isTeam: boolean;
+  isAdmin: boolean;
+  customDefs: CustomFieldDef[];
   selectedId: string | null;
   refetching: boolean;
   onSelect: (id: string) => void;
   onCreated: () => void;
 }) {
   const [adding, setAdding] = useState(false);
+  const [showImport, setShowImport] = useState(false);
+  const [showCols, setShowCols] = useState(false);
+  const [showFilters, setShowFilters] = useState(false);
+  const [cols, setCols] = useState<string[]>([]);
+  const [filters, setFilters] = useState<CfFilter[]>([]);
+
+  // Per-user column choice (Phase 4 preference pattern), loaded per client view.
+  useEffect(() => {
+    let alive = true;
+    api<{ columns: string[] | null }>(`/api/dashboard/crm-columns?client_id=${clientId}`)
+      .then((r) => alive && setCols(r.columns ?? []))
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [clientId]);
+
+  const saveCols = (next: string[]) => {
+    setCols(next);
+    api(`/api/dashboard/crm-columns?client_id=${clientId}`, {
+      method: "PUT",
+      body: JSON.stringify({ columns: next }),
+    }).catch(() => {});
+  };
+
+  const defByKey = useMemo(
+    () => Object.fromEntries(customDefs.map((d) => [d.key, d])),
+    [customDefs]
+  );
+  const chosenDefs = useMemo(
+    () =>
+      cols
+        .map((k) => defByKey[k])
+        .filter((d): d is CustomFieldDef => Boolean(d))
+        .sort((a, b) => a.sort_order - b.sort_order),
+    [cols, defByKey]
+  );
+
+  const rows = useMemo(() => {
+    if (filters.length === 0) return contacts;
+    return contacts.filter((c) =>
+      filters.every((f) => {
+        const d = defByKey[f.key];
+        return d ? matchesFilter(c, d, f) : true;
+      })
+    );
+  }, [contacts, filters, defByKey]);
+
+  const columns: Column<ContactRow>[] = [
+    {
+      key: "lead",
+      header: "Lead",
+      render: (c) => <strong>{contactName(c)}</strong>,
+      sortValue: (c) => contactName(c),
+    },
+    {
+      key: "contact",
+      header: "Contact info",
+      render: (c) => (
+        <span className="crm-muted">
+          {[c.email, c.phone].filter(Boolean).join(" · ") || "—"}
+        </span>
+      ),
+    },
+    {
+      key: "source",
+      header: "Source",
+      render: (c) => (
+        <span className="crm-muted">{c.source?.replace(/_/g, " ") ?? "—"}</span>
+      ),
+      sortValue: (c) => c.source ?? "",
+    },
+    ...customFieldColumns<ContactRow>(chosenDefs),
+    {
+      key: "attribution",
+      header: "Attribution",
+      render: (c) => <AttributionChips contact={c} />,
+      sortValue: (c) => c.attribution?.platform ?? "",
+    },
+    {
+      key: "status",
+      header: "Status",
+      render: (c) => <QualifiedBadge contact={c} />,
+      sortValue: (c) => (c.qualified_at ? 1 : 0),
+    },
+    {
+      key: "created",
+      header: "Created",
+      render: (c) => <Timestamp iso={c.created_at} />,
+      sortValue: (c) => c.created_at,
+    },
+  ];
+
+  // Which fields the caller may see/filter/column on (client role: visible only;
+  // the server already filters values, this keeps the pickers honest too).
+  const pickableDefs = customDefs;
+
   return (
     <div className="crm-leadlist">
       <div className="crm-toolbar">
-        <h4 className="crm-subhead crm-subhead--sm">Leads ({contacts.length})</h4>
-        {isTeam && (
-          <div className="crm-toolbar-spacer">
+        <h4 className="crm-subhead crm-subhead--sm">Leads ({rows.length})</h4>
+        <div className="crm-toolbar-spacer crm-leadlist-actions">
+          {pickableDefs.length > 0 && (
+            <>
+              <Button
+                variant="ghost"
+                size="sm"
+                aria-expanded={showFilters}
+                onClick={() => setShowFilters((s) => !s)}
+              >
+                Filter{filters.length ? ` (${filters.length})` : ""}
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                aria-expanded={showCols}
+                onClick={() => setShowCols((s) => !s)}
+              >
+                <Settings size={14} /> Columns
+              </Button>
+            </>
+          )}
+          {isAdmin && (
+            <Button variant="ghost" size="sm" onClick={() => setShowImport(true)}>
+              Import CSV
+            </Button>
+          )}
+          {isTeam && (
             <Button
               variant="ghost"
               size="sm"
@@ -717,20 +900,48 @@ function LeadList({
             >
               {adding ? "Cancel" : (<><Plus size={14} /> Add contact</>)}
             </Button>
-          </div>
-        )}
+          )}
+        </div>
       </div>
+
+      {showCols && pickableDefs.length > 0 && (
+        <div className="crm-col-picker" role="group" aria-label="Custom field columns">
+          {pickableDefs.map((d) => (
+            <label key={d.id} className="crm-check">
+              <input
+                type="checkbox"
+                checked={cols.includes(d.key)}
+                onChange={(e) =>
+                  saveCols(
+                    e.target.checked
+                      ? [...cols, d.key]
+                      : cols.filter((k) => k !== d.key)
+                  )
+                }
+              />
+              <span>{d.label}</span>
+            </label>
+          ))}
+        </div>
+      )}
+
+      {showFilters && pickableDefs.length > 0 && (
+        <FilterBar defs={pickableDefs} filters={filters} onChange={setFilters} />
+      )}
+
       {adding && (
         <NewContactForm
           clientId={clientId}
+          customDefs={customDefs}
           onCreated={() => {
             setAdding(false);
             onCreated();
           }}
         />
       )}
+
       <DataTable<ContactRow>
-        rows={contacts}
+        rows={rows}
         rowKey={(c) => c.id}
         onRowClick={(c) => onSelect(c.id)}
         selectedKey={selectedId}
@@ -743,67 +954,149 @@ function LeadList({
             and landing pages — with their attribution already attached.
           </EmptyState>
         }
-        columns={[
-          {
-            key: "lead",
-            header: "Lead",
-            render: (c) => <strong>{contactName(c)}</strong>,
-            sortValue: (c) => contactName(c),
-          },
-          {
-            key: "contact",
-            header: "Contact info",
-            render: (c) => (
-              <span className="crm-muted">
-                {[c.email, c.phone].filter(Boolean).join(" · ") || "—"}
-              </span>
-            ),
-          },
-          {
-            key: "source",
-            header: "Source",
-            render: (c) => (
-              <span className="crm-muted">
-                {c.source?.replace(/_/g, " ") ?? "—"}
-              </span>
-            ),
-            sortValue: (c) => c.source ?? "",
-          },
-          {
-            key: "attribution",
-            header: "Attribution",
-            render: (c) => <AttributionChips contact={c} />,
-            sortValue: (c) => c.attribution?.platform ?? "",
-          },
-          {
-            key: "status",
-            header: "Status",
-            render: (c) => <QualifiedBadge contact={c} />,
-            sortValue: (c) => (c.qualified_at ? 1 : 0),
-          },
-          {
-            key: "created",
-            header: "Created",
-            render: (c) => <Timestamp iso={c.created_at} />,
-            sortValue: (c) => c.created_at,
-          },
-        ]}
+        columns={columns}
       />
+
+      {showImport && (
+        <CsvImportDialog
+          clientId={clientId}
+          defs={customDefs}
+          onClose={() => setShowImport(false)}
+          onDone={onCreated}
+        />
+      )}
     </div>
+  );
+}
+
+function FilterBar({
+  defs,
+  filters,
+  onChange,
+}: {
+  defs: CustomFieldDef[];
+  filters: CfFilter[];
+  onChange: (f: CfFilter[]) => void;
+}) {
+  const add = () => {
+    const d = defs[0];
+    onChange([...filters, { key: d.key, op: defaultOp(d.field_type), value: "" }]);
+  };
+  const set = (i: number, patch: Partial<CfFilter>) =>
+    onChange(filters.map((f, j) => (j === i ? { ...f, ...patch } : f)));
+
+  return (
+    <div className="crm-filter-bar">
+      {filters.map((f, i) => {
+        const d = defs.find((x) => x.key === f.key) ?? defs[0];
+        return (
+          <div key={i} className="crm-filter-row">
+            <select
+              value={f.key}
+              onChange={(e) => {
+                const nd = defs.find((x) => x.key === e.target.value)!;
+                set(i, { key: nd.key, op: defaultOp(nd.field_type), value: "" });
+              }}
+            >
+              {defs.map((x) => (
+                <option key={x.key} value={x.key}>
+                  {x.label}
+                </option>
+              ))}
+            </select>
+            <FilterValue def={d} filter={f} onSet={(patch) => set(i, patch)} />
+            <Button
+              variant="ghost"
+              size="sm"
+              aria-label="Remove filter"
+              onClick={() => onChange(filters.filter((_, j) => j !== i))}
+            >
+              ×
+            </Button>
+          </div>
+        );
+      })}
+      <Button variant="ghost" size="sm" onClick={add}>
+        <Plus size={13} /> Add filter
+      </Button>
+    </div>
+  );
+}
+
+const defaultOp = (t: string) =>
+  t === "number" || t === "date" ? "gte" : t === "boolean" ? "eq" : t === "text" || t === "url" ? "contains" : "is";
+
+function FilterValue({
+  def,
+  filter,
+  onSet,
+}: {
+  def: CustomFieldDef;
+  filter: CfFilter;
+  onSet: (patch: Partial<CfFilter>) => void;
+}) {
+  if (def.field_type === "number" || def.field_type === "date") {
+    return (
+      <>
+        <select value={filter.op} onChange={(e) => onSet({ op: e.target.value })}>
+          <option value="gte">≥</option>
+          <option value="lte">≤</option>
+        </select>
+        <input
+          type={def.field_type === "date" ? "date" : "number"}
+          value={filter.value}
+          onChange={(e) => onSet({ value: e.target.value })}
+        />
+      </>
+    );
+  }
+  if (def.field_type === "boolean") {
+    return (
+      <select value={filter.value} onChange={(e) => onSet({ value: e.target.value, op: "eq" })}>
+        <option value="">—</option>
+        <option value="true">Yes</option>
+        <option value="false">No</option>
+      </select>
+    );
+  }
+  if (def.field_type === "select" || def.field_type === "multi_select") {
+    return (
+      <select
+        value={filter.value}
+        onChange={(e) => onSet({ value: e.target.value, op: def.field_type === "select" ? "is" : "any_of" })}
+      >
+        <option value="">—</option>
+        {(def.options ?? []).map((o) => (
+          <option key={o.key} value={o.key}>
+            {o.label}
+          </option>
+        ))}
+      </select>
+    );
+  }
+  return (
+    <input
+      placeholder="contains…"
+      value={filter.value}
+      onChange={(e) => onSet({ value: e.target.value, op: "contains" })}
+    />
   );
 }
 
 function NewContactForm({
   clientId,
+  customDefs,
   onCreated,
 }: {
   clientId: string;
+  customDefs: CustomFieldDef[];
   onCreated: () => void;
 }) {
   const [first, setFirst] = useState("");
   const [last, setLast] = useState("");
   const [email, setEmail] = useState("");
   const [phone, setPhone] = useState("");
+  const [custom, setCustom] = useState<CustomValues>({});
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const empty = !first && !last && !email && !phone;
@@ -820,6 +1113,7 @@ function NewContactForm({
         last_name: last || null,
         email: email || null,
         phone: phone || null,
+        custom_fields: Object.keys(custom).length ? custom : undefined,
       }),
     })
       .then(onCreated)
@@ -841,6 +1135,11 @@ function NewContactForm({
       <Field label="Phone">
         <input value={phone} onChange={(e) => setPhone(e.target.value)} />
       </Field>
+      <CustomFieldInputs
+        defs={customDefs}
+        values={custom}
+        onChange={(k, v) => setCustom((p) => ({ ...p, [k]: v }))}
+      />
       <div className="crm-form-actions" role="group">
         <Button type="submit" variant="primary" disabled={empty} busy={busy}>
           Add contact
@@ -929,6 +1228,7 @@ function ContactDrawer({
   session,
   criteria,
   stages,
+  customDefs,
   onClose,
   onChanged,
 }: {
@@ -937,6 +1237,7 @@ function ContactDrawer({
   session: Session;
   criteria: Criterion[];
   stages: Stage[];
+  customDefs: CustomFieldDef[];
   onClose: () => void;
   onChanged: () => void;
 }) {
@@ -997,6 +1298,17 @@ function ContactDrawer({
             }}
           />
         )}
+
+        <CustomFieldsPanel
+          contactId={detail.id}
+          defs={customDefs}
+          values={detail.custom_fields ?? {}}
+          canEdit={isTeam}
+          onSaved={() => {
+            reload();
+            onChanged();
+          }}
+        />
 
         <section className="crm-section">
           <h6 className="crm-overline">Deals</h6>
@@ -1388,16 +1700,19 @@ function SetupPanel({
   board,
   criteria,
   onChanged,
+  onFieldsChanged,
 }: {
   clientId: string;
   board: Board;
   criteria: Criterion[];
   onChanged: () => void;
+  onFieldsChanged: () => void;
 }) {
   return (
     <div className="crm-setup">
       <StageEditor board={board} onChanged={onChanged} />
       <CriteriaEditor criteria={criteria} onChanged={onChanged} />
+      <FieldManager onChanged={onFieldsChanged} />
       <LeadFormRouting clientId={clientId} />
       <ExternalSyncConfig clientId={clientId} />
     </div>

@@ -3,6 +3,7 @@ from .ads import Campaign, AdGroup, Ad, Creative, InsightDaily, QualitySnapshot
 from .crm import (
     Company,
     Contact,
+    CustomFieldDefinition,
     Pipeline,
     PipelineStage,
     Deal,
@@ -15,7 +16,7 @@ from .crm import (
 from .attribution import LandingEvent
 from .audit import AuditLogEntry, PendingChange
 from .conversions import ConversionConfig, ConversionDispatch, ConversionEvent
-from .dashboard import DashboardLayout
+from .dashboard import CrmListPreference, DashboardLayout
 from .ai import AiUsage
 from .email import EmailLog
 from .integrations import IntegrationCredential
@@ -59,6 +60,7 @@ __all__ = [
     "QualitySnapshot",
     "Company",
     "Contact",
+    "CustomFieldDefinition",
     "Pipeline",
     "PipelineStage",
     "Deal",
@@ -74,6 +76,7 @@ __all__ = [
     "ConversionEvent",
     "ConversionDispatch",
     "DashboardLayout",
+    "CrmListPreference",
     "AiUsage",
     "EmailLog",
 ]

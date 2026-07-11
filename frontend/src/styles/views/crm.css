@@ -453,6 +453,226 @@
   word-break: break-all;
 }
 
+/* ---- Phase 14: custom fields ------------------------------------------ */
+
+.crm-section-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.crm-req {
+  color: var(--danger);
+}
+
+.crm-leadlist-actions {
+  display: flex;
+  gap: var(--space-1);
+  align-items: center;
+}
+
+/* Drawer: custom field value list */
+.crm-cf-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: 0;
+}
+
+.crm-cf-row {
+  display: grid;
+  grid-template-columns: minmax(0, 40%) minmax(0, 1fr);
+  gap: var(--space-2);
+  align-items: baseline;
+}
+
+.crm-cf-row dt {
+  color: var(--ink-soft);
+  font-size: var(--text-xs);
+}
+
+.crm-cf-row dd {
+  margin: 0;
+  font-size: var(--text-sm);
+}
+
+.crm-cf-chips {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+
+.crm-cf-multi {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+/* Field manager */
+.crm-cf-manage-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.crm-cf-manage-item {
+  display: flex;
+  gap: var(--space-2);
+  align-items: flex-start;
+}
+
+.crm-cf-reorder {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 0 0 auto;
+  padding-top: 4px;
+}
+
+.crm-cf-reorder button {
+  display: inline-flex;
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+  background: var(--surface);
+  color: var(--ink-soft);
+  cursor: pointer;
+}
+
+.crm-cf-reorder button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.crm-cf-manage-row {
+  flex: 1 1 auto;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+}
+
+.crm-cf-manage-row.is-archived {
+  opacity: 0.65;
+}
+
+.crm-cf-manage-main {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  align-items: center;
+}
+
+.crm-cf-manage-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  align-items: center;
+}
+
+.crm-cf-label-input {
+  font-weight: 600;
+  min-width: 12ch;
+}
+
+.crm-cf-key {
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  color: var(--ink-faint);
+}
+
+.crm-cf-options,
+.crm-cf-create {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.crm-cf-option-row {
+  display: flex;
+  gap: var(--space-1);
+  align-items: center;
+}
+
+.crm-cf-archived {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding-top: var(--space-2);
+  border-top: 1px dashed var(--border);
+}
+
+/* Column picker + filter bar */
+.crm-col-picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+
+.crm-filter-bar {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+
+.crm-filter-row {
+  display: flex;
+  gap: var(--space-1);
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+/* CSV import */
+.crm-csv-drop,
+.crm-csv-result {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.crm-csv-map {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  max-height: 45vh;
+  overflow-y: auto;
+}
+
+.crm-csv-map-row {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.crm-csv-col {
+  flex: 1 1 40%;
+  min-width: 0;
+}
+
+.crm-csv-errors {
+  margin: 0;
+  padding-left: var(--space-4);
+  max-height: 30vh;
+  overflow-y: auto;
+  color: var(--ink-soft);
+  font-size: var(--text-xs);
+}
+
 /* ---- responsive: drawer goes full-screen on narrow viewports ---------- */
 
 @media (max-width: 900px) {
