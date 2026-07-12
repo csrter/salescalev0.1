@@ -463,6 +463,27 @@ live activation + the entitlement flip, the Outreach module build
       SPF include into the EXISTING bare-domain TXT — a second SPF
       record is a permerror), then connect the mailbox in Salescale
       (needs the cold-email module deployed to prod first).
+- [x] Multi-provider AI (post-cold-email): grounded insights AND cold-email
+      personalization now route their single model call through one dispatch
+      (services/ai_provider.complete) that speaks Anthropic (default), OpenAI,
+      or Gemini. Provider is operator-selected via settings.ai_provider, each
+      with its own key + default model (openai_model gpt-4o, gemini_model
+      gemini-2.0-flash — env-overridable); per-provider SDKs import lazily so a
+      missing package only errors when that provider is actually selected, and
+      personalization still fails open on any error. An Organization may BYO its
+      own key for the active provider (IntegrationCredential, resolved BYO-first
+      with the operator env key as fallback — anthropic/openai/gemini added to
+      integration_creds.KEY_PROVIDERS, so the existing /api/lead-finder/
+      providers endpoint stores them). Grounding is unchanged and still done by
+      the caller before dispatch, so tenant isolation (guardrail #7) holds for
+      every provider; AiUsage metering records the resolved model and prices it
+      from ai_provider.PRICING (extended for the OpenAI/Gemini models). The
+      call seam kept its (system, user_content, max_tokens) signature so the
+      test suite's monkeypatch still applies — 334 tests still pass. NOTE on
+      "OAuth from Claude": there is no consumer-OAuth path for a backend to call
+      the Claude API on a user's behalf; server auth is an API key (or WIF), so
+      personalization uses a server-held key per the BYO/operator resolution
+      above. Not deployed yet.
 - [ ] Stripe live activation + entitlement flip (after 12–14, so real
       limits land everywhere in one pass)
 - [ ] Outreach module build (dev-mode) — go-live gated on Meta App

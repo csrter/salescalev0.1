@@ -24,12 +24,11 @@ from typing import Any, Dict, Optional, Tuple
 
 from sqlalchemy.orm import Session
 
-from ..config import get_settings
 from ..models.ai import AiUsage
 from ..models.core import Organization
 from ..models.crm import Company, Contact
 from ..models.email_outreach import EmailCampaign, EmailEnrollment, EmailStep
-from . import ai_insights, entitlements
+from . import ai_insights, ai_provider, entitlements
 
 log = logging.getLogger("salescale.email_outreach")
 
@@ -128,39 +127,24 @@ def render_step(
 
 
 def _call_model(system: str, user_content: str, max_tokens: int = 300):
-    """(text, input_tokens, output_tokens). Thin wrapper over the same Anthropic
-    call shape ai_insights uses — kept local so this module doesn't reach into
-    another module's private helpers. Isolated for tests to monkeypatch."""
-    settings = get_settings()
-    if not settings.anthropic_api_key:
-        raise ai_insights.AiNotConfigured("ANTHROPIC_API_KEY is not configured")
-    import anthropic
-
-    client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
-    response = client.messages.create(
-        model=settings.ai_model,
-        max_tokens=max_tokens,
-        system=[{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
-        messages=[{"role": "user", "content": user_content}],
-    )
-    text = "".join(b.text for b in response.content if b.type == "text")
-    return text, response.usage.input_tokens, response.usage.output_tokens
+    """(text, input_tokens, output_tokens). Dispatches to the operator-selected
+    AI provider (anthropic | openai | gemini) via services/ai_provider, using
+    the resolution bound by generate_ai_snippet. Isolated as the monkeypatch
+    seam for tests."""
+    return ai_provider.complete(system, user_content, max_tokens)
 
 
 def _record_usage(
-    db: Session, org: Organization, input_tokens: int, output_tokens: int
+    db: Session, org: Organization, model: str, input_tokens: int, output_tokens: int
 ) -> None:
-    settings = get_settings()
-    in_price, out_price = ai_insights.PRICING_MICRO_USD_PER_TOKEN.get(
-        settings.ai_model, ai_insights._DEFAULT_PRICE
-    )
+    in_price, out_price = ai_provider.price(model)
     db.add(
         AiUsage(
             organization_id=org.id,
             client_id=None,  # outreach personalization is agency-level, no client
             user_id=None,  # background/scheduler origin
             feature="outreach_personalize",
-            model=settings.ai_model,
+            model=model,
             input_tokens=input_tokens,
             output_tokens=output_tokens,
             cost_micro_usd=int(input_tokens * in_price + output_tokens * out_price),
@@ -191,12 +175,14 @@ def generate_ai_snippet(
     }
     try:
         ai_insights.check_allowance(db, org)  # entitlement + monthly cap
+        res = ai_provider.resolve(db, org)  # provider + model + BYO/operator key
         user_content = (
             f"GROUNDED_DATA:\n{json.dumps(grounding, sort_keys=True, default=str)}\n\n"
             f"INSTRUCTIONS:\n{step.ai_instructions}"
         )
-        text, input_tokens, output_tokens = _call_model(_AI_SYSTEM_PROMPT, user_content)
-        _record_usage(db, org, input_tokens, output_tokens)
+        with ai_provider.using(res):
+            text, input_tokens, output_tokens = _call_model(_AI_SYSTEM_PROMPT, user_content)
+        _record_usage(db, org, res.model, input_tokens, output_tokens)
         return (text or "").strip()
     except Exception as e:  # never let AI failure stop a send
         log.info("outreach AI snippet skipped for contact %s: %s", contact.id, e)

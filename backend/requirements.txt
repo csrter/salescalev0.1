@@ -18,3 +18,10 @@ pyinstaller
 # For Google Ads campaign management + Enhanced Conversions. Heavy (pulls grpc);
 # imported lazily so the app runs without it, but REQUIRED for Google features.
 google-ads
+# AI providers for grounded insights + cold-email personalization. Only the one
+# selected by settings.ai_provider is used; each is imported lazily inside its
+# branch in services/ai_provider, so a missing package only errors when that
+# provider is actually selected (and personalization fails open regardless).
+anthropic
+openai
+google-genai

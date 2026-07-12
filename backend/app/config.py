@@ -93,10 +93,22 @@ class Settings(BaseSettings):
             if e.strip()
         }
 
-    # Phase 9 — AI insights (Claude API, server-side only; never expose the
-    # key to the frontend).
+    # Phase 9 — AI insights (server-side only; never expose a key to the
+    # frontend). The provider is operator-selected — anthropic (default),
+    # openai, or gemini — and drives BOTH grounded insights (services/
+    # ai_insights) and cold-email personalization (services/email_personalize)
+    # through the single dispatch in services/ai_provider. Each provider has
+    # its own key + default model below; an Organization may bring its own key
+    # for the active provider (BYO via /api/lead-finder/providers, resolved
+    # BYO-first with these env values as the operator fallback). The default
+    # models are conservative, stable IDs — override per provider via env.
+    ai_provider: str = "anthropic"  # anthropic | openai | gemini
     anthropic_api_key: str = ""
     ai_model: str = "claude-opus-4-8"
+    openai_api_key: str = ""
+    openai_model: str = "gpt-4o"
+    gemini_api_key: str = ""
+    gemini_model: str = "gemini-2.0-flash"
     # Global default monthly cap on AI queries per Organization until Phase 8
     # wires real tier limits into services/entitlements.py.
     ai_monthly_query_limit: int = 200

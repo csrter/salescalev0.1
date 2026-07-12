@@ -92,6 +92,13 @@ KEY_PROVIDERS: dict[str, str] = {
     "google_places": "google_places_api_key",
     "zerobounce": "zerobounce_api_key",
     "hunter": "",
+    # AI providers (grounded insights + cold-email personalization). The active
+    # one is chosen operator-side (settings.ai_provider); these let an org bring
+    # its own key for whichever provider is active, resolved BYO-first with the
+    # operator's env key as fallback. See services/ai_provider.
+    "anthropic": "anthropic_api_key",
+    "openai": "openai_api_key",
+    "gemini": "gemini_api_key",
 }
 
 

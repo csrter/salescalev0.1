@@ -40,7 +40,7 @@ from sqlalchemy.orm import Session
 from ..config import get_settings
 from ..models.ai import AiUsage
 from ..models.core import Client, Organization, User
-from . import entitlements, metrics
+from . import ai_provider, entitlements, metrics
 
 
 class AiError(Exception):
@@ -59,15 +59,10 @@ class AiNotConfigured(AiError):
     pass
 
 
-# Claude API pricing, USD per million tokens (input, output) — which is
-# conveniently micro-USD per token. Source: platform.claude.com pricing at
-# implementation time; update alongside model changes.
-PRICING_MICRO_USD_PER_TOKEN = {
-    "claude-opus-4-8": (5.0, 25.0),
-    "claude-sonnet-5": (3.0, 15.0),
-    "claude-haiku-4-5": (1.0, 5.0),
-}
-_DEFAULT_PRICE = (5.0, 25.0)
+# Pricing lives in services/ai_provider (it spans all three providers now).
+# Aliased here for any external reference and the local _record_usage call.
+PRICING_MICRO_USD_PER_TOKEN = ai_provider.PRICING_MICRO_USD_PER_TOKEN
+_DEFAULT_PRICE = ai_provider.DEFAULT_PRICE
 
 EXPLAINABLE_METRICS = {
     "blended",
@@ -322,34 +317,12 @@ def ungrounded_numbers(text: str, grounding: Dict[str, Any]) -> List[str]:
 
 
 def _call_model(system: str, user_content: str, max_tokens: int = 4096):
-    """(text, input_tokens, output_tokens). Isolated for tests. Output cap
-    is deliberately small — these are short client-facing explanations, and
+    """(text, input_tokens, output_tokens) from the operator-selected AI
+    provider (anthropic | openai | gemini) via services/ai_provider, using the
+    resolution bound by _run. Isolated as the monkeypatch seam for tests. Output
+    cap is deliberately small — these are short client-facing explanations, and
     the prompt asks for two paragraphs at most."""
-    settings = get_settings()
-    if not settings.anthropic_api_key:
-        raise AiNotConfigured(
-            "AI insights need ANTHROPIC_API_KEY configured on the server"
-        )
-    import anthropic
-
-    client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
-    response = client.messages.create(
-        model=settings.ai_model,
-        max_tokens=max_tokens,
-        system=[
-            {
-                "type": "text",
-                "text": system,
-                # The system prompt is byte-stable across every tenant and
-                # request — a cache breakpoint here means each call only
-                # pays full price for its own grounding JSON.
-                "cache_control": {"type": "ephemeral"},
-            }
-        ],
-        messages=[{"role": "user", "content": user_content}],
-    )
-    text = "".join(b.text for b in response.content if b.type == "text")
-    return text, response.usage.input_tokens, response.usage.output_tokens
+    return ai_provider.complete(system, user_content, max_tokens)
 
 
 def month_usage(db: Session, organization_id: str) -> Dict[str, Any]:
@@ -387,20 +360,18 @@ def _record_usage(
     client: Client,
     user: User,
     feature: str,
+    model: str,
     input_tokens: int,
     output_tokens: int,
 ) -> None:
-    settings = get_settings()
-    in_price, out_price = PRICING_MICRO_USD_PER_TOKEN.get(
-        settings.ai_model, _DEFAULT_PRICE
-    )
+    in_price, out_price = ai_provider.price(model)
     db.add(
         AiUsage(
             organization_id=org.id,
             client_id=client.id,
             user_id=user.id,
             feature=feature,
-            model=settings.ai_model,
+            model=model,
             input_tokens=input_tokens,
             output_tokens=output_tokens,
             cost_micro_usd=int(input_tokens * in_price + output_tokens * out_price),
@@ -419,19 +390,21 @@ def _run(
     instruction: str,
 ) -> Dict[str, Any]:
     check_allowance(db, org)
+    res = ai_provider.resolve(db, org)  # provider + model + BYO/operator key
     user_content = (
         f"GROUNDED_DATA:\n{json.dumps(grounding, sort_keys=True, default=str)}\n\n"
         f"USER_QUESTION:\n{instruction}"
     )
-    text, input_tokens, output_tokens = _call_model(_SYSTEM_PROMPT, user_content)
-    _record_usage(db, org, client, user, feature, input_tokens, output_tokens)
+    with ai_provider.using(res):
+        text, input_tokens, output_tokens = _call_model(_SYSTEM_PROMPT, user_content)
+    _record_usage(db, org, client, user, feature, res.model, input_tokens, output_tokens)
     return {
         "text": text,
         "grounding": grounding,
         # Non-empty means a number in the response didn't trace back to the
         # computed metrics — surfaced, never silently accepted.
         "ungrounded_numbers": ungrounded_numbers(text, grounding),
-        "model": get_settings().ai_model,
+        "model": res.model,
         "usage": {"input_tokens": input_tokens, "output_tokens": output_tokens},
     }
 
