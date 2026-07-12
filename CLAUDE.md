@@ -531,7 +531,9 @@ live activation + the entitlement flip, the Outreach module build
       localStorage and the row appeared correctly in the Remembered-devices
       panel (right IP/UA/expiry), then did a NORMAL sign-out + fresh
       email+password login and watched it go straight into the app with
-      zero 2FA prompt. Not deployed yet.
+      zero 2FA prompt. DEPLOYED to production (2026-07-12), migration
+      applied cleanly to the live Supabase DB alongside the Lead Finder
+      profile-enrichment deploy below.
 - [x] Lead Finder profile enrichment (post-2FA session): the in-house
       lead pipeline now fills owner name/title, owner direct/mobile line,
       work email, company description, estimated annual revenue and
@@ -560,9 +562,18 @@ live activation + the entitlement flip, the Outreach module build
       drawer shows mobile/firmographics/description + Edit info gained
       Mobile; lead list gained Mobile + Est. revenue optional columns.
       Tests 338 → 342. Verified live on alt2 (key save flow, drawer
-      render, mobile PATCH round-trip); NOTE: backend-alt2 launch config
-      now sets a dev TOKEN_ENCRYPTION_KEY (encrypted-secret paths 500'd
-      without it). Not deployed yet.
+      render, mobile PATCH round-trip). DEPLOYED to production
+      (2026-07-12): migrations a8f2c4d9e6b3 (2FA remember-device, above)
+      + b6d1f3a8c5e2 applied cleanly to the live Supabase DB, backend/
+      frontend rebuilt on the VPS, /api/lead-finder/providers confirmed
+      live (401 without a token, not 404). NOTE: a Fernet key generated
+      for local alt2 verification was briefly committed into
+      .claude/launch.json — caught before push by the auto-mode
+      classifier, scrubbed from history via amend since the branch had
+      never been pushed. `feature/ui-revamp` still has no configured
+      push credential on this Mac (no gh CLI, no HTTPS credential
+      helper, SSH key not registered on GitHub) — the branch is deployed
+      but not yet backed up to GitHub; push it manually when convenient.
 - [ ] Stripe live activation + entitlement flip (after 12–14, so real
       limits land everywhere in one pass)
 - [ ] Outreach module build (dev-mode) — go-live gated on Meta App
