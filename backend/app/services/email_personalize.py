@@ -5,18 +5,37 @@ Two layers, both driven by real CRM data for the SENDING Organization only
 a tenant boundary):
 
 1. Token substitution — `{{first_name}}`, `{{last_name}}`, `{{company}}`,
-   `{{city}}`, `{{state}}`, `{{email}}`, `{{custom.<key>}}`, with a
-   `{{token|fallback}}` form ("there" when the field is empty/missing).
-   `{{unsubscribe_url}}` is deliberately left as a LITERAL token — the send
-   gateway resolves it per-message (each send has its own unsubscribe link).
+   `{{city}}`, `{{state}}`, `{{email}}`, `{{job_title}}`,
+   `{{company_description}}`, `{{company_revenue}}`, `{{company_employees}}`,
+   `{{custom.<key>}}`, with a `{{token|fallback}}` form ("there" when the
+   field is empty/missing). `{{unsubscribe_url}}` is deliberately left as a
+   LITERAL token — the send gateway resolves it per-message (each send has
+   its own unsubscribe link).
 
 2. `{{ai_snippet}}` — one or two natural sentences the Claude API writes for
    this specific contact from grounded facts only, when a step supplies
    `ai_instructions`. Metered against the org's monthly AI cap and cached on
    the enrollment (ai_snippets JSON, step_id -> text) so re-processing an
    enrollment never re-bills. AI failure NEVER blocks a send — it yields "".
+
+3. `{{#if token}}...{{/if}}` / `{{#if token}}...{{else}}...{{/if}}` —
+   conditional blocks, evaluated BEFORE token substitution (and after
+   spintax, #4). `token` is any KNOWN token or `custom.<key>`; the block
+   shows its "true" branch when the token resolves non-empty. Single level
+   only — nesting an `{{#if}}` inside another is not supported and is a
+   save-time error path if unclosed (unknown_tokens), while a merely-nested
+   opener just won't be matched by the (deliberately non-nested) regex and
+   survives as literal text into the send-time leftover-artifact guard.
+
+4. `{{spin:variant one|variant two|variant three}}` — deterministic spintax,
+   applied BEFORE conditionals. The choice is `sha256(contact.id + the spin
+   block's own full text) % variant_count` — never `random()` — so the same
+   contact always gets the same variant (idempotent with the AI-snippet
+   cache: re-rendering an enrollment never changes past text) while
+   different contacts spread across the variant list.
 """
 
+import hashlib
 import json
 import logging
 import re
@@ -49,6 +68,10 @@ KNOWN_TOKENS = frozenset(
         "city",
         "state",
         "email",
+        "job_title",
+        "company_description",
+        "company_revenue",
+        "company_employees",
         "ai_snippet",
         "unsubscribe_url",
     }
@@ -58,24 +81,133 @@ KNOWN_TOKENS = frozenset(
 # never cased by a human (all-lower CSV imports, ALL-CAPS provider data).
 # Deliberately excludes email (case-insensitive anyway) and custom.* (opaque
 # org data — a SKU like "xL-2" must survive verbatim).
-_CASED_TOKENS = frozenset({"first_name", "last_name", "company", "city"})
+_CASED_TOKENS = frozenset({"first_name", "last_name", "company", "city", "job_title"})
+
+# {{#if token}}...{{/if}} / {{#if token}}...{{else}}...{{/if}} — single level
+# (deliberately non-nested: a nested opener just won't match and survives as
+# literal text, caught by the send-time leftover-artifact guard).
+_IF_RE = re.compile(
+    r"\{\{#if\s+([a-zA-Z0-9_.]+)\s*\}\}(.*?)(?:\{\{else\}\}(.*?))?\{\{/if\}\}",
+    re.DOTALL,
+)
+_IF_OPEN_RE = re.compile(r"\{\{#if\s+([a-zA-Z0-9_.]+)\s*\}\}")
+_IF_CLOSE_RE = re.compile(r"\{\{/if\}\}")
+
+# {{spin:variant one|variant two|variant three}} — deterministic per contact.
+# Parsed with an explicit brace-depth scan (not a plain regex): variants may
+# themselves contain {{tokens}}, and a naive `\{\{spin:(.*?)\}\}` non-greedy
+# match would stop at the FIRST "}}" — i.e. right after the first nested
+# token — instead of the spin block's real closer.
+_SPIN_OPEN = "{{spin:"
+
+
+def _iter_spin_blocks(template: str):
+    """Yield (full_text, inner_text, start, end) for each {{spin:...}} block,
+    `end` being the index just past its closing "}}". An unterminated
+    "{{spin:" (unbalanced braces) is left alone — it stays literal text, which
+    the send-time leftover-brace guard then catches."""
+    i = 0
+    n = len(template)
+    while True:
+        start = template.find(_SPIN_OPEN, i)
+        if start == -1:
+            return
+        k = start + len(_SPIN_OPEN)
+        depth = 1
+        while k < n and depth > 0:
+            if template[k : k + 2] == "{{":
+                depth += 1
+                k += 2
+            elif template[k : k + 2] == "}}":
+                depth -= 1
+                k += 2
+            else:
+                k += 1
+        if depth != 0:
+            return  # unterminated — stop scanning, rest is literal
+        yield template[start:k], template[start + len(_SPIN_OPEN) : k - 2], start, k
+        i = k
+
+
+def _split_variants(inner: str) -> list:
+    """Split spin variants on "|", but only at brace-depth 0 — a "|" inside a
+    nested {{token|fallback}} must not be mistaken for a variant separator."""
+    parts, buf, depth, i, n = [], [], 0, 0, len(inner)
+    while i < n:
+        two = inner[i : i + 2]
+        if two == "{{":
+            depth += 1
+            buf.append(two)
+            i += 2
+        elif two == "}}":
+            depth -= 1
+            buf.append(two)
+            i += 2
+        elif inner[i] == "|" and depth == 0:
+            parts.append("".join(buf))
+            buf = []
+            i += 1
+        else:
+            buf.append(inner[i])
+            i += 1
+    parts.append("".join(buf))
+    return parts
+
+
+def _is_known(name: str, known_tokens: frozenset, custom_keys) -> bool:
+    if name in known_tokens:
+        return True
+    if name.startswith("custom.") and name[len("custom.") :]:
+        return custom_keys is None or name[len("custom.") :] in custom_keys
+    return False
+
+
+def _unknown_tokens_against(
+    template: Optional[str], known_tokens: frozenset, custom_keys=None
+) -> list:
+    """Shared unknown_tokens implementation, parameterized on the caller's
+    known-token set (email's KNOWN_TOKENS vs SMS's narrower SMS_KNOWN_TOKENS)
+    so both modules validate the same {{#if}}/{{spin:}} grammar without
+    drifting. Order of first appearance, deduped; also reports structural
+    errors as pseudo-tokens the API 422s on."""
+    template = template or ""
+    out: list = []
+
+    # #if opener tokens (checked against known_tokens same as plain tokens).
+    for m in _IF_OPEN_RE.finditer(template):
+        name = m.group(1)
+        if not _is_known(name, known_tokens, custom_keys) and name not in out:
+            out.append(name)
+
+    # Plain {{token}}/{{token|fallback}} tokens — scanned with the #if/else/
+    # endif markers stripped out first so "else" (which otherwise matches the
+    # plain-token grammar) is never misreported as an unknown token.
+    stripped = _IF_OPEN_RE.sub("", template).replace("{{else}}", "").replace(
+        "{{/if}}", ""
+    )
+    for m in _TOKEN_RE.finditer(stripped):
+        name = m.group(1)
+        if not _is_known(name, known_tokens, custom_keys) and name not in out:
+            out.append(name)
+
+    # Structural: every #if opener needs a matching {{/if}}.
+    if len(_IF_OPEN_RE.findall(template)) != len(_IF_CLOSE_RE.findall(template)):
+        out.append("#if without {{/if}}")
+
+    # Structural: every spin block needs at least 2 variants.
+    for _full, inner, _start, _end in _iter_spin_blocks(template):
+        if len(_split_variants(inner)) < 2 and "spin with <2 variants" not in out:
+            out.append("spin with <2 variants")
+
+    return out
 
 
 def unknown_tokens(template: Optional[str], custom_keys=None) -> list:
     """Tokens in `template` the renderer would drop: not in KNOWN_TOKENS and,
     when `custom_keys` is given, custom.<key> whose key isn't a real field
-    definition. Order of first appearance, deduped."""
-    out: list = []
-    for m in _TOKEN_RE.finditer(template or ""):
-        name = m.group(1)
-        if name in KNOWN_TOKENS:
-            continue
-        if name.startswith("custom.") and name[len("custom.") :]:
-            if custom_keys is None or name[len("custom.") :] in custom_keys:
-                continue
-        if name not in out:
-            out.append(name)
-    return out
+    definition. Also reports #if/spin structural errors. Order of first
+    appearance, deduped."""
+    return _unknown_tokens_against(template, KNOWN_TOKENS, custom_keys)
 
 
 def _cap_token_word(tok: str) -> str:
@@ -136,15 +268,36 @@ _AI_SYSTEM_PROMPT = (
 )
 
 
-def _company_name(db: Session, contact: Contact) -> Optional[str]:
+def _company_facts(db: Session, contact: Contact) -> Dict[str, Optional[str]]:
+    """The small set of Company-derived grounded facts a template/AI prompt
+    may use. One db.get, same as the old _company_name — refactored into a
+    dict so the new company_* tokens share the single lookup."""
+    facts: Dict[str, Optional[str]] = {
+        "company": None,
+        "company_description": None,
+        "company_revenue": None,
+        "company_employees": None,
+    }
     if not contact.company_id:
-        return None
+        return facts
     company = db.get(Company, contact.company_id)
-    return company.name if company else None
+    if company is None:
+        return facts
+    facts["company"] = company.name
+    facts["company_description"] = company.description
+    facts["company_revenue"] = company.estimated_revenue
+    facts["company_employees"] = (
+        str(company.employee_count) if company.employee_count is not None else None
+    )
+    return facts
+
+
+def _company_name(db: Session, contact: Contact) -> Optional[str]:
+    return _company_facts(db, contact)["company"]
 
 
 def _resolve_token(
-    name: str, contact: Contact, company_name: Optional[str], extra: Dict[str, Any]
+    name: str, contact: Contact, facts: Dict[str, Optional[str]], extra: Dict[str, Any]
 ) -> Optional[Any]:
     if name in extra:
         return extra[name]
@@ -152,8 +305,10 @@ def _resolve_token(
         return contact.first_name
     if name == "last_name":
         return contact.last_name
-    if name == "company":
-        return company_name
+    if name == "job_title":
+        return contact.job_title
+    if name in ("company", "company_description", "company_revenue", "company_employees"):
+        return facts.get(name)
     if name == "city":
         return contact.city
     if name == "state":
@@ -165,10 +320,54 @@ def _resolve_token(
     return None
 
 
+def _render_spintax(template: str, contact: Contact) -> str:
+    """Deterministic spintax: sha256(contact.id + the block's own full text)
+    picks the variant, so the same contact always gets the same text (stable
+    across re-renders — required for the cached ai_snippet/spin combo to stay
+    consistent) while different contacts spread across the variant list.
+    Never random(). A block with <2 variants is a save-time error
+    (unknown_tokens); at render time it's defensively treated as its sole/
+    first variant rather than crashing a send."""
+
+    out = []
+    last = 0
+    for full_text, inner, start, end in _iter_spin_blocks(template):
+        out.append(template[last:start])
+        variants = _split_variants(inner)
+        if len(variants) < 2:
+            out.append(variants[0] if variants else "")
+        else:
+            idx = int(
+                hashlib.sha256((str(contact.id) + full_text).encode()).hexdigest(), 16
+            ) % len(variants)
+            out.append(variants[idx])
+        last = end
+    out.append(template[last:])
+    return "".join(out)
+
+
+def _render_conditionals(
+    template: str, contact: Contact, facts: Dict[str, Optional[str]], extra: Dict[str, Any]
+) -> str:
+    """{{#if token}}...{{/if}} / {{#if token}}...{{else}}...{{/if}}, single
+    level, evaluated before token substitution. `token` may be any KNOWN
+    token or custom.<key> — resolved the same way substitution resolves it."""
+
+    def _repl(m: re.Match) -> str:
+        name = m.group(1)
+        true_branch = m.group(2) or ""
+        false_branch = m.group(3) or ""
+        value = _resolve_token(name, contact, facts, extra)
+        truthy = value is not None and str(value).strip() != ""
+        return true_branch if truthy else false_branch
+
+    return _IF_RE.sub(_repl, template)
+
+
 def _render_template(
     template: Optional[str],
     contact: Contact,
-    company_name: Optional[str],
+    facts: Dict[str, Optional[str]],
     extra: Dict[str, Any],
 ) -> str:
     if not template:
@@ -179,11 +378,16 @@ def _render_template(
         fallback = m.group(2)  # None when no "|fallback" was given
         if name in _LITERAL_TOKENS:
             return m.group(0)  # leave the literal token for the gateway
-        value = _resolve_token(name, contact, company_name, extra)
+        value = _resolve_token(name, contact, facts, extra)
         if value is None or str(value).strip() == "":
             return fallback if fallback is not None else ""
         return _smart_case(name, str(value))
 
+    # Spintax first (its own salt is the block's raw text, so it must run
+    # before anything rewrites the template), then conditionals, then plain
+    # token substitution, then the tidy pass.
+    template = _render_spintax(template, contact)
+    template = _render_conditionals(template, contact, facts, extra)
     return _tidy(_TOKEN_RE.sub(_repl, template))
 
 
@@ -199,15 +403,15 @@ def render_step(
     """(subject, body) with tokens substituted. A null/blank subject_template
     returns subject=None — the gateway threads it as a "Re:" reply. The
     {{ai_snippet}} token resolves to `ai_snippet` (empty by default)."""
-    company_name = _company_name(db, contact)
+    facts = _company_facts(db, contact)
     extra = {"ai_snippet": ai_snippet}
     raw_subject = (step.subject_template or "").strip()
     subject = (
-        _render_template(step.subject_template, contact, company_name, extra)
+        _render_template(step.subject_template, contact, facts, extra)
         if raw_subject
         else None
     )
-    body = _render_template(step.body_template or "", contact, company_name, extra)
+    body = _render_template(step.body_template or "", contact, facts, extra)
     return subject, body
 
 
@@ -241,12 +445,34 @@ def _record_usage(
     db.flush()
 
 
+def clean_ai_snippet(text: Optional[str], max_words: int) -> str:
+    """Post-process a model's raw output into a snippet safe to splice into a
+    template, or "" to discard it (fail-open — the caller never crashes on
+    this, it just gets an empty snippet). Strips wrapping quotes/backticks;
+    discards output that leaks a URL, still contains a template token
+    ("{{" — the model echoing the instructions/token soup back), or runs
+    over `max_words` (email: 60, SMS: 25 — SMS is character-constrained)."""
+    t = (text or "").strip()
+    while len(t) >= 2 and t[0] == "`" and t[-1] == "`":
+        t = t[1:-1].strip()
+    if len(t) >= 2 and t[0] == t[-1] and t[0] in ("\"", "'"):
+        t = t[1:-1].strip()
+    if not t:
+        return ""
+    if "http://" in t or "https://" in t or "{{" in t:
+        return ""
+    if len(t.split()) > max_words:
+        return ""
+    return t
+
+
 def generate_ai_snippet(
     db: Session, org: Organization, contact: Contact, step: EmailStep
 ) -> str:
     """One/two grounded sentences for this contact, or "" on any failure
-    (unconfigured key, over the monthly AI cap, model/timeout error). A send is
-    never blocked on AI — the template still goes out without the snippet."""
+    (unconfigured key, over the monthly AI cap, model/timeout error, or the
+    output guard discarding an unsafe response). A send is never blocked on
+    AI — the template still goes out without the snippet."""
     if not (step.ai_instructions or "").strip():
         return ""
     grounding = {
@@ -271,7 +497,10 @@ def generate_ai_snippet(
         with ai_provider.using(res):
             text, input_tokens, output_tokens = _call_model(_AI_SYSTEM_PROMPT, user_content)
         _record_usage(db, org, res.model, input_tokens, output_tokens)
-        return (text or "").strip()
+        cleaned = clean_ai_snippet(text, 60)
+        if not cleaned:
+            log.info("outreach AI snippet discarded by output guard for contact %s", contact.id)
+        return cleaned
     except Exception as e:  # never let AI failure stop a send
         log.info("outreach AI snippet skipped for contact %s: %s", contact.id, e)
         return ""

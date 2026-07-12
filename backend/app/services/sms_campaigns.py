@@ -36,6 +36,7 @@ Time & window rules (documented, internally consistent, mirrors email):
 """
 
 import datetime as dt
+import json
 import logging
 from typing import List, Optional
 from zoneinfo import ZoneInfo
@@ -59,44 +60,149 @@ from ..models.sms_outreach import (
     SmsEnrollment,
     SmsStep,
 )
+from . import ai_insights, ai_provider
 from . import email_personalize  # reused for token rendering (regex + casing/tidy)
 from . import sms_consent
 from . import sms_send as gateway
 
 log = logging.getLogger("salescale.sms_outreach")
 
-# The only tokens an SMS template may use — no ai_snippet (no AI in SMS
-# personalization) and no unsubscribe_url (STOP is the SMS opt-out
-# mechanism, not a link). A typo'd or email-only token would otherwise
-# silently render as "" in every sent text; the steps API rejects it at save
-# time instead (see unknown_tokens below).
-SMS_KNOWN_TOKENS = frozenset({"first_name", "last_name", "company", "city", "state"})
+# The tokens an SMS template may use. ai_snippet + job_title added alongside
+# email's equivalents; deliberately narrower than email's KNOWN_TOKENS — no
+# company_description/revenue/employees (too long for a text) and no
+# unsubscribe_url (STOP is the SMS opt-out mechanism, not a link). A typo'd
+# or email-only token would otherwise silently render as "" in every sent
+# text; the steps API rejects it at save time instead (see unknown_tokens).
+SMS_KNOWN_TOKENS = frozenset(
+    {"first_name", "last_name", "company", "city", "state", "job_title", "ai_snippet"}
+)
+
+# Cost-blowout guard: a runaway custom field or AI snippet could otherwise
+# balloon one text into many billed segments. GSM-7 single-segment cap is 160
+# chars; multipart segments are 153 chars each (frontend SMS_SEGMENT_LEN
+# mirrors the single-segment 160; this is the send-time enforcement).
+_SMS_SEGMENT_LEN = 160
+_SMS_MULTIPART_SEGMENT_LEN = 153
+MAX_RENDERED_SEGMENTS = 3
+
+_SMS_AI_SYSTEM_PROMPT = (
+    "You write ONE short, natural sentence (max 15 words) to personalize a "
+    "text message, using ONLY the grounded facts given. No links, no "
+    "emojis, no greeting, no sign-off, no quotation marks."
+)
 
 
-def unknown_tokens(template: Optional[str]) -> list:
-    """Tokens in `template` that aren't in SMS_KNOWN_TOKENS. Reuses email
-    personalize's token regex (same {{name}} / {{name|fallback}} grammar) so
-    the two modules never drift on tokenizing syntax; the allowed-token set
-    is SMS's own, deliberately narrower than email's."""
-    out: list = []
-    for m in email_personalize._TOKEN_RE.finditer(template or ""):
-        name = m.group(1)
-        if name in SMS_KNOWN_TOKENS:
-            continue
-        if name not in out:
-            out.append(name)
-    return out
+def segment_count(text: str) -> int:
+    """GSM-7 segment math: 1 segment up to 160 chars, otherwise multipart at
+    153 chars/segment (the concatenation-header overhead)."""
+    n = len(text or "")
+    if n <= _SMS_SEGMENT_LEN:
+        return 1
+    return -(-n // _SMS_MULTIPART_SEGMENT_LEN)  # ceil division
 
 
-def render_body(db: Session, contact: Contact, step: SmsStep) -> str:
-    """Render one step's body for one contact. Reuses email_personalize's
-    template substitution (casing normalization + the emptied-token tidy
-    pass) so `{{first_name|there}}` etc. behave identically to email. `extra`
-    is empty — SMS has no ai_snippet/unsubscribe_url tokens to inject."""
-    company_name = email_personalize._company_name(db, contact)
-    return email_personalize._render_template(
-        step.body_template or "", contact, company_name, {}
+def unknown_tokens(template: Optional[str], custom_keys=None) -> list:
+    """Tokens in `template` that aren't in SMS_KNOWN_TOKENS (or a real
+    custom.<key> when `custom_keys` is given), plus #if/spin structural
+    errors. Delegates to email_personalize's shared implementation (same
+    {{#if}}/{{spin:}}/{{token|fallback}} grammar) parameterized on SMS's own,
+    narrower known-token set so the two modules never drift on syntax."""
+    return email_personalize._unknown_tokens_against(
+        template, SMS_KNOWN_TOKENS, custom_keys
     )
+
+
+def render_body(db: Session, contact: Contact, step: SmsStep, *, ai_snippet: str = "") -> str:
+    """Render one step's body for one contact. Reuses email_personalize's
+    template substitution (casing normalization, #if/spin, the emptied-token
+    tidy pass) so `{{first_name|there}}` etc. behave identically to email.
+    `ai_snippet` is the only extra token SMS injects."""
+    facts = email_personalize._company_facts(db, contact)
+    return email_personalize._render_template(
+        step.body_template or "", contact, facts, {"ai_snippet": ai_snippet}
+    )
+
+
+def _cached_or_generate(
+    db: Session,
+    org: Organization,
+    contact: Contact,
+    enrollment: Optional[SmsEnrollment],
+    step: SmsStep,
+) -> str:
+    """Enrollment-cached snippet (ai_snippets: step_id -> text), mirroring
+    email_personalize._cached_or_generate. Preview (enrollment=None)
+    generates fresh without caching."""
+    if not (step.ai_instructions or "").strip():
+        return ""
+    if enrollment is not None:
+        cache = dict(enrollment.ai_snippets or {})
+        if step.id in cache:
+            return cache[step.id] or ""
+        snippet = generate_ai_snippet(db, org, contact, step)
+        cache[step.id] = snippet
+        enrollment.ai_snippets = cache  # reassign so SQLAlchemy tracks the JSON
+        return snippet
+    return generate_ai_snippet(db, org, contact, step)
+
+
+def generate_ai_snippet(
+    db: Session, org: Organization, contact: Contact, step: SmsStep
+) -> str:
+    """One short grounded sentence for this contact, or "" on any failure —
+    unconfigured key, over the monthly AI cap, model/timeout error, or the
+    output guard discarding an unsafe response. A send is never blocked on
+    AI (mirrors email_personalize.generate_ai_snippet)."""
+    if not (step.ai_instructions or "").strip():
+        return ""
+    grounding = {
+        "contact": {
+            "first_name": contact.first_name,
+            "last_name": contact.last_name,
+            "job_title": contact.job_title,
+            "company_name": email_personalize._company_name(db, contact),
+            "city": contact.city,
+            "state": contact.state,
+            "custom_fields": contact.custom_fields or {},
+        },
+        "org": {"name": org.name},
+        "instructions": step.ai_instructions,
+    }
+    try:
+        ai_insights.check_allowance(db, org)  # entitlement + monthly cap
+        res = ai_provider.resolve(db, org)  # provider + model + BYO/operator key
+        user_content = (
+            f"GROUNDED_DATA:\n{json.dumps(grounding, sort_keys=True, default=str)}\n\n"
+            f"INSTRUCTIONS:\n{step.ai_instructions}"
+        )
+        with ai_provider.using(res):
+            text, input_tokens, output_tokens = email_personalize._call_model(
+                _SMS_AI_SYSTEM_PROMPT, user_content
+            )
+        email_personalize._record_usage(db, org, res.model, input_tokens, output_tokens)
+        cleaned = email_personalize.clean_ai_snippet(text, 25)
+        if not cleaned:
+            log.info("sms outreach AI snippet discarded by output guard for contact %s", contact.id)
+        return cleaned
+    except Exception as e:  # never let AI failure stop a send
+        log.info("sms outreach AI snippet skipped for contact %s: %s", contact.id, e)
+        return ""
+
+
+def render_full(
+    db: Session,
+    org: Organization,
+    enrollment: Optional[SmsEnrollment],
+    step: SmsStep,
+    contact: Optional[Contact] = None,
+) -> str:
+    """Full render incl. {{ai_snippet}} (from the enrollment cache,
+    generating once if absent). `contact` may be passed directly (preview);
+    otherwise it is loaded from the enrollment."""
+    if contact is None:
+        contact = db.get(Contact, enrollment.contact_id)
+    snippet = _cached_or_generate(db, org, contact, enrollment, step)
+    return render_body(db, contact, step, ai_snippet=snippet)
 
 
 # --- enrollment -------------------------------------------------------------
@@ -274,7 +380,29 @@ def process_enrollment(db: Session, enrollment: SmsEnrollment) -> None:
 
     org = db.get(Organization, campaign.organization_id)
     contact = db.get(Contact, enrollment.contact_id)
-    body = render_body(db, contact, current)
+    body = render_full(db, org, enrollment, current, contact=contact)
+
+    # Send-time failsafes — all deterministic, so exit rather than retry.
+    if not body.strip():
+        log.warning("sms enrollment %s render guard: blank body; exiting", enrollment.id)
+        _end(enrollment, SMS_ENROLL_EXITED, "render_empty")
+        return
+    if "{{" in body:
+        log.warning(
+            "sms enrollment %s render guard: leftover template braces; exiting",
+            enrollment.id,
+        )
+        _end(enrollment, SMS_ENROLL_EXITED, "render_error")
+        return
+    if segment_count(body) > MAX_RENDERED_SEGMENTS:
+        log.warning(
+            "sms enrollment %s render guard: %d segments > cap %d; exiting",
+            enrollment.id,
+            segment_count(body),
+            MAX_RENDERED_SEGMENTS,
+        )
+        _end(enrollment, SMS_ENROLL_EXITED, "too_long")
+        return
 
     code, msg = gateway.send(
         db,

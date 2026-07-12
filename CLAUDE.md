@@ -882,7 +882,40 @@ live activation + the entitlement flip, the Outreach module build
       list create/filter (member counts), bulk city edit persisted
       ({"updated":2}), toggle → new contact born opted-in with the
       org_default source, email enroll-by-list returned {"enrolled":2}.
-      NOT deployed yet.
+      DEPLOYED to production 2026-07-12 (with the personalization upgrade
+      below).
+- [x] Personalization upgrade (email + SMS) — Clay-style features + hard
+      failsafes (two Sonnet agents, pinned contract PERSONALIZE_HANDOFF):
+      (1) shared engine (services/email_personalize.py): four new grounded
+      tokens job_title/company_description/company_revenue/company_employees
+      (from the Phase-12/enrichment columns; _company_facts replaces
+      _company_name); single-level {{#if token}}…{{else}}…{{/if}}
+      conditionals evaluated before substitution; deterministic spintax
+      {{spin:a|b|c}} — sha256(contact.id + block text) picks the variant, so
+      re-renders are idempotent per contact while variants spread across the
+      audience (template-fingerprint/deliverability play); brace-depth
+      scanner (_iter_spin_blocks) because nested {{tokens}} inside variants
+      break a naive non-greedy regex. (2) SMS AI personalization:
+      SmsStep.ai_instructions + SmsEnrollment.ai_snippets (migration
+      b3f8a1d47c92), grounded one-sentence ≤15-word prompt, same
+      outreach_personalize metering, enrollment-cached, preview uncached;
+      SMS_KNOWN_TOKENS += ai_snippet/job_title (+ custom.* via custom_keys).
+      (3) Failsafes: clean_ai_snippet output guard (strips quote-wrapping;
+      discards URLs/template-syntax/over-length → "", still fail-open);
+      save-time 422s extended to unknown #if names, unclosed #if, <2-variant
+      spin (both step APIs, shared _unknown_tokens_against); send-time
+      guards — email exits enrollment render_error on blank/leftover-{{
+      (unsubscribe_url literal exempt, the gateway resolves it), SMS exits
+      render_empty/render_error/too_long (MAX_RENDERED_SEGMENTS=3, GSM-7
+      160/153 math — cost-blowout guard for runaway custom fields/AI text).
+      Frontend: SMS step editor gained the collapsed AI-instructions block
+      (mirrors email's), both TOKENS_HINTs list the new tokens + #if/spin
+      syntax, segment note "counted before personalization; capped at 3".
+      Tests 404 → 432 (test_personalize.py 21 unit + engine-exit cases).
+      Known test-isolation note: module-scoped org fixtures leave due
+      enrollments other tests' run_due() can pick up — new tests exit their
+      enrollments or filter captured sends by recipient. DEPLOYED to
+      production 2026-07-12.
 - [ ] Stripe live activation + entitlement flip (after 12–14, so real
       limits land everywhere in one pass)
 - [ ] Outreach module build (dev-mode) — go-live gated on Meta App

@@ -49,6 +49,7 @@ from ..models.email_outreach import (
     EXIT_BOUNCED,
     EXIT_ERROR,
     EXIT_MANUAL,
+    EXIT_RENDER_ERROR,
     EXIT_REPLIED,
     EXIT_UNSUBSCRIBED,
     KIND_CAMPAIGN,
@@ -68,6 +69,18 @@ log = logging.getLogger("salescale.email_outreach")
 
 def _aware(value: dt.datetime) -> dt.datetime:
     return value if value.tzinfo else value.replace(tzinfo=dt.timezone.utc)
+
+
+# The one literal token the SEND GATEWAY resolves (per-message unsubscribe
+# link) — never the render engine, so its survival past rendering is
+# expected and must not trip the leftover-brace guard below.
+_ALLOWED_LEFTOVER = "{{unsubscribe_url}}"
+
+
+def _has_leftover_braces(text: Optional[str]) -> bool:
+    if not text:
+        return False
+    return "{{" in text.replace(_ALLOWED_LEFTOVER, "")
 
 
 # --- enrollment -------------------------------------------------------------
@@ -274,6 +287,21 @@ def process_enrollment(db: Session, enrollment: EmailEnrollment) -> None:
     subject, body = email_personalize.render_full(
         db, org, enrollment, current, campaign, contact=contact
     )
+    # Render guard: a blank body, or a leftover "{{" (an unclosed #if, or a
+    # typo the save-time 422 somehow missed) is deterministic — retrying
+    # won't fix it, so exit rather than defer. {{unsubscribe_url}} is the one
+    # allowed literal token; the gateway resolves it, not this engine.
+    if not (body or "").strip() or _has_leftover_braces(subject) or _has_leftover_braces(
+        body
+    ):
+        log.warning(
+            "email enrollment %s render guard tripped (blank body or leftover"
+            " template braces); exiting",
+            enrollment.id,
+        )
+        _end(enrollment, ENROLL_EXITED, EXIT_RENDER_ERROR)
+        return
+
     in_reply = (
         _last_thread_message(db, enrollment.thread_id)
         if enrollment.thread_id

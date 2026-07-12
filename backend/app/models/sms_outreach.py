@@ -55,7 +55,10 @@ SMS_CAMPAIGN_ARCHIVED = "archived"
 
 SMS_ENROLL_ACTIVE = "active"
 SMS_ENROLL_COMPLETED = "completed"
-SMS_ENROLL_EXITED = "exited"  # exit_reason: replied | opted_out | manual | failed
+SMS_ENROLL_EXITED = "exited"  # exit_reason: replied | opted_out | manual | failed |
+# render_empty | render_error | too_long (the send-time personalization
+# failsafes in services/sms_campaigns.py — deterministic, so they exit
+# rather than retry)
 SMS_ENROLL_ERROR = "error"
 
 SMS_DIR_IN = "in"
@@ -172,6 +175,8 @@ class SmsStep(Base):
     position: Mapped[int] = mapped_column(Integer, nullable=False)
     wait_days: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     body_template: Mapped[Optional[str]] = mapped_column(Text)
+    # Grounded {{ai_snippet}} instructions (mirrors EmailStep.ai_instructions).
+    ai_instructions: Mapped[Optional[str]] = mapped_column(Text)
 
 
 class SmsEnrollment(Base):
@@ -206,6 +211,9 @@ class SmsEnrollment(Base):
     replied_at: Mapped[Optional[dt.datetime]] = mapped_column(DateTime(timezone=True))
     enrolled_by: Mapped[Optional[str]] = mapped_column(String(36))
     ended_at: Mapped[Optional[dt.datetime]] = mapped_column(DateTime(timezone=True))
+    # Cache: step_id -> generated snippet text (mirrors EmailEnrollment.ai_snippets)
+    # so re-processing an enrollment never re-bills the AI provider.
+    ai_snippets: Mapped[Optional[dict]] = mapped_column(JSON)
     created_at: Mapped[dt.datetime] = created_at_column()
 
 

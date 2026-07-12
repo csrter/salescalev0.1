@@ -120,14 +120,19 @@ const HOURS = Array.from({ length: 24 }, (_, i) => i);
 const hourLabel = (h: number) =>
   `${((h + 11) % 12) + 1}:00 ${h < 12 ? "AM" : "PM"}`;
 
-// The SMS module's token set is deliberately smaller than email's — no
-// ai_snippet, no unsubscribe_url (STOP is a carrier-level reply, not a link).
+// The SMS token set is narrower than email's — no company_description/
+// revenue/employees (too long for texts), but job_title and ai_snippet are
+// shared. No unsubscribe_url (STOP is a carrier-level reply, not a link).
 const TOKENS_HINT = (
   <>
     Personalization: <code>{"{{first_name}}"}</code>{" "}
     <code>{"{{last_name}}"}</code> <code>{"{{company}}"}</code>{" "}
-    <code>{"{{city}}"}</code> <code>{"{{state}}"}</code>. Fallbacks like{" "}
-    <code>{"{{first_name|there}}"}</code> also work.
+    <code>{"{{city}}"}</code> <code>{"{{state}}"}</code>{" "}
+    <code>{"{{job_title}}"}</code> <code>{"{{custom.<key>}}"}</code>. Fallbacks
+    like <code>{"{{first_name|there}}"}</code>, plus{" "}
+    <code>{"{{ai_snippet}}"}</code>. Conditionals{" "}
+    <code>{"{{#if token}}...{{/if}}"}</code> and spintax{" "}
+    <code>{"{{spin:a|b|c}}"}</code> also work.
   </>
 );
 
@@ -1089,7 +1094,12 @@ function StepsEditor({
   const add = () =>
     setSteps([
       ...steps,
-      { position: steps.length, wait_days: steps.length === 0 ? 0 : 3, body: "" },
+      {
+        position: steps.length,
+        wait_days: steps.length === 0 ? 0 : 3,
+        body: "",
+        ai_instructions: null,
+      },
     ]);
 
   return (
@@ -1146,6 +1156,7 @@ function StepRow({
   onMove: (dir: -1 | 1) => void;
   onPreview: () => void;
 }) {
+  const [showAi, setShowAi] = useState(Boolean(step.ai_instructions));
   const len = step.body.length;
   const segments = Math.max(1, Math.ceil(len / SMS_SEGMENT_LEN));
 
@@ -1197,6 +1208,30 @@ function StepRow({
         <span className={`sms-step-charcount${segments > 1 ? " sms-step-charcount--over" : ""}`}>
           {len} characters · {segments} segment{segments === 1 ? "" : "s"}
         </span>
+        <p className="sms-hint">
+          Counted before personalization; sends are capped at 3 segments.
+        </p>
+
+        {showAi ? (
+          <Field
+            label="AI personalization instructions"
+            description="Guides the {{ai_snippet}} the model writes per contact."
+            optional
+          >
+            <textarea
+              rows={3}
+              value={step.ai_instructions ?? ""}
+              onChange={(e) =>
+                onChange({ ...step, ai_instructions: e.target.value || null })
+              }
+              placeholder="Reference their city and vertical; keep it to one short sentence."
+            />
+          </Field>
+        ) : (
+          <Button variant="link" size="sm" onClick={() => setShowAi(true)}>
+            + AI personalization instructions
+          </Button>
+        )}
       </div>
     </GlassCard>
   );

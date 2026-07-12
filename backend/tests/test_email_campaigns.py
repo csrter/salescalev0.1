@@ -962,3 +962,108 @@ def test_campaign_serialization_is_flat_not_nested(cc_org, api, probe_ok):
     assert "stats" not in detail
     assert detail["enrolled"] == 0
     assert detail["steps"] == []
+
+
+# --- personalization upgrade: save-time 422s + render_error exit -----------
+
+
+def test_step_save_422s_on_bad_if_and_spin(cc_org, api, probe_ok):
+    acct = _mk_account(cc_org, api, from_email="valid8@campaignco.com")
+    camp = _mk_campaign(cc_org, api, acct["id"], **_ALWAYS)
+
+    # Unknown #if token name.
+    r = api.put(
+        f"/api/email-outreach/campaigns/{camp['id']}/steps",
+        json={"steps": [{"position": 1, "body": "{{#if bogus}}x{{/if}}"}]},
+        headers=cc_org["headers"],
+    )
+    assert r.status_code == 422
+    assert "bogus" in r.json()["detail"]
+
+    # Unclosed #if.
+    r2 = api.put(
+        f"/api/email-outreach/campaigns/{camp['id']}/steps",
+        json={"steps": [{"position": 1, "body": "{{#if job_title}}x"}]},
+        headers=cc_org["headers"],
+    )
+    assert r2.status_code == 422
+    assert "#if without" in r2.json()["detail"]
+
+    # Spin block with <2 variants.
+    r3 = api.put(
+        f"/api/email-outreach/campaigns/{camp['id']}/steps",
+        json={"steps": [{"position": 1, "body": "{{spin:only one}}"}]},
+        headers=cc_org["headers"],
+    )
+    assert r3.status_code == 422
+    assert "spin with <2 variants" in r3.json()["detail"]
+
+    # Valid #if/spin + the new grounded tokens save cleanly.
+    ok = _set_steps(
+        cc_org,
+        api,
+        camp["id"],
+        [
+            {
+                "position": 1,
+                "body": (
+                    "{{#if job_title}}Hi {{job_title}}{{else}}Hi there{{/if}} "
+                    "{{spin:one|two}} {{company_description}}"
+                ),
+            }
+        ],
+    )
+    assert ok["steps"][0]["body"].startswith("{{#if job_title}}")
+
+
+def test_render_error_exits_enrollment_on_unclosed_conditional(
+    cc_org, api, probe_ok, captured_sends
+):
+    """An unclosed {{#if}} survives token substitution as literal "{{" text —
+    the send-time render guard must catch it and exit rather than send junk
+    or spin forever."""
+    acct = _mk_account(cc_org, api, from_email="rendererr@campaignco.com")
+    camp = _mk_campaign(cc_org, api, acct["id"], **_ALWAYS)
+    contact = _mk_contact(cc_org, api, email_addr="rendererr-lead@example.com")
+
+    db = SessionLocal()
+    try:
+        campaign_row = db.get(EmailCampaign, camp["id"])
+        # Bypass the API's own 422 to plant a template that would only ever
+        # arise from an edit made before this guardrail existed, or a bug in
+        # the save-time validator — the engine must still be defensive.
+        db.add(
+            EmailStep(
+                organization_id=campaign_row.organization_id,
+                campaign_id=camp["id"],
+                position=1,
+                wait_days=0,
+                subject_template="Hello",
+                body_template="Hi {{#if job_title}}there",
+            )
+        )
+        campaign_row.status = "active"
+        db.commit()
+    finally:
+        db.close()
+
+    api.post(
+        f"/api/email-outreach/campaigns/{camp['id']}/enroll",
+        json={"contact_ids": [contact]},
+        headers=cc_org["headers"],
+    )
+    _tick()
+
+    e = select_enrollment(camp["id"], contact)
+    db = SessionLocal()
+    try:
+        row = db.execute(e).scalar_one()
+        assert row.status == "exited"
+        assert row.exit_reason == "render_error"
+    finally:
+        db.close()
+    # Never reached the transport for THIS contact (captured_sends is a
+    # shared list across the whole module-scoped cc_org; a leftover
+    # enrollment from an earlier test can legitimately fire on the same
+    # tick, so filter rather than requiring the whole list empty).
+    assert not any(m["To"] == "rendererr-lead@example.com" for m in captured_sends)

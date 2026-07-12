@@ -129,9 +129,15 @@ const TOKENS_HINT = (
     Personalization: <code>{"{{first_name}}"}</code>{" "}
     <code>{"{{last_name}}"}</code> <code>{"{{company}}"}</code>{" "}
     <code>{"{{city}}"}</code> <code>{"{{state}}"}</code>{" "}
-    <code>{"{{email}}"}</code> <code>{"{{custom.<key>}}"}</code>. Fallbacks like{" "}
+    <code>{"{{email}}"}</code> <code>{"{{job_title}}"}</code>{" "}
+    <code>{"{{company_description}}"}</code>{" "}
+    <code>{"{{company_revenue}}"}</code>{" "}
+    <code>{"{{company_employees}}"}</code>{" "}
+    <code>{"{{custom.<key>}}"}</code>. Fallbacks like{" "}
     <code>{"{{first_name|there}}"}</code>, plus <code>{"{{ai_snippet}}"}</code>{" "}
-    and <code>{"{{unsubscribe_url}}"}</code>.
+    and <code>{"{{unsubscribe_url}}"}</code>. Conditionals{" "}
+    <code>{"{{#if token}}...{{else}}...{{/if}}"}</code> and spintax{" "}
+    <code>{"{{spin:a|b|c}}"}</code> also work (single level, no nesting).
   </>
 );
 

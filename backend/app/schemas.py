@@ -1395,6 +1395,7 @@ class SmsStepIn(BaseModel):
     position: int = Field(ge=1)
     wait_days: int = Field(default=0, ge=0, le=365)
     body: str = Field(min_length=1, max_length=1600)
+    ai_instructions: Optional[str] = Field(default=None, max_length=5000)
 
 
 class SmsStepsIn(BaseModel):

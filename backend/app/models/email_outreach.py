@@ -67,6 +67,10 @@ EXIT_UNSUBSCRIBED = "unsubscribed"
 EXIT_BOUNCED = "bounced"
 EXIT_MANUAL = "manual"
 EXIT_ERROR = "error"
+# A rendered send was deterministically unsendable (blank body, or a leftover
+# "{{" template artifact) — retrying changes nothing, so the engine exits
+# rather than defers (services/email_campaigns.py's render guard).
+EXIT_RENDER_ERROR = "render_error"
 
 # --- Message rows ---
 DIR_IN = "in"

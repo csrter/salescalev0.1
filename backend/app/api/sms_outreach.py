@@ -52,6 +52,7 @@ from ..schemas import (
     SmsStepsIn,
 )
 from ..security import encrypt_secret
+from ..services import custom_fields as custom_fields_svc
 from ..services import entitlements, sms_campaigns, sms_consent, sms_send
 
 router = APIRouter(prefix="/api/sms", tags=["sms-outreach"])
@@ -375,6 +376,7 @@ def _step_out(s: SmsStep) -> dict:
         "position": s.position,
         "wait_days": s.wait_days,
         "body": s.body_template,
+        "ai_instructions": s.ai_instructions,
     }
 
 
@@ -505,9 +507,12 @@ def set_steps(
         )
     # A typo'd or email-only token would silently render as "" in every sent
     # text — reject it here, where the author can still see it.
+    custom_keys = set(
+        custom_fields_svc.definitions_by_key(db, campaign.organization_id)
+    )
     bad: list = []
     for s in body.steps:
-        for tok in sms_campaigns.unknown_tokens(s.body):
+        for tok in sms_campaigns.unknown_tokens(s.body, custom_keys):
             if tok not in bad:
                 bad.append(tok)
     if bad:
@@ -516,7 +521,8 @@ def set_steps(
             "Unknown personalization token(s): "
             + ", ".join("{{%s}}" % t for t in bad)
             + ". Valid: "
-            + ", ".join(sorted(sms_campaigns.SMS_KNOWN_TOKENS)),
+            + ", ".join(sorted(sms_campaigns.SMS_KNOWN_TOKENS))
+            + ", custom.<field key>",
         )
     # Upsert in place — editable while ACTIVE. Existing ids keep their row;
     # ids not in the payload are deleted; id-less entries are new steps.
@@ -548,6 +554,7 @@ def set_steps(
             row.position = s.position
             row.wait_days = s.wait_days
             row.body_template = s.body
+            row.ai_instructions = s.ai_instructions
         else:
             db.add(
                 SmsStep(
@@ -556,6 +563,7 @@ def set_steps(
                     position=s.position,
                     wait_days=s.wait_days,
                     body_template=s.body,
+                    ai_instructions=s.ai_instructions,
                 )
             )
     db.commit()
@@ -741,7 +749,8 @@ def preview_campaign(
     if step is None:
         raise HTTPException(404, "No step at that position")
     org = db.get(Organization, scope.organization_id)
-    rendered = sms_campaigns.render_body(db, contact, step)
+    # enrollment=None: preview generates the ai_snippet fresh, never cached.
+    rendered = sms_campaigns.render_full(db, org, None, step, contact=contact)
     # Show the compliance suffix too — it's what actually goes out.
     final = sms_send.apply_compliance_suffix(
         rendered, org.name if org else "", first_step=(step.position == 1)

@@ -1769,6 +1769,7 @@ export interface SmsStep {
   position: number;
   wait_days: number;
   body: string;
+  ai_instructions: string | null;
 }
 
 export interface SmsCampaignDetail extends SmsCampaign {

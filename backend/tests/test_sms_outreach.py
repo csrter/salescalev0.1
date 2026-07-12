@@ -25,14 +25,17 @@ from sqlalchemy import select
 
 from app.db import SessionLocal
 from app.models.base import utcnow
+from app.models.core import Organization
 from app.models.crm import Contact
 from app.models.sms_outreach import (
     SMS_ENROLL_ACTIVE,
+    SmsCampaign,
     SmsEnrollment,
     SmsMessage,
+    SmsStep,
     SmsSuppression,
 )
-from app.services import sms_campaigns
+from app.services import email_personalize, sms_campaigns
 from app.services import sms_send as gateway
 from app.services import sms_consent
 
@@ -736,3 +739,200 @@ def test_sendblue_failed_status_from_error(monkeypatch):
     handle, code, detail = gateway._sendblue_send(_Acct(), "+14805559800", "hi")
     assert code == "4002"
     assert "blacklist" in detail.lower()
+
+
+# --- personalization upgrade: tokens, #if/spin validation, AI, failsafes ----
+
+
+def test_step_save_422s_on_bad_if_and_spin(sc_org, api, twilio_creds_ok):
+    acct = _mk_account(sc_org, api, from_number="+14805550200")
+    camp = _mk_campaign(sc_org, api, acct["id"], **_ALWAYS)
+
+    r = api.put(
+        f"/api/sms/campaigns/{camp['id']}/steps",
+        json={"steps": [{"position": 1, "body": "{{#if bogus}}x{{/if}}"}]},
+        headers=sc_org["headers"],
+    )
+    assert r.status_code == 422
+    assert "bogus" in r.json()["detail"]
+
+    r2 = api.put(
+        f"/api/sms/campaigns/{camp['id']}/steps",
+        json={"steps": [{"position": 1, "body": "{{#if job_title}}x"}]},
+        headers=sc_org["headers"],
+    )
+    assert r2.status_code == 422
+    assert "#if without" in r2.json()["detail"]
+
+    r3 = api.put(
+        f"/api/sms/campaigns/{camp['id']}/steps",
+        json={"steps": [{"position": 1, "body": "{{spin:only one}}"}]},
+        headers=sc_org["headers"],
+    )
+    assert r3.status_code == 422
+    assert "spin with <2 variants" in r3.json()["detail"]
+
+    # SMS's known-token set is narrower than email's — a valid EMAIL-only
+    # token is still unknown here.
+    r4 = api.put(
+        f"/api/sms/campaigns/{camp['id']}/steps",
+        json={"steps": [{"position": 1, "body": "{{company_description}}"}]},
+        headers=sc_org["headers"],
+    )
+    assert r4.status_code == 422
+    assert "company_description" in r4.json()["detail"]
+
+    ok = _set_steps(
+        sc_org,
+        api,
+        camp["id"],
+        [
+            {
+                "position": 1,
+                "body": "{{#if job_title}}Hi {{job_title}}{{else}}Hi{{/if}} {{spin:one|two}}",
+                "ai_instructions": "Mention their city.",
+            }
+        ],
+    )
+    assert ok["steps"][0]["ai_instructions"] == "Mention their city."
+
+
+def test_sms_ai_snippet_generated_cached_and_metered_once(
+    sc_org, api, twilio_creds_ok, monkeypatch
+):
+    calls = {"n": 0}
+
+    def _fake_call(system, user_content, max_tokens=300):
+        calls["n"] += 1
+        return "Loved your recent Denver expansion.", 10, 6
+
+    monkeypatch.setattr(email_personalize, "_call_model", _fake_call)
+    monkeypatch.setattr(
+        email_personalize.ai_insights, "check_allowance", lambda db, org: None
+    )
+
+    acct = _mk_account(sc_org, api, from_number="+14805550201")
+    camp = _mk_campaign(sc_org, api, acct["id"], **_ALWAYS)
+    contact = _mk_contact(sc_org, api, mobile_phone="4805559001", city="Denver")
+    _set_steps(
+        sc_org,
+        api,
+        camp["id"],
+        [{"position": 1, "body": "Hi {{first_name}}! {{ai_snippet}}", "ai_instructions": "Mention their city."}],
+    )
+    assert _activate(sc_org, api, camp["id"]).status_code == 200
+    _enroll(sc_org, api, camp["id"], [contact])
+
+    db = SessionLocal()
+    try:
+        e = db.execute(
+            select(SmsEnrollment).where(
+                SmsEnrollment.campaign_id == camp["id"],
+                SmsEnrollment.contact_id == contact,
+            )
+        ).scalar_one()
+        org = db.get(Organization, sc_org["org"])
+        step = db.execute(
+            select(SmsStep).where(SmsStep.campaign_id == camp["id"])
+        ).scalars().first()
+        c = db.get(Contact, contact)
+        body1 = sms_campaigns.render_full(db, org, e, step, contact=c)
+        assert "Loved your recent Denver expansion." in body1
+        body2 = sms_campaigns.render_full(db, org, e, step, contact=c)
+        assert body1 == body2
+        assert calls["n"] == 1  # cached, not re-billed
+        assert e.ai_snippets and step.id in e.ai_snippets
+        # Exit manually — this enrollment is still `active`/due, and a later
+        # test's run_due() call processes ALL due enrollments in the shared
+        # module-scoped DB, not just its own campaign's.
+        sms_campaigns.exit_manual(db, e)
+        db.commit()
+    finally:
+        db.close()
+
+    # Preview (enrollment=None) generates fresh, never caches.
+    def _boom(system, user_content, max_tokens=300):
+        raise RuntimeError("model timeout")
+
+    monkeypatch.setattr(email_personalize, "_call_model", _boom)
+    db = SessionLocal()
+    try:
+        org = db.get(Organization, sc_org["org"])
+        c = db.get(Contact, contact)
+        step = db.execute(
+            select(SmsStep).where(SmsStep.campaign_id == camp["id"])
+        ).scalars().first()
+        snippet = sms_campaigns.generate_ai_snippet(db, org, c, step)
+        assert snippet == ""  # AI failure never blocks/crashes
+    finally:
+        db.close()
+
+
+def test_sms_render_empty_exits_enrollment(sc_org, api, twilio_creds_ok, captured_sends):
+    acct = _mk_account(sc_org, api, from_number="+14805550202")
+    camp = _mk_campaign(sc_org, api, acct["id"], **_ALWAYS)
+    contact = _mk_contact(sc_org, api, mobile_phone="4805559002")  # no company
+    _set_steps(
+        sc_org, api, camp["id"], [{"position": 1, "body": "{{#if company}}Hi {{company}}{{/if}}"}]
+    )
+    assert _activate(sc_org, api, camp["id"]).status_code == 200
+    _enroll(sc_org, api, camp["id"], [contact])
+    sms_campaigns.run_due(SessionLocal())
+
+    e = _get_enrollment(camp["id"], contact)
+    assert e.status == "exited"
+    assert e.exit_reason == "render_empty"
+    assert captured_sends == []
+
+
+def test_sms_render_error_exits_enrollment_on_unclosed_conditional(
+    sc_org, api, twilio_creds_ok, captured_sends
+):
+    """An unclosed {{#if}} would only reach the engine via a template saved
+    before this guardrail, or a bug in the save-time validator — plant it
+    directly to prove the engine is defensive regardless."""
+    acct = _mk_account(sc_org, api, from_number="+14805550203")
+    camp = _mk_campaign(sc_org, api, acct["id"], **_ALWAYS)
+    contact = _mk_contact(sc_org, api, mobile_phone="4805559003", job_title="Owner")
+
+    db = SessionLocal()
+    try:
+        campaign_row = db.get(SmsCampaign, camp["id"])
+        db.add(
+            SmsStep(
+                organization_id=campaign_row.organization_id,
+                campaign_id=camp["id"],
+                position=1,
+                wait_days=0,
+                body_template="Hi {{#if job_title}}there",
+            )
+        )
+        campaign_row.status = "active"
+        db.commit()
+    finally:
+        db.close()
+
+    _enroll(sc_org, api, camp["id"], [contact])
+    sms_campaigns.run_due(SessionLocal())
+
+    e = _get_enrollment(camp["id"], contact)
+    assert e.status == "exited"
+    assert e.exit_reason == "render_error"
+    assert captured_sends == []
+
+
+def test_sms_too_long_exits_enrollment(sc_org, api, twilio_creds_ok, captured_sends):
+    acct = _mk_account(sc_org, api, from_number="+14805550204")
+    camp = _mk_campaign(sc_org, api, acct["id"], **_ALWAYS)
+    contact = _mk_contact(sc_org, api, mobile_phone="4805559004")
+    long_body = "A" * 500  # > 3 segments (3 * 153 = 459)
+    assert sms_campaigns.segment_count(long_body) > sms_campaigns.MAX_RENDERED_SEGMENTS
+    _set_steps(sc_org, api, camp["id"], [{"position": 1, "body": long_body}])
+    assert _activate(sc_org, api, camp["id"]).status_code == 200
+    _enroll(sc_org, api, camp["id"], [contact])
+    sms_campaigns.run_due(SessionLocal())
+
+    e = _get_enrollment(camp["id"], contact)
+    assert e.status == "exited"
+    assert e.exit_reason == "too_long"
+    assert captured_sends == []
