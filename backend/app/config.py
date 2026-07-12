@@ -34,6 +34,15 @@ class Settings(BaseSettings):
     # rather than sent into a long-dead thread.
     outreach_queue_max_age_hours: int = 168
 
+    # Cold-email outreach module (SMTP/IMAP mailboxes). The scheduler is the
+    # asyncio loop in main.py driving IMAP reply/bounce sync (Phase 2 adds the
+    # campaign step engine to the same tick); disabled in tests. tick_seconds
+    # is the loop cadence; email_sync_min_interval_seconds is the per-account
+    # floor between IMAP polls (sync_due skips accounts synced more recently).
+    email_outreach_scheduler_enabled: bool = True
+    email_outreach_tick_seconds: int = 60
+    email_sync_min_interval_seconds: int = 180
+
     google_client_id: str = ""
     google_client_secret: str = ""
     google_developer_token: str = ""

@@ -1069,6 +1069,8 @@ class BrandingIn(BaseModel):
     colors: Dict[str, str] = Field(default_factory=dict)
     email_from_name: Optional[str] = Field(default=None, max_length=200)
     email_from_address: Optional[EmailStr] = None
+    # Postal address for the cold-email CAN-SPAM footer (Outreach module).
+    mailing_address: Optional[str] = Field(default=None, max_length=500)
     apply_to_team: bool = False
 
     @field_validator("logo_url", "favicon_url")
@@ -1102,3 +1104,140 @@ class AiSummaryIn(BaseModel):
     since: Optional[dt.date] = None
     until: Optional[dt.date] = None
     platforms: Optional[str] = None
+
+
+# --- Cold-email Outreach module (Phase 1 foundation) ---
+
+
+class EmailAccountIn(BaseModel):
+    """Connect a sending mailbox. The password is the SMTP/IMAP credential —
+    write-only, encrypted at rest, never serialized back."""
+
+    name: str = Field(min_length=1, max_length=200)
+    from_name: str = Field(min_length=1, max_length=200)
+    from_email: EmailStr
+    smtp_host: str = Field(min_length=1, max_length=255)
+    smtp_port: int = Field(ge=1, le=65535)
+    smtp_security: str = Field(default="ssl")
+    imap_host: str = Field(min_length=1, max_length=255)
+    imap_port: int = Field(ge=1, le=65535)
+    imap_security: str = Field(default="ssl")
+    username: str = Field(min_length=1, max_length=320)
+    password: str = Field(min_length=1, max_length=1000)
+    daily_send_cap: int = Field(default=100, ge=1, le=10000)
+    signature: Optional[str] = Field(default=None, max_length=5000)
+
+    @field_validator("smtp_security", "imap_security")
+    @classmethod
+    def _valid_security(cls, v):
+        if v not in ("ssl", "starttls"):
+            raise ValueError("security must be 'ssl' or 'starttls'")
+        return v
+
+
+class EmailAccountPatch(BaseModel):
+    """Partial update. Any of host/port/username/password changing re-probes
+    the connection before persisting."""
+
+    name: Optional[str] = Field(default=None, min_length=1, max_length=200)
+    from_name: Optional[str] = Field(default=None, min_length=1, max_length=200)
+    smtp_host: Optional[str] = Field(default=None, min_length=1, max_length=255)
+    smtp_port: Optional[int] = Field(default=None, ge=1, le=65535)
+    smtp_security: Optional[str] = None
+    imap_host: Optional[str] = Field(default=None, min_length=1, max_length=255)
+    imap_port: Optional[int] = Field(default=None, ge=1, le=65535)
+    imap_security: Optional[str] = None
+    username: Optional[str] = Field(default=None, min_length=1, max_length=320)
+    password: Optional[str] = Field(default=None, min_length=1, max_length=1000)
+    daily_send_cap: Optional[int] = Field(default=None, ge=1, le=10000)
+    signature: Optional[str] = Field(default=None, max_length=5000)
+
+    @field_validator("smtp_security", "imap_security")
+    @classmethod
+    def _valid_security(cls, v):
+        if v is not None and v not in ("ssl", "starttls"):
+            raise ValueError("security must be 'ssl' or 'starttls'")
+        return v
+
+
+class EmailComposeIn(BaseModel):
+    account_id: str
+    contact_id: str
+    subject: str = Field(min_length=1, max_length=500)
+    body: str = Field(min_length=1, max_length=100000)
+
+
+class EmailReplyIn(BaseModel):
+    body: str = Field(min_length=1, max_length=100000)
+
+
+class EmailSuppressionIn(BaseModel):
+    emails: List[EmailStr] = Field(min_length=1, max_length=1000)
+
+
+# --- cold-email campaigns (Phase 2) ---------------------------------------
+
+
+def _valid_send_days(v):
+    if v is None:
+        return v
+    if not isinstance(v, list) or any(
+        not isinstance(d, int) or d < 0 or d > 6 for d in v
+    ):
+        raise ValueError("send_days must be a list of ints 0..6 (0=Monday)")
+    return sorted(set(v))
+
+
+class EmailCampaignIn(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    account_id: str
+    timezone: str = Field(default="UTC", max_length=64)
+    send_window_start: int = Field(default=8, ge=0, le=23)
+    send_window_end: int = Field(default=17, ge=1, le=24)
+    send_days: Optional[List[int]] = Field(default=None)
+    daily_cap: int = Field(default=50, ge=1, le=100000)
+    open_tracking: bool = True
+    exit_on_reply: bool = True
+
+    @field_validator("send_days")
+    @classmethod
+    def _days(cls, v):
+        return _valid_send_days(v)
+
+
+class EmailCampaignPatch(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=1, max_length=200)
+    account_id: Optional[str] = None
+    timezone: Optional[str] = Field(default=None, max_length=64)
+    send_window_start: Optional[int] = Field(default=None, ge=0, le=23)
+    send_window_end: Optional[int] = Field(default=None, ge=1, le=24)
+    send_days: Optional[List[int]] = Field(default=None)
+    daily_cap: Optional[int] = Field(default=None, ge=1, le=100000)
+    open_tracking: Optional[bool] = None
+    exit_on_reply: Optional[bool] = None
+
+    @field_validator("send_days")
+    @classmethod
+    def _days(cls, v):
+        return _valid_send_days(v)
+
+
+class EmailStepIn(BaseModel):
+    position: int = Field(ge=1)
+    wait_days: int = Field(default=0, ge=0, le=365)
+    subject: Optional[str] = Field(default=None, max_length=500)
+    body: Optional[str] = Field(default=None, max_length=100000)
+    ai_instructions: Optional[str] = Field(default=None, max_length=5000)
+
+
+class EmailStepsIn(BaseModel):
+    steps: List[EmailStepIn] = Field(min_length=1, max_length=50)
+
+
+class EmailEnrollIn(BaseModel):
+    contact_ids: List[str] = Field(min_length=1, max_length=1000)
+
+
+class EmailPreviewIn(BaseModel):
+    contact_id: str
+    position: int = Field(ge=1)

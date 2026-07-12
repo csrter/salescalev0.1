@@ -26,6 +26,8 @@ from .api import (
     crm,
     custom_fields,
     dashboard,
+    email_outreach,
+    email_outreach_public,
     integrations,
     lead_finder,
     lead_webhooks,
@@ -123,6 +125,7 @@ app.include_router(attribution.router)
 app.include_router(leads.router)
 app.include_router(lead_webhooks.router)
 app.include_router(outreach_webhooks.router)
+app.include_router(email_outreach_public.router)
 app.include_router(branding.router)
 
 # App-data routers — hard-gated by the org 2FA policy (mfa_gate is a no-op for
@@ -144,6 +147,7 @@ app.include_router(lead_finder.router, dependencies=_MFA)
 app.include_router(custom_fields.router, dependencies=_MFA)
 app.include_router(ai.router, dependencies=_MFA)
 app.include_router(outreach.router, dependencies=_MFA)
+app.include_router(email_outreach.router, dependencies=_MFA)
 
 
 # Platform-API failures that escape a router (live refresh paths catch only
@@ -217,5 +221,45 @@ async def _outreach_scheduler():
                 await asyncio.get_event_loop().run_in_executor(None, _tick)
             except Exception:
                 log.exception("outreach scheduler tick failed")
+
+    asyncio.create_task(_loop())
+
+
+@app.on_event("startup")
+async def _email_outreach_scheduler():
+    """Cold-email background loop. Each tick, in a worker thread with its own
+    session (failures logged, never fatal):
+      (a) fires due campaign enrollment steps (email_campaigns.run_due),
+      (b) drips warmup peer exchanges + ramps caps (email_warmup.run_due),
+      (c) polls each connected mailbox's INBOX for replies/bounces
+          (email_outreach_sync.sync_due, per-account floor via
+          email_sync_min_interval_seconds).
+    Same pattern as the IG scheduler. Disabled in tests (they drive run_due /
+    sync_account / run_warmup_tick synchronously)."""
+    if not _settings.email_outreach_scheduler_enabled:
+        return
+    import asyncio
+
+    from .db import SessionLocal
+    from .services import email_campaigns, email_outreach_sync, email_warmup
+
+    log = logging.getLogger("salescale.email_outreach")
+
+    def _tick():
+        db = SessionLocal()
+        try:
+            email_campaigns.run_due(db)
+            email_warmup.run_due(db)
+            email_outreach_sync.sync_due(db)
+        finally:
+            db.close()
+
+    async def _loop():
+        while True:
+            await asyncio.sleep(max(5, _settings.email_outreach_tick_seconds))
+            try:
+                await asyncio.get_event_loop().run_in_executor(None, _tick)
+            except Exception:
+                log.exception("email outreach scheduler tick failed")
 
     asyncio.create_task(_loop())

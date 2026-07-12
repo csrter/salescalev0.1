@@ -52,6 +52,10 @@ DEFAULT_BRANDING: Dict[str, Any] = {
     "colors": {},
     "email_from_name": None,
     "email_from_address": None,
+    # Postal mailing address for the CAN-SPAM footer on cold-email sends
+    # (services/email_outreach_send.py). Never client-facing; internal to the
+    # Organization's outbound compliance footer.
+    "mailing_address": None,
     "apply_to_team": False,
 }
 

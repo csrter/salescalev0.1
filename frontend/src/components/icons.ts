@@ -32,6 +32,7 @@ import {
   Link2 as LLink2,
   Loader2 as LLoader2,
   LogOut as LLogOut,
+  Mail as LMail,
   Megaphone as LMegaphone,
   MessageSquare as LMessageSquare,
   Moon as LMoon,
@@ -81,6 +82,7 @@ export const LayoutDashboard = withDefaults(LLayoutDashboard, "LayoutDashboard")
 export const Link2 = withDefaults(LLink2, "Link2");
 export const Loader2 = withDefaults(LLoader2, "Loader2");
 export const LogOut = withDefaults(LLogOut, "LogOut");
+export const Mail = withDefaults(LMail, "Mail");
 export const Megaphone = withDefaults(LMegaphone, "Megaphone");
 export const MessageSquare = withDefaults(LMessageSquare, "MessageSquare");
 export const Moon = withDefaults(LMoon, "Moon");

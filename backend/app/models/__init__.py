@@ -33,8 +33,24 @@ from .outreach import (
     OutreachStep,
     OutreachTriggerRule,
 )
+from .email_outreach import (
+    EmailAccount,
+    EmailCampaign,
+    EmailEnrollment,
+    EmailMessage,
+    EmailStep,
+    EmailSuppression,
+    EmailThread,
+)
 
 __all__ = [
+    "EmailAccount",
+    "EmailCampaign",
+    "EmailEnrollment",
+    "EmailMessage",
+    "EmailStep",
+    "EmailSuppression",
+    "EmailThread",
     "InstagramAccount",
     "InstagramWebhookEvent",
     "OutreachConversation",

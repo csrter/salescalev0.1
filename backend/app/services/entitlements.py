@@ -39,6 +39,7 @@ TIER_LIMITS: dict[str, dict[str, int | None]] = {
         "custom_fields": 20,
         "lead_finder_searches": 40,
         "email_verifications": 250,
+        "email_sends": 1000,
     },
     "pro": {
         "clients": 25,
@@ -46,6 +47,7 @@ TIER_LIMITS: dict[str, dict[str, int | None]] = {
         "custom_fields": 50,
         "lead_finder_searches": 200,
         "email_verifications": 2000,
+        "email_sends": 10000,
     },
     "agency": {
         "clients": None,
@@ -53,6 +55,7 @@ TIER_LIMITS: dict[str, dict[str, int | None]] = {
         "custom_fields": None,
         "lead_finder_searches": 1000,
         "email_verifications": 10000,
+        "email_sends": 100000,
     },
 }
 
@@ -223,6 +226,44 @@ def enforce_can_verify_emails(db: Session, org: Organization, count: int = 1) ->
             status.HTTP_402_PAYMENT_REQUIRED,
             f"Your {org.plan} plan allows {cap} email verifications per "
             f"month ({max(cap - usage['used'], 0)} remaining). Upgrade for more.",
+        )
+
+
+def email_outreach_usage(db: Session, org: Organization) -> dict:
+    """Self-service "X of Y used" for cold-email sends this calendar month
+    (UTC). Counts real prospect sends only — outbound EmailMessages with
+    status="sent" that are campaign/manual (kind != "warmup"); warmup traffic
+    is mailbox-reputation noise, not billable outreach, so it never meters."""
+    from ..models.email_outreach import DIR_OUT, KIND_WARMUP, MSG_SENT, EmailMessage
+    import datetime as dt
+
+    now = dt.datetime.now(dt.timezone.utc)
+    month_start = dt.datetime(now.year, now.month, 1, tzinfo=dt.timezone.utc)
+    used = db.execute(
+        select(func.count())
+        .select_from(EmailMessage)
+        .where(
+            EmailMessage.organization_id == org.id,
+            EmailMessage.direction == DIR_OUT,
+            EmailMessage.status == MSG_SENT,
+            EmailMessage.kind != KIND_WARMUP,
+            EmailMessage.created_at >= month_start,
+        )
+    ).scalar_one()
+    return {"used": used, "limit": _limits(org)["email_sends"]}
+
+
+def enforce_can_send_email(db: Session, org: Organization) -> None:
+    """402 when the org has exhausted its monthly cold-email send quota. Gates
+    ENROLLING contacts (enrollment implies future sends) as well as any direct
+    send path, so an org can't queue a campaign it has no send budget for."""
+    usage = email_outreach_usage(db, org)
+    cap = usage["limit"]
+    if cap is not None and usage["used"] >= cap:
+        raise HTTPException(
+            status.HTTP_402_PAYMENT_REQUIRED,
+            f"Your {org.plan} plan allows {cap} cold-email sends per month. "
+            "Upgrade for more.",
         )
 
 

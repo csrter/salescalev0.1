@@ -56,6 +56,7 @@ import { BrandingSettings } from "./branding";
 import { LeadFinderView } from "./leadfinder";
 import { AccountPickerDialog } from "./components/AccountPicker";
 import { OutreachView } from "./outreach";
+import { EmailOutreachView } from "./email_outreach";
 import { CommandPalette, type Command } from "./components/CommandPalette";
 import { ToastProvider, useToast } from "./components/Toast";
 import {
@@ -82,6 +83,7 @@ import {
   GitBranch,
   Link2,
   LogOut,
+  Mail,
   Moon,
   Palette,
   Plus,
@@ -132,6 +134,7 @@ type Tab =
   | "crm"
   | "leads"
   | "outreach"
+  | "email"
   | "changes"
   | "audit"
   | "team"
@@ -146,6 +149,7 @@ const PAGE_TITLES: Record<Tab, string> = {
   crm: "CRM",
   leads: "Lead Finder",
   outreach: "Outreach",
+  email: "Email",
   changes: "Pending changes",
   audit: "Audit log",
   team: "Team",
@@ -360,6 +364,7 @@ export default function App() {
     { key: "crm", label: "CRM", icon: Table2, section: "Workspace", show: isTeam },
     { key: "leads", label: "Lead Finder", icon: Compass, section: "Workspace", show: isTeam },
     { key: "outreach", label: "Outreach", icon: Send, section: "Workspace", show: isTeam },
+    { key: "email", label: "Email", icon: Mail, section: "Workspace", show: isTeam },
     { key: "changes", label: "Pending changes", icon: GitBranch, section: "Ads", show: isTeam },
     { key: "audit", label: "Audit log", icon: Eye, section: "Ads", show: true },
     { key: "team", label: "Team", icon: Users, section: "Settings", show: isAdmin },
@@ -505,6 +510,7 @@ export default function App() {
                   ))}
                 {tab === "leads" && isTeam && <LeadFinderView />}
                 {tab === "outreach" && isTeam && <OutreachView isAdmin={isAdmin} />}
+                {tab === "email" && isTeam && <EmailOutreachView isAdmin={isAdmin} />}
                 {tab === "changes" && <PendingChangesPanel />}
                 {tab === "audit" && <AuditLogView />}
                 {tab === "team" && isAdmin && (

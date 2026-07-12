@@ -1,0 +1,630 @@
+/* ==========================================================================
+   email_outreach.css — .eml-* layout/composition only (spec §3.3, §7).
+   Owner: email-outreach view. Primitives (.card, .btn, .badge, .tabs, .seg,
+   .kpi, .table, .dialog, .field, .alert, .empty) live in components/ui.css.
+   Tokens only — no color/size/duration/z-index literals (grep gate §3.4).
+   ========================================================================== */
+
+/* ---- shell: banner + subnav + usage chip -------------------------------- */
+
+.eml-banner {
+  margin-bottom: var(--space-4);
+}
+
+.eml-banner .btn--link {
+  margin-left: var(--space-2);
+}
+
+.eml-subnav {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+  margin-bottom: var(--space-5);
+}
+
+.eml-usage {
+  font-size: var(--text-sm);
+  color: var(--ink-soft);
+  padding: var(--space-1) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  background: var(--surface);
+  white-space: nowrap;
+}
+
+.eml-usage strong {
+  color: var(--ink);
+  font-weight: var(--weight-semibold);
+}
+
+.eml-usage--over {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+.eml-usage--load {
+  width: 160px;
+  height: 26px;
+  border-color: transparent;
+  background: var(--surface);
+}
+
+/* ---- section head rows -------------------------------------------------- */
+
+.eml-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+  margin-bottom: var(--space-4);
+}
+
+.eml-sub {
+  margin: 0;
+  max-width: 72ch;
+  font-size: var(--text-sm);
+  color: var(--ink-soft);
+}
+
+.eml-hint {
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--ink-soft);
+}
+
+.eml-select {
+  width: auto;
+  min-width: 180px;
+}
+
+/* ==========================================================================
+   Dashboard
+   ========================================================================== */
+
+.eml-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  margin-bottom: var(--space-4);
+}
+
+.eml-kpis {
+  margin-bottom: var(--space-4);
+}
+
+.eml-redline {
+  margin-bottom: var(--space-4);
+}
+
+.eml-section {
+  margin-top: var(--space-6);
+}
+
+.eml-section-title {
+  margin: 0 0 var(--space-3);
+  font-size: var(--text-lg);
+  font-weight: var(--weight-semibold);
+  color: var(--ink);
+}
+
+/* ---- mailbox health strip ----------------------------------------------- */
+
+.eml-health {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: var(--space-3);
+}
+
+.eml-health-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.eml-health-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.eml-health-email {
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.eml-health-meta {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  font-size: var(--text-xs);
+  color: var(--ink-soft);
+}
+
+/* ==========================================================================
+   Forms (shared dialog scaffold)
+   ========================================================================== */
+
+.eml-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.eml-form-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-3);
+}
+
+@media (max-width: 640px) {
+  .eml-form-row {
+    grid-template-columns: 1fr;
+  }
+}
+
+.eml-fieldset {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.eml-days {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-4);
+}
+
+.eml-check {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-sm);
+  color: var(--ink);
+}
+
+.eml-tokens {
+  margin: 0 0 var(--space-4);
+  font-size: var(--text-sm);
+  color: var(--ink-soft);
+}
+
+.eml-tokens code {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  padding: 1px 5px;
+  border-radius: var(--radius-xs);
+  background: var(--surface);
+  color: var(--ink);
+}
+
+/* ==========================================================================
+   Campaign editor — steps + preview + audience
+   ========================================================================== */
+
+.eml-editor-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  margin-bottom: var(--space-4);
+}
+
+.eml-activate-err {
+  margin-bottom: var(--space-4);
+}
+
+.eml-step {
+  margin-bottom: var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.eml-step-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.eml-step-title {
+  font-weight: var(--weight-semibold);
+}
+
+.eml-step-actions {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.eml-step-add {
+  display: flex;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  margin-top: var(--space-3);
+}
+
+/* ---- preview ------------------------------------------------------------ */
+
+.eml-preview {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+}
+
+.eml-preview-label {
+  display: block;
+  font-size: var(--text-2xs);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-caps);
+  color: var(--ink-faint);
+  margin-bottom: var(--space-1);
+}
+
+.eml-preview-subj {
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+  color: var(--ink);
+}
+
+.eml-preview-body {
+  font-size: var(--text-sm);
+  color: var(--ink);
+  white-space: pre-wrap;
+  line-height: var(--leading-normal);
+}
+
+/* ---- enroll receipt ----------------------------------------------------- */
+
+.eml-receipt-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin-top: var(--space-2);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+}
+
+.eml-skip-list {
+  margin: var(--space-1) 0 0;
+  padding-left: var(--space-4);
+  font-size: var(--text-sm);
+}
+
+/* ---- pick list (enroll) ------------------------------------------------- */
+
+.eml-picklist {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  max-height: 46vh;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: var(--space-2);
+}
+
+.eml-pickrow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-xs);
+  font-size: var(--text-sm);
+  color: var(--ink);
+}
+
+.eml-pickrow:hover {
+  background: var(--accent-ghost);
+}
+
+.eml-pickrow-name {
+  font-weight: var(--weight-medium);
+}
+
+.eml-pickrow-email {
+  color: var(--ink-soft);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.eml-pickrow .badge {
+  margin-left: auto;
+}
+
+/* ==========================================================================
+   Inbox — filter bar + two-pane
+   ========================================================================== */
+
+.eml-inbox-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  margin-bottom: var(--space-4);
+}
+
+.eml-inbox-compose {
+  margin-left: auto;
+}
+
+.eml-inbox {
+  display: grid;
+  grid-template-columns: 340px minmax(0, 1fr);
+  gap: var(--space-4);
+  align-items: start;
+}
+
+@media (max-width: 820px) {
+  .eml-inbox {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ---- thread list -------------------------------------------------------- */
+
+.eml-threads {
+  padding: var(--space-2);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  max-height: 72vh;
+  overflow-y: auto;
+}
+
+.eml-thread-item {
+  appearance: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  width: 100%;
+  text-align: left;
+  padding: var(--space-2) var(--space-3);
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--ink);
+  cursor: pointer;
+  transition: background-color var(--dur-fast) var(--ease-out);
+}
+
+.eml-thread-item:hover {
+  background: var(--accent-ghost);
+}
+
+.eml-thread-item--active {
+  background: var(--accent-soft);
+}
+
+.eml-thread-item:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.eml-thread-top {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.eml-thread-name {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+}
+
+.eml-thread-item--unread .eml-thread-name {
+  font-weight: var(--weight-semibold);
+}
+
+.eml-thread-name > span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.eml-thread-time {
+  flex: none;
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  color: var(--ink-faint);
+}
+
+.eml-thread-subj {
+  font-size: var(--text-xs);
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.eml-thread-snippet {
+  font-size: var(--text-xs);
+  color: var(--ink-soft);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---- thread pane -------------------------------------------------------- */
+
+.eml-thread-pane {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-height: 440px;
+}
+
+.eml-thread-head {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.eml-thread-title {
+  margin: 0;
+  font-size: var(--text-lg);
+  font-weight: var(--weight-semibold);
+  color: var(--ink);
+}
+
+.eml-thread-with {
+  font-size: var(--text-sm);
+  color: var(--ink-soft);
+}
+
+.eml-messages {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  flex: 1;
+  min-height: 240px;
+  max-height: 52vh;
+  overflow-y: auto;
+  padding-block: var(--space-1);
+}
+
+.eml-msg {
+  max-width: 82%;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-md);
+  font-size: var(--text-sm);
+}
+
+.eml-msg--out {
+  align-self: flex-end;
+  background: var(--accent);
+  color: var(--ink-on-accent);
+}
+
+.eml-msg--in {
+  align-self: flex-start;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--ink);
+}
+
+.eml-msg-subj {
+  font-weight: var(--weight-semibold);
+  margin-bottom: var(--space-1);
+}
+
+.eml-msg-body {
+  white-space: pre-wrap;
+  line-height: var(--leading-normal);
+}
+
+.eml-msg-meta {
+  display: block;
+  margin-top: var(--space-1);
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+}
+
+.eml-msg--in .eml-msg-meta {
+  color: var(--ink-faint);
+}
+
+.eml-msg--out .eml-msg-meta {
+  color: color-mix(in srgb, var(--ink-on-accent) 78%, transparent);
+}
+
+.eml-composer {
+  margin-top: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.eml-composer-actions {
+  display: flex;
+}
+
+.eml-composer-actions .btn {
+  margin-left: auto;
+}
+
+/* ==========================================================================
+   Accounts
+   ========================================================================== */
+
+.eml-account-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: var(--space-4);
+}
+
+.eml-account {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.eml-account-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.eml-account-name {
+  font-size: var(--text-md);
+  font-weight: var(--weight-semibold);
+  color: var(--ink);
+}
+
+.eml-account-email {
+  font-size: var(--text-sm);
+  color: var(--ink-soft);
+}
+
+.eml-account-stat {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-2);
+  font-size: var(--text-sm);
+  color: var(--ink);
+}
+
+.eml-account-sync {
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  color: var(--ink-faint);
+}
+
+.eml-test-result {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--ink-soft);
+  padding: var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+
+.eml-account-actions {
+  display: flex;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  margin-top: auto;
+}

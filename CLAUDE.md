@@ -340,8 +340,71 @@ live activation + the entitlement flip, the Outreach module build
       got a 75s AbortSignal.timeout. Tests 283 → 292
       (test_crm_contacts.py with dedicated cc_org fixtures,
       test_platform_error_surfacing.py, house-outreach test in
-      test_outreach.py). NOT deployed — the VPS still runs 8f71709;
-      ship a snapshot per HANDOFF.md to take these live.
+      test_outreach.py). Deployed to the VPS (commit 6facf9a).
+- [x] Cold-email Outreach module (agency-level, BYO mailbox): a full
+      SMTP/IMAP send+receive module parallel to the IG Outreach module,
+      gated the same way (require_team read, require_admin config,
+      client role fully locked out). Every org connects its OWN mailbox
+      (IMAP+SMTP creds, Fernet-encrypted, never returned to the client)
+      — Salescale's own domain never appears as a sender; Atlas Reach's
+      reference deploy is a self-hosted docker-mailserver on the VPS for
+      carter@atlasreach.io (deploy/MAILSERVER.md, deploy/docker-compose.
+      mailserver.yml — isolated compose project, Rspamd tuned so replies
+      aren't lost, ClamAV off to fit the box's RAM). Models/migrations
+      (backend/app/models/email_outreach.py, b1e7d4c9a025 +
+      c2f8e5a1b307): EmailAccount, EmailCampaign, EmailStep,
+      EmailEnrollment, EmailThread, EmailMessage (the append-only send
+      ledger — audit trail + open/unsubscribe tokens), EmailSuppression,
+      EmailWarmupPeer. services/email_transport.py wraps stdlib smtplib/
+      imaplib with a hard wall-clock deadline (_run_with_deadline) around
+      every connect+auth attempt — socket `timeout=` bounds connect()/
+      recv() but NOT getaddrinfo(), so an unreachable/mistyped host would
+      otherwise hang a request-handling thread forever; found via live
+      browser verification, not the mocked test suite, and is now itself
+      regression-tested. services/email_outreach_send.send() is the ONE
+      gateway (mirrors services/outreach_send.py): ordered guards
+      (account active → org suppression → email_verification.
+      assert_can_email, both skipped for kind="warmup" → warmup-ramped
+      daily cap) → CAN-SPAM footer + List-Unsubscribe/One-Click headers +
+      per-message tokens → stdlib MIME send → EmailMessage + EmailThread
+      upsert. services/email_campaigns.py is the enrollment engine
+      (mirrors services/outreach_sequences.py): send-window/day gating
+      in the campaign's own timezone (zoneinfo), campaign + account daily
+      caps, stop-on-reply/bounce/unsubscribe (unsubscribe exits ALL of a
+      contact's active campaigns org-wide, not just the current thread —
+      compliance guardrail #9). services/email_personalize.py renders
+      {{first_name|fallback}}-style tokens plus a Claude-generated
+      {{ai_snippet}} grounded ONLY in the contact/org's own CRM data
+      (guardrail #7; metered via AiUsage feature="outreach_personalize",
+      cached on EmailEnrollment.ai_snippets so re-render never re-bills;
+      any AI failure renders empty and never blocks a send).
+      services/email_warmup.py ramps effective_daily_cap over a 4-week
+      schedule and runs synthetic warmup sends between an org's OWN
+      warmup-enabled mailboxes (never cross-tenant) tagged
+      X-Salescale-Warmup so the IMAP sync routes them out of the real
+      inbox. entitlements.py gained an email_sends tier limit (starter
+      1,000/mo, pro 10,000, agency 100,000). Frontend: a team-only
+      "Email" nav item (frontend/src/email_outreach.tsx) with Dashboard
+      (KPIs incl. the 5%-bounce deliverability red line, per-day volume,
+      mailbox health strip), Campaigns (config + step editor + preview +
+      house-CRM enroll with a risky/skipped receipt), Inbox, Accounts
+      (connect/test/warmup toggle), Suppression. Tests 292 → 334
+      (test_email_outreach.py, test_email_campaigns.py, dedicated
+      ce_org/cc_org fixtures). Click-through verified live on the alt-dev
+      stack (account connect, campaign create/steps/preview/enroll/
+      activate, inbox, suppression) — surfaced and fixed 4 bugs the
+      mocked tests couldn't catch: the DNS-hang transport issue above;
+      GET/detail campaign serialization nested stats under a "stats" key
+      instead of the flat fields the frontend/analytics contract used
+      (backend/app/api/email_outreach.py _campaign_out); the step editor
+      saved 0-indexed positions against a backend that requires 1-indexed
+      (matching EmailEnrollment.current_position's convention) — fixed
+      in the frontend's saveSteps/previewEmailStep call sites; the
+      Audience tab's enrollment list didn't re-fetch after a fresh enroll
+      (its effect only keyed off campaign.id, not the enrolled count).
+      NOT deployed yet — build + verification done this session; the
+      real VPS mail server (deploy/MAILSERVER.md) still needs setting up
+      before a live campaign can actually send.
 - [ ] Stripe live activation + entitlement flip (after 12–14, so real
       limits land everywhere in one pass)
 - [ ] Outreach module build (dev-mode) — go-live gated on Meta App

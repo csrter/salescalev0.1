@@ -1208,3 +1208,319 @@ export const bulkDeleteContacts = (contactIds: string[]) =>
     method: "POST",
     body: JSON.stringify({ contact_ids: contactIds }),
   });
+
+// ==========================================================================
+// Cold-email outreach module (base /api/email-outreach).
+// A single mailbox → campaigns (multi-step sequences) → enrollments, plus a
+// unified inbox, suppression list, and analytics. Every send routes through
+// the Phase-12 verification gate server-side (risky warned, invalid excluded).
+// ==========================================================================
+
+export type EmailSmtpSecurity = "ssl" | "starttls";
+export type EmailAccountStatus = "active" | "error";
+
+export interface EmailAccount {
+  id: string;
+  name: string;
+  from_name: string;
+  from_email: string;
+  smtp_host: string;
+  smtp_port: number;
+  smtp_security: EmailSmtpSecurity;
+  imap_host: string;
+  imap_port: number;
+  imap_security: EmailSmtpSecurity;
+  username: string;
+  status: EmailAccountStatus;
+  error_detail: string | null;
+  daily_send_cap: number;
+  warmup_enabled: boolean;
+  warmup_started_at: string | null;
+  warmup_target_daily: number;
+  effective_daily_cap: number;
+  sends_today: number;
+  last_synced_at: string | null;
+  signature: string | null;
+}
+
+export interface EmailAccountBody {
+  name?: string;
+  from_name?: string;
+  from_email?: string;
+  smtp_host?: string;
+  smtp_port?: number;
+  smtp_security?: EmailSmtpSecurity;
+  imap_host?: string;
+  imap_port?: number;
+  imap_security?: EmailSmtpSecurity;
+  username?: string;
+  /** Only sent to rotate the password (write-only, never returned). */
+  password?: string;
+  daily_send_cap?: number;
+  warmup_enabled?: boolean;
+  warmup_target_daily?: number;
+  signature?: string | null;
+}
+
+export type EmailCampaignStatus = "draft" | "active" | "paused" | "archived";
+
+export interface EmailCampaign {
+  id: string;
+  name: string;
+  status: EmailCampaignStatus;
+  account_id: string;
+  steps_count: number;
+  enrolled: number;
+  active_enrollments: number;
+  sent: number;
+  delivery_rate: number | null;
+  open_rate: number | null;
+  reply_rate: number | null;
+  bounce_rate: number | null;
+  unsubscribe_rate: number | null;
+  created_at: string;
+}
+
+export interface EmailStep {
+  id?: string;
+  position: number;
+  wait_days: number;
+  subject: string | null;
+  body: string;
+  ai_instructions: string | null;
+}
+
+export interface EmailCampaignDetail extends EmailCampaign {
+  timezone: string;
+  send_window_start: number;
+  send_window_end: number;
+  send_days: number[];
+  daily_cap: number | null;
+  open_tracking: boolean;
+  steps: EmailStep[];
+}
+
+export interface EmailCampaignBody {
+  name?: string;
+  account_id?: string;
+  timezone?: string;
+  send_window_start?: number;
+  send_window_end?: number;
+  send_days?: number[];
+  daily_cap?: number | null;
+  open_tracking?: boolean;
+}
+
+export interface EmailEnrollment {
+  id: string;
+  contact: {
+    id: string;
+    first_name: string | null;
+    last_name: string | null;
+    email: string | null;
+    company_name: string | null;
+  };
+  status: string;
+  exit_reason: string | null;
+  current_position: number;
+  next_run_at: string | null;
+  replied_at: string | null;
+  created_at: string;
+}
+
+export interface EnrollReceipt {
+  enrolled: number;
+  risky: { contact_id: string; email: string }[];
+  skipped: {
+    contact_id: string;
+    reason: "invalid_email" | "suppressed" | "no_email" | "already_enrolled";
+  }[];
+}
+
+export type EmailMessageDirection = "in" | "out";
+
+export interface EmailThread {
+  id: string;
+  account_id: string;
+  contact: {
+    id: string;
+    first_name: string | null;
+    last_name: string | null;
+    email: string | null;
+  } | null;
+  subject: string;
+  snippet: string;
+  last_message_at: string | null;
+  unread: boolean;
+  message_count: number;
+}
+
+export interface EmailMessage {
+  id: string;
+  direction: EmailMessageDirection;
+  status: string;
+  kind: string;
+  subject: string | null;
+  body_text: string;
+  sent_at: string | null;
+  received_at: string | null;
+  opened_at: string | null;
+  open_count: number;
+}
+
+export interface EmailSuppression {
+  id: string;
+  email: string;
+  reason: string;
+  created_at: string;
+}
+
+export interface EmailRateBlock {
+  sent: number;
+  delivered: number;
+  bounced: number;
+  opened: number;
+  replied: number;
+  unsubscribed: number;
+  delivery_rate: number | null;
+  open_rate: number | null;
+  reply_rate: number | null;
+  bounce_rate: number | null;
+  unsubscribe_rate: number | null;
+}
+
+export interface EmailAnalytics {
+  totals: EmailRateBlock;
+  by_day: {
+    date: string;
+    sent: number;
+    opened: number;
+    replied: number;
+    bounced: number;
+  }[];
+  by_campaign: {
+    campaign_id: string;
+    name: string;
+    sent: number;
+    delivery_rate: number | null;
+    open_rate: number | null;
+    reply_rate: number | null;
+  }[];
+  by_step?: { position: number; sent: number; opened: number; replied: number }[];
+  accounts: {
+    account_id: string;
+    from_email: string;
+    status: EmailAccountStatus;
+    sends_today: number;
+    effective_daily_cap: number;
+    warmup_stage: string | null;
+    bounce_rate_7d: number | null;
+  }[];
+}
+
+export interface EmailUsage {
+  sends: { used: number; limit: number | null };
+  plan: string;
+}
+
+const EO = "/api/email-outreach";
+
+// --- accounts ---
+export const listEmailAccounts = () => api<EmailAccount[]>(`${EO}/accounts`);
+export const createEmailAccount = (body: EmailAccountBody & { password: string }) =>
+  api<EmailAccount>(`${EO}/accounts`, { method: "POST", body: JSON.stringify(body) });
+export const updateEmailAccount = (id: string, body: EmailAccountBody) =>
+  api<EmailAccount>(`${EO}/accounts/${id}`, { method: "PATCH", body: JSON.stringify(body) });
+export const deleteEmailAccount = (id: string) =>
+  api(`${EO}/accounts/${id}`, { method: "DELETE" });
+export const testEmailAccount = (id: string) =>
+  api<{ smtp_ok: boolean; imap_ok: boolean; detail: string | null }>(
+    `${EO}/accounts/${id}/test`,
+    { method: "POST" },
+  );
+
+// --- campaigns ---
+export const listEmailCampaigns = () => api<EmailCampaign[]>(`${EO}/campaigns`);
+export const getEmailCampaign = (id: string) =>
+  api<EmailCampaignDetail>(`${EO}/campaigns/${id}`);
+export const createEmailCampaign = (body: EmailCampaignBody & { name: string; account_id: string }) =>
+  api<EmailCampaignDetail>(`${EO}/campaigns`, { method: "POST", body: JSON.stringify(body) });
+export const updateEmailCampaign = (id: string, body: EmailCampaignBody) =>
+  api<EmailCampaignDetail>(`${EO}/campaigns/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify(body),
+  });
+export const saveEmailSteps = (id: string, steps: EmailStep[]) =>
+  api<EmailCampaignDetail>(`${EO}/campaigns/${id}/steps`, {
+    method: "PUT",
+    body: JSON.stringify({ steps }),
+  });
+export const activateEmailCampaign = (id: string) =>
+  api<EmailCampaignDetail>(`${EO}/campaigns/${id}/activate`, { method: "POST" });
+export const pauseEmailCampaign = (id: string) =>
+  api<EmailCampaignDetail>(`${EO}/campaigns/${id}/pause`, { method: "POST" });
+export const enrollEmailContacts = (id: string, contactIds: string[]) =>
+  api<EnrollReceipt>(`${EO}/campaigns/${id}/enroll`, {
+    method: "POST",
+    body: JSON.stringify({ contact_ids: contactIds }),
+  });
+export const listEmailEnrollments = (id: string) =>
+  api<EmailEnrollment[]>(`${EO}/campaigns/${id}/enrollments`);
+export const unenrollEmail = (campaignId: string, enrollmentId: string) =>
+  api(`${EO}/campaigns/${campaignId}/enrollments/${enrollmentId}`, { method: "DELETE" });
+export const previewEmailStep = (id: string, contactId: string, position: number) =>
+  api<{ subject: string; body: string }>(`${EO}/campaigns/${id}/preview`, {
+    method: "POST",
+    body: JSON.stringify({ contact_id: contactId, position }),
+  });
+
+// --- inbox ---
+export const listEmailThreads = (accountId?: string, unread?: boolean) =>
+  api<EmailThread[]>(
+    `${EO}/inbox${q({ account_id: accountId, unread: unread ? "1" : undefined })}`,
+  );
+export const listEmailThreadMessages = (threadId: string) =>
+  api<EmailMessage[]>(`${EO}/threads/${threadId}/messages`);
+export const replyEmailThread = (threadId: string, body: string) =>
+  api<{ status: string }>(`${EO}/threads/${threadId}/reply`, {
+    method: "POST",
+    body: JSON.stringify({ body }),
+  });
+export const markEmailThreadRead = (threadId: string) =>
+  api(`${EO}/threads/${threadId}/mark-read`, { method: "POST" });
+export const composeEmail = (body: {
+  account_id: string;
+  contact_id: string;
+  subject: string;
+  body: string;
+}) => api<{ status: string }>(`${EO}/compose`, { method: "POST", body: JSON.stringify(body) });
+
+// --- suppression ---
+export const listEmailSuppression = () => api<EmailSuppression[]>(`${EO}/suppression`);
+export const addEmailSuppression = (emails: string[]) =>
+  api<{ added: number }>(`${EO}/suppression`, {
+    method: "POST",
+    body: JSON.stringify({ emails }),
+  });
+export const deleteEmailSuppression = (id: string) =>
+  api(`${EO}/suppression/${id}`, { method: "DELETE" });
+
+// --- analytics & usage ---
+export const emailAnalytics = (campaignId?: string, days = 30) =>
+  api<EmailAnalytics>(
+    `${EO}/analytics${q({ campaign_id: campaignId, days: String(days) })}`,
+  );
+export const emailUsage = () => api<EmailUsage>(`${EO}/usage`);
+
+/** Contacts for the enroll / compose pickers — the house CRM (or any client). */
+export interface EmailPickContact {
+  id: string;
+  first_name: string | null;
+  last_name: string | null;
+  email: string | null;
+  phone: string | null;
+  company_name: string | null;
+  verification_status?: VerificationStatus | null;
+}
+export const listCrmContactsForClient = (clientId: string) =>
+  api<EmailPickContact[]>(`/api/crm/contacts?client_id=${clientId}`);

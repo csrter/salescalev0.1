@@ -1,0 +1,163 @@
+# Self-hosted IMAP + SMTP mail server for the Salescale cold-outreach module.
+# docker-mailserver (Postfix + Dovecot + Rspamd + OpenDKIM/OpenDMARC) running
+# as its OWN compose project — project name is pinned to "mailserver" via the
+# top-level `name:` key below, deliberately SEPARATE from the app stack's
+# "deploy" project, so that `docker compose -p deploy ...` (the app) and
+# `docker compose -f docker-compose.mailserver.yml ...` (this) can never touch
+# each other's containers. Full runbook: deploy/MAILSERVER.md.
+#
+# This does NOT reuse or modify the pre-existing Traefik (host network, owns
+# 80/443) or the "deploy" app stack. It only:
+#   - binds the SMTP/IMAP ports (25/465/587/993) that nothing else on the box
+#     uses, and
+#   - READS (read-only) Traefik's Let's Encrypt acme.json to obtain its TLS
+#     cert (see SSL section below + MAILSERVER.md for the cert wiring).
+#
+# Usage (from this directory):
+#   docker compose -f docker-compose.mailserver.yml up -d
+#   docker compose -f docker-compose.mailserver.yml logs -f mailserver
+#   docker exec -it mailserver setup help          # the management CLI
+
+name: mailserver
+
+services:
+  mailserver:
+    # Pin the tag — do NOT use a floating `latest`, a mail server is not
+    # something you want silently major-version-bumped under you. 14.0.0 is the
+    # current stable line as of this writing; check
+    # https://github.com/docker-mailserver/docker-mailserver/releases before
+    # bumping and read that release's UPGRADING notes.
+    image: docker.io/mailserver/docker-mailserver:14.0.0
+    container_name: mailserver
+
+    # MUST be the mail server's fully-qualified hostname and MUST match:
+    #   - the A record you create (mail.<agency-sending-domain>),
+    #   - the PTR / reverse-DNS Hostinger sets for the VPS IP,
+    #   - the CN/SAN on the TLS cert issued for it (SSL_DOMAIN below).
+    # Cold email goes out on the AGENCY's OWN domain, never anything
+    # Salescale-branded. Worked example = tenant #1, Atlas Reach, on
+    # atlasreach.io. Change BOTH of these to the agency's sending domain (see
+    # MAILSERVER.md "Domain strategy").
+    hostname: mail.atlasreach.io
+
+    # --- Ports (host:container). Each is bound on the host; none collide with
+    # Traefik's 80/443. Open the matching ufw rules (see MAILSERVER.md).
+    ports:
+      - "25:25"     # SMTP. Inbound MX (receiving replies) + outbound relay to
+                    #   other mail servers. Hostinger often BLOCKS outbound 25
+                    #   by default — you must request an unblock (MAILSERVER.md).
+      - "587:587"   # Submission (STARTTLS). Salescale sends through THIS port.
+      - "993:993"   # IMAPS (implicit TLS). Salescale reads the inbox on THIS.
+      - "465:465"   # Submission (implicit TLS). Optional alternative to 587;
+                    #   kept open so clients that only speak SMTPS still work.
+                    #   Comment out if you standardise on 587 and want it shut.
+      # 143 (plain IMAP+STARTTLS) and 110/995 (POP3) are intentionally NOT
+      # published — IMAPS on 993 is the only inbox path we expose.
+
+    # --- Persistent state, all under the box's /docker/ convention.
+    # BACK THESE UP (esp. config/ — it holds the DKIM private keys and the
+    # mailbox/password database). See MAILSERVER.md "Backups".
+    volumes:
+      - /docker/mailserver/mail-data:/var/mail          # the actual mailboxes
+      - /docker/mailserver/mail-state:/var/mail-state   # rspamd/redis/fail2ban state
+      - /docker/mailserver/mail-logs:/var/log/mail      # postfix/dovecot logs
+      - /docker/mailserver/config:/tmp/docker-mailserver # accounts + DKIM keys + overrides
+      # Read-only mount of the EXISTING Traefik ACME store. docker-mailserver
+      # parses acme.json and extracts the cert whose domain == SSL_DOMAIN.
+      # Traefik must actually hold a cert for that hostname first — see the SSL
+      # note in MAILSERVER.md (a dummy Traefik router triggers issuance).
+      - /docker/traefik/acme.json:/etc/letsencrypt/acme.json:ro
+      - /etc/localtime:/etc/localtime:ro
+
+    environment:
+      # ---------------- TLS ----------------
+      # Read certs from Traefik's Let's Encrypt acme.json (mounted above).
+      SSL_TYPE: letsencrypt
+      # Which cert to pull out of acme.json. Set to the mail hostname.
+      # IMPORTANT: Traefik's acme.json only holds certs for hostnames Traefik
+      # actually routes (today: app/api.salescale.lol). mail.atlasreach.io is
+      # NOT among them yet, so BEFORE this works you must make Traefik issue a
+      # cert for it — the cleanest way is a tiny dummy Traefik router on
+      # mail.atlasreach.io (HTTP-01). Full steps + the standalone-certbot
+      # alternative are in MAILSERVER.md "TLS certificate". If pointing at
+      # Traefik's store proves brittle on a version bump, switch to the
+      # manual-cert path (SSL_TYPE=manual + SSL_CERT_PATH/SSL_KEY_PATH).
+      SSL_DOMAIN: mail.atlasreach.io
+
+      # ---------------- Anti-spam / anti-virus ----------------
+      # Rspamd is docker-mailserver's current default filter (replaced the old
+      # SpamAssassin/Amavis stack). It brings its own bundled redis.
+      ENABLE_RSPAMD: 1
+      ENABLE_RSPAMD_REDIS: 1
+      # LIGHT TOUCH so cold-email REPLIES are never lost:
+      #  - Greylisting OFF: it deliberately delays first-contact mail, which
+      #    would delay/appear-to-drop replies from prospects. Turn off.
+      RSPAMD_GREYLISTING: 0
+      #  - Spam is TAGGED and filed to the Junk folder, never rejected at SMTP
+      #    time and never deleted — a mis-scored reply is always retrievable
+      #    from Junk rather than gone. (Set to 0 to keep spam in the inbox too.)
+      MOVE_SPAM_TO_JUNK: 1
+      MARK_SPAM_AS_READ: 0
+      # ClamAV is intentionally OFF. It's the single biggest RAM consumer in
+      # the DMS stack (~1GB+ resident for its virus DB) and this is a shared
+      # 7.8GB box already running the Salescale app stack + Traefik + Carter's
+      # other apps. Cold outreach is text; the AV cost isn't justified. Rspamd
+      # still scores attachments/URLs. Flip to 1 only if you later need it AND
+      # you've confirmed headroom.
+      ENABLE_CLAMAV: 0
+
+      # ---------------- DKIM / DMARC signing ----------------
+      # OpenDKIM signs outbound mail; keys are generated by `setup config dkim`
+      # (see MAILSERVER.md) and land in the config/ volume. OpenDMARC applies
+      # your DMARC policy to inbound.
+      ENABLE_OPENDKIM: 1
+      ENABLE_OPENDMARC: 1
+      # SPF/policy checks on inbound.
+      ENABLE_POLICYD_SPF: 1
+
+      # ---------------- fail2ban ----------------
+      # DECISION: run docker-mailserver's OWN fail2ban (guards Postfix/Dovecot
+      # auth-failure logs INSIDE the container — the host's fail2ban cannot see
+      # those logs, it only watches the host's own sshd). The two do not
+      # conflict: different log sources, different jails. It needs NET_ADMIN
+      # (cap_add below) to write iptables rules inside the container's netns.
+      # The HOST fail2ban continues to protect SSH (22) as documented in
+      # DEPLOYMENT.md — leave it running.
+      ENABLE_FAIL2BAN: 1
+
+      # ---------------- misc ----------------
+      # Where root/postmaster/abuse mail lands. Point at a real mailbox ON the
+      # agency's sending domain (postmaster@ is expected to exist by RFC).
+      POSTMASTER_ADDRESS: postmaster@atlasreach.io
+      # Rspamd/DKIM/fail2ban all key off good logs; keep at info while bringing
+      # the server up, drop to warn once stable.
+      LOG_LEVEL: info
+      # Reject clients with no valid PTR / bad HELO — standard inbound hygiene.
+      ENABLE_POSTGREY: 0
+      # Update-check chatter off (this is a server, not a workstation).
+      DMS_VMAIL_UID: 5000
+      DMS_VMAIL_GID: 5000
+
+    # NET_ADMIN: required by the in-container fail2ban to manage iptables.
+    # SYS_PTRACE: lets rspamd/supervisord report process state cleanly (optional
+    # but quiets warnings). No other privileges granted.
+    cap_add:
+      - NET_ADMIN
+      - SYS_PTRACE
+
+    restart: unless-stopped
+
+    # --- Resource limits, sized for a 7.8GB box shared with the app stack,
+    # Traefik, and Carter's other apps. Rspamd + redis + Dovecot + Postfix sit
+    # comfortably under ~1.3GB in steady state with ClamAV off; the 1.5GB cap
+    # is a safety ceiling, the 512m reservation keeps it schedulable. Adjust up
+    # only if `docker stats mailserver` shows sustained pressure.
+    mem_limit: 1536m
+    mem_reservation: 512m
+    cpus: 1.5
+
+    healthcheck:
+      # DMS ships this exact check in its docs — supervisord + core services up.
+      test: ["CMD-SHELL", "ss --listening --tcp | grep -P 'LISTEN.+:smtp' || exit 1"]
+      timeout: 3s
+      retries: 0
