@@ -68,9 +68,18 @@ WARMUP_CEILING = 40
 # warmup running at 20% of your daily send volume" (Lemwarm).
 MAINTENANCE_RATIO = 0.20
 MAINTENANCE_FLOOR = 10
-# Sending window: weekdays 08:00–18:00 UTC, spread with ±25% jitter.
+# Sending window: 08:00–18:00 UTC, spread with ±25% jitter. Weekends run at
+# reduced volume rather than stopping — a hard weekday/weekend cliff reads as
+# scripted (and a full stop "resets momentum"; Yahoo penalizes the pattern
+# hardest). Vendors converge on cutting 50–70% — we keep 40%.
 WINDOW_START_HOUR = 8
 WINDOW_END_HOUR = 18
+WEEKEND_RATIO = 0.4
+# Blended sending: research consensus (Smartlead/Instantly/MailReach + the
+# provider-physics side) is that real, engaged-recipient sends may start at
+# LOW volume around day 10 of the ramp while warmup keeps running — real
+# replies are the one signal providers still fully credit post-MPP.
+BLENDED_READY_DAY = 10
 # ~35% of received warmup mail gets a threaded reply; never reply past this
 # thread depth (two auto-repliers with no cap = infinite loop).
 REPLY_RATE = 35
@@ -187,27 +196,63 @@ def effective_daily_cap(
 
 def warmup_volume_today(account: EmailAccount, now: Optional[dt.datetime] = None) -> int:
     """How many synthetic warmup emails this mailbox should send today.
-    Weekdays only; 5 → min(40, target) linearly over 28 days, then a
-    maintenance trickle of ~20% of the cold cap (floor 10) forever."""
+    5 → min(40, target) linearly over 28 days, then a maintenance trickle of
+    ~20% of the cold cap (floor 10) forever. Weekends run at WEEKEND_RATIO of
+    the weekday figure (never zero while warming — consistency is itself a
+    reputation signal)."""
     if not account.warmup_enabled or account.warmup_started_at is None:
         return 0
     now = now or utcnow()
-    if now.weekday() >= 5:  # Sat/Sun — B2B warmup sends weekdays only
-        return 0
     ceiling = min(WARMUP_CEILING, max(WARMUP_START, account.warmup_target_daily or WARMUP_CEILING))
     days = (now - _aware(account.warmup_started_at)).days
     if days < 0:
         days = 0
     if days < RAMP_DAYS:
-        return round(WARMUP_START + (ceiling - WARMUP_START) * days / RAMP_DAYS)
-    # Fully warmed: the cold cap equals the (clamped) target, so maintenance
-    # is 20% of that — computed directly so an injected `now` stays coherent.
-    full_cap = min(
-        account.warmup_target_daily or account.daily_send_cap,
-        account.daily_send_cap,
-    )
-    maintenance = max(MAINTENANCE_FLOOR, round(MAINTENANCE_RATIO * full_cap))
-    return min(ceiling, maintenance)
+        volume = round(WARMUP_START + (ceiling - WARMUP_START) * days / RAMP_DAYS)
+    else:
+        # Fully warmed: the cold cap equals the (clamped) target, so
+        # maintenance is 20% of that — computed directly so an injected `now`
+        # stays coherent.
+        full_cap = min(
+            account.warmup_target_daily or account.daily_send_cap,
+            account.daily_send_cap,
+        )
+        volume = min(ceiling, max(MAINTENANCE_FLOOR, round(MAINTENANCE_RATIO * full_cap)))
+    if now.weekday() >= 5:  # Sat/Sun — lighter, not silent
+        volume = max(1, round(volume * WEEKEND_RATIO))
+    return volume
+
+
+def warmup_blended_ready(
+    account: EmailAccount, now: Optional[dt.datetime] = None
+) -> bool:
+    """True once the ramp is BLENDED_READY_DAY+ days in — the point where
+    low-volume REAL sends (to well-targeted, reply-likely prospects) should
+    begin alongside warmup. Real replies build reputation faster than any
+    synthetic signal, so waiting for 100% is slower, not safer."""
+    if not account.warmup_enabled or account.warmup_started_at is None:
+        return False
+    now = now or utcnow()
+    return (now - _aware(account.warmup_started_at)).days >= BLENDED_READY_DAY
+
+
+def warmup_totals(db: Session, account: EmailAccount) -> dict:
+    """Lifetime warmup engagement counters for one mailbox, aggregated from
+    its peer-pair rows (sent/junk live on this account's sender rows;
+    delivery confirmations live on the RECEIVERS' rows pointing back at it —
+    same orientation warmup_health reads)."""
+    sent, junk = db.execute(
+        select(
+            func.coalesce(func.sum(EmailWarmupPeer.sent_count), 0),
+            func.coalesce(func.sum(EmailWarmupPeer.junk_count), 0),
+        ).where(EmailWarmupPeer.account_id == account.id)
+    ).one()
+    delivered = db.execute(
+        select(func.coalesce(func.sum(EmailWarmupPeer.received_count), 0)).where(
+            EmailWarmupPeer.peer_account_id == account.id
+        )
+    ).scalar_one()
+    return {"sent": int(sent), "delivered": int(delivered), "junk": int(junk)}
 
 
 def warmup_progress(account: EmailAccount, now: Optional[dt.datetime] = None) -> int:
@@ -326,15 +371,16 @@ def run_warmup_tick(
     db: Session, org_id: str, now: Optional[dt.datetime] = None
 ) -> dict:
     """One warmup pass for one org (called every ~60s by the scheduler): for
-    each warmup mailbox inside the weekday send window, drip one email toward
-    today's ramped budget when past the jittered gap, rotating which peer
-    receives it. Caller owns the commit. `now` is injectable so tests can pin
-    a weekday inside the window."""
+    each warmup mailbox inside the send window, drip one email toward today's
+    ramped budget when past the jittered gap, rotating which peer receives
+    it. Weekends aren't gated here — warmup_volume_today already reduces the
+    weekend budget to WEEKEND_RATIO. Caller owns the commit. `now` is
+    injectable so tests can pin a time inside the window."""
     accounts = _warmup_accounts(db, org_id)
     if len(accounts) < 2:
         return {"organization_id": org_id, "accounts": len(accounts), "sent": 0}
     now = now or utcnow()
-    if now.weekday() >= 5 or not (WINDOW_START_HOUR <= now.hour < WINDOW_END_HOUR):
+    if not (WINDOW_START_HOUR <= now.hour < WINDOW_END_HOUR):
         return {"organization_id": org_id, "accounts": len(accounts), "sent": 0}
     sent = 0
     for sender in accounts:

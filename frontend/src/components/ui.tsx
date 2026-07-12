@@ -467,6 +467,45 @@ export function Segmented<T extends string>({
   );
 }
 
+// --- Switch (toggle) ---
+
+/** Accessible toggle switch — a styled checkbox under the hood so form
+ * semantics/labels keep working. Label text goes through `label`; pass
+ * `hideLabel` to keep it for screen readers only. */
+export function Switch({
+  checked,
+  onChange,
+  label,
+  hideLabel = false,
+  disabled = false,
+  className = "",
+}: {
+  checked: boolean;
+  onChange: (next: boolean) => void;
+  label: ReactNode;
+  hideLabel?: boolean;
+  disabled?: boolean;
+  className?: string;
+}) {
+  return (
+    <label className={`switch ${className}`.trim()}>
+      <input
+        type="checkbox"
+        role="switch"
+        checked={checked}
+        disabled={disabled}
+        onChange={(e) => onChange(e.target.checked)}
+      />
+      <span className="switch-track" aria-hidden="true">
+        <span className="switch-thumb" />
+      </span>
+      <span className={hideLabel ? "visually-hidden" : "switch-label"}>
+        {label}
+      </span>
+    </label>
+  );
+}
+
 // --- Alert (§4.10, inline) ---
 
 export type AlertTone = "ok" | "warn" | "danger" | "info";

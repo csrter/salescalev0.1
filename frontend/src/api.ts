@@ -1320,6 +1320,14 @@ export interface EmailAccount {
   warmup_progress: number;
   /** Measured reputation 0–100, null until enough warmup data exists. */
   warmup_health: number | null;
+  /** Today's planned synthetic warmup volume (0 on weekends / warmup off). */
+  warmup_volume_today: number;
+  /** Warmup sends already made today. */
+  warmup_sends_today: number;
+  /** Lifetime warmup engagement counters. */
+  warmup_totals: { sent: number; delivered: number; junk: number };
+  /** Day 10+ of the ramp — low-volume real sends should begin. */
+  warmup_blended_ready: boolean;
   effective_daily_cap: number;
   sends_today: number;
   last_synced_at: string | null;

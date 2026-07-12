@@ -111,11 +111,28 @@ def test_warmup_volume_ramp_curve():
     big = _acct(warmup_target_daily=500, daily_send_cap=10000)
     day27 = WEDNESDAY_NOON + dt.timedelta(days=27)
     assert email_warmup.warmup_volume_today(big, day27) <= 40
-    # Weekends are silent.
-    assert email_warmup.warmup_volume_today(a, SATURDAY_NOON) == 0
+    # Weekends run lighter (WEEKEND_RATIO of the weekday figure), never zero
+    # while warming — a hard weekday/weekend cliff reads as scripted.
+    sat_day3 = SATURDAY_NOON  # 3 days after WEDNESDAY_NOON start → weekday vol 8-9
+    weekday_equiv = email_warmup.warmup_volume_today(
+        a, SATURDAY_NOON + dt.timedelta(days=2)
+    )
+    sat_vol = email_warmup.warmup_volume_today(a, sat_day3)
+    assert 0 < sat_vol < weekday_equiv
     # Warmup off → 0.
     off = _acct(warmup_enabled=False)
     assert email_warmup.warmup_volume_today(off, WEDNESDAY_NOON) == 0
+
+
+def test_warmup_blended_ready_day10():
+    a = _acct(warmup_started_at=WEDNESDAY_NOON)
+    assert email_warmup.warmup_blended_ready(a, WEDNESDAY_NOON) is False
+    day9 = WEDNESDAY_NOON + dt.timedelta(days=9)
+    assert email_warmup.warmup_blended_ready(a, day9) is False
+    day10 = WEDNESDAY_NOON + dt.timedelta(days=10)
+    assert email_warmup.warmup_blended_ready(a, day10) is True
+    a.warmup_enabled = False
+    assert email_warmup.warmup_blended_ready(a, day10) is False
 
 
 def test_warmup_progress_deterministic():
@@ -153,10 +170,13 @@ def test_tick_weekend_and_window_gating(cc_org, api, probe_ok, captured_sends):
     _enable_warmup(a2["id"], days_ago=5)
     db = SessionLocal()
     try:
+        # Weekends still send (reduced budget), so an in-window Saturday tick
+        # is allowed through.
         assert (
             email_warmup.run_warmup_tick(db, cc_org["org"], now=SATURDAY_NOON)["sent"]
-            == 0
+            >= 1
         )
+        # Outside the 08–18 window nothing sends, weekday or not.
         late = WEDNESDAY_NOON.replace(hour=22)
         assert email_warmup.run_warmup_tick(db, cc_org["org"], now=late)["sent"] == 0
         db.rollback()

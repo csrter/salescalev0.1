@@ -662,3 +662,93 @@
   font-size: var(--text-xs);
   color: var(--ink-soft);
 }
+
+/* --- Warmup tab: dedicated per-inbox warmup cards -------------------------- */
+
+.eml-wu-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+  gap: var(--space-4);
+}
+
+.eml-wu-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.eml-wu-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.eml-wu-bar {
+  height: 10px; /* the hero bar — bigger than the account-card strip */
+}
+
+.eml-wu-stage {
+  font-weight: var(--weight-medium);
+  color: var(--ink);
+}
+
+.eml-wu-stats {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
+}
+
+.eml-wu-stats > div {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.eml-wu-stats dt {
+  font-size: var(--text-xs);
+  color: var(--ink-soft);
+}
+
+.eml-wu-stats dd {
+  margin: 0;
+  font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+.eml-wu-target {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-sm);
+  color: var(--ink-soft);
+}
+
+.eml-wu-target input {
+  width: 90px;
+}
+
+.eml-wu-off {
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--ink-soft);
+}
+
+.eml-account-warmupline {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  font-size: var(--text-sm);
+  color: var(--ink-soft);
+}
+
+.eml-wu-card .eml-warmup-meta {
+  flex-wrap: wrap;
+  justify-content: flex-start;
+}
+
+.eml-wu-card .eml-warmup-meta .eml-wu-stage {
+  flex: 1 1 100%;
+}

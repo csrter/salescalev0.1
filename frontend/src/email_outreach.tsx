@@ -79,6 +79,7 @@ import {
   KpiSkeleton,
   Segmented,
   SkeletonText,
+  Switch,
   Tabs,
 } from "./components/ui";
 import { Plus, Send } from "./components/icons";
@@ -160,7 +161,13 @@ function useHouseContacts(active: boolean) {
 // Root view
 // ==========================================================================
 
-type Panel = "dashboard" | "campaigns" | "inbox" | "accounts" | "suppression";
+type Panel =
+  | "dashboard"
+  | "campaigns"
+  | "inbox"
+  | "accounts"
+  | "warmup"
+  | "suppression";
 
 export function EmailOutreachView({ isAdmin }: { isAdmin: boolean }) {
   const [panel, setPanel] = useState<Panel>("dashboard");
@@ -180,6 +187,7 @@ export function EmailOutreachView({ isAdmin }: { isAdmin: boolean }) {
     { key: "campaigns", label: "Campaigns", adminOnly: true },
     { key: "inbox", label: "Inbox", adminOnly: false },
     { key: "accounts", label: "Accounts", adminOnly: true },
+    { key: "warmup", label: "Warmup", adminOnly: true },
     { key: "suppression", label: "Suppression", adminOnly: true },
   ];
   const visible = panels.filter((p) => isAdmin || !p.adminOnly);
@@ -219,7 +227,18 @@ export function EmailOutreachView({ isAdmin }: { isAdmin: boolean }) {
       )}
       {panel === "inbox" && <InboxPanel accounts={accounts} />}
       {panel === "accounts" && isAdmin && (
-        <AccountsPanel accounts={accounts} onChanged={refreshAccounts} />
+        <AccountsPanel
+          accounts={accounts}
+          onChanged={refreshAccounts}
+          onGoWarmup={() => setPanel("warmup")}
+        />
+      )}
+      {panel === "warmup" && isAdmin && (
+        <WarmupPanel
+          accounts={accounts}
+          onChanged={refreshAccounts}
+          onGoAccounts={() => setPanel("accounts")}
+        />
       )}
       {panel === "suppression" && isAdmin && <SuppressionPanel />}
     </div>
@@ -1826,9 +1845,11 @@ function ComposeDialog({
 function AccountsPanel({
   accounts,
   onChanged,
+  onGoWarmup,
 }: {
   accounts: EmailAccount[];
   onChanged: () => void;
+  onGoWarmup: () => void;
 }) {
   const toast = useToast();
   const [connecting, setConnecting] = useState(false);
@@ -1923,67 +1944,18 @@ function AccountsPanel({
                 </span>
               </div>
 
-              <label className="eml-check">
-                <input
-                  type="checkbox"
-                  checked={a.warmup_enabled}
-                  onChange={(e) =>
-                    updateEmailAccount(a.id, { warmup_enabled: e.target.checked })
-                      .then(() => {
-                        toast(
-                          e.target.checked
-                            ? "Warmup started — 28-day ramp begins now"
-                            : "Warmup off",
-                          "ok",
-                        );
-                        onChanged();
-                      })
-                      .catch((err) =>
-                        toast(err instanceof Error ? err.message : "Failed", "error"),
-                      )
-                  }
-                />
-                Warmup {a.warmup_enabled ? `→ ${int(a.warmup_target_daily)}/day` : "off"}
-              </label>
-              {a.warmup_enabled && (
-                <div className="eml-warmup">
-                  <div
-                    className="eml-warmup-bar"
-                    role="progressbar"
-                    aria-valuemin={0}
-                    aria-valuemax={100}
-                    aria-valuenow={a.warmup_progress}
-                    aria-label="Warmup progress"
-                  >
-                    <div
-                      className={`eml-warmup-fill${
-                        a.warmup_progress >= 100 ? " is-done" : ""
-                      }`}
-                      style={{ width: `${Math.max(2, a.warmup_progress)}%` }}
-                    />
-                  </div>
-                  <div className="eml-warmup-meta">
-                    <span>
-                      {a.warmup_progress >= 100
-                        ? "100% · fully warmed"
-                        : `${a.warmup_progress}% warmed · ${a.warmup_stage ?? ""}`}
-                    </span>
-                    {a.warmup_health != null && (
-                      <Badge
-                        tone={
-                          a.warmup_health >= 80
-                            ? "ok"
-                            : a.warmup_health >= 50
-                              ? "warn"
-                              : "danger"
-                        }
-                      >
-                        health {a.warmup_health}
-                      </Badge>
-                    )}
-                  </div>
-                </div>
-              )}
+              <div className="eml-account-warmupline">
+                <span>
+                  {a.warmup_enabled
+                    ? a.warmup_progress >= 100
+                      ? "Warmup: fully warmed (maintenance)"
+                      : `Warmup: ${a.warmup_progress}% · ${a.warmup_stage ?? ""}`
+                    : "Warmup off"}
+                </span>
+                <Button variant="link" size="sm" onClick={onGoWarmup}>
+                  Manage warmup
+                </Button>
+              </div>
 
               {tested[a.id] && <div className="eml-test-result">{tested[a.id]}</div>}
 
@@ -2317,6 +2289,224 @@ function AccountDialog({
 // ==========================================================================
 // 5. Suppression
 // ==========================================================================
+
+// ==========================================================================
+// Warmup panel — dedicated per-inbox warmup control + progress
+// ==========================================================================
+
+function WarmupPanel({
+  accounts,
+  onChanged,
+  onGoAccounts,
+}: {
+  accounts: EmailAccount[];
+  onChanged: () => void;
+  onGoAccounts: () => void;
+}) {
+  const toast = useToast();
+  // Local drafts for the target/day editor, keyed by account id.
+  const [targets, setTargets] = useState<Record<string, string>>({});
+  const [savingTarget, setSavingTarget] = useState<string | null>(null);
+
+  const setEnabled = (a: EmailAccount, next: boolean) => {
+    updateEmailAccount(a.id, { warmup_enabled: next })
+      .then(() => {
+        toast(
+          next
+            ? a.warmup_started_at
+              ? "Warmup restarted — the ramp begins again from day 1"
+              : "Warmup started — 28-day ramp begins now"
+            : "Warmup paused",
+          "ok",
+        );
+        onChanged();
+      })
+      .catch((err) =>
+        toast(err instanceof Error ? err.message : "Failed", "error"),
+      );
+  };
+
+  const saveTarget = async (a: EmailAccount) => {
+    const raw = targets[a.id];
+    const n = Number(raw);
+    if (!raw || Number.isNaN(n) || n < 10 || n > 500) {
+      toast("Target must be between 10 and 500 per day", "error");
+      return;
+    }
+    setSavingTarget(a.id);
+    try {
+      await updateEmailAccount(a.id, { warmup_target_daily: n });
+      toast("Warmup target updated", "ok");
+      setTargets((cur) => {
+        const next = { ...cur };
+        delete next[a.id];
+        return next;
+      });
+      onChanged();
+    } catch (err) {
+      toast(err instanceof Error ? err.message : "Failed", "error");
+    } finally {
+      setSavingTarget(null);
+    }
+  };
+
+  if (accounts.length === 0) {
+    return (
+      <GlassCard>
+        <EmptyState title="No mailboxes to warm">
+          Connect a mailbox first — then warm it up here before real sending.
+          <Button variant="link" size="sm" onClick={onGoAccounts}>
+            Go to Accounts
+          </Button>
+        </EmptyState>
+      </GlassCard>
+    );
+  }
+
+  return (
+    <div>
+      <div className="eml-head">
+        <p className="eml-sub">
+          New inboxes need a reputation before they can send cold email at
+          volume. Warmup exchanges real, threaded mail between your own
+          mailboxes on a 28-day ramp — replies and spam-rescue included — and
+          raises each inbox's daily sending cap as it matures. From day 10
+          ("blended-ready") start low-volume real sends to well-targeted
+          prospects alongside warmup: genuine replies build reputation faster
+          than any synthetic signal. Weekends run lighter automatically, and
+          maintenance volume continues after 100% to protect what you built.
+          To scale beyond ~50 sends/day, add more inboxes (2–3 per domain)
+          rather than pushing one inbox harder.
+        </p>
+      </div>
+
+      <div className="eml-wu-grid">
+        {accounts.map((a) => {
+          const fresh = !a.warmup_started_at;
+          const done = a.warmup_enabled && a.warmup_progress >= 100;
+          return (
+            <GlassCard key={a.id} className="eml-wu-card">
+              <div className="eml-wu-top">
+                <div>
+                  <div className="eml-account-name">{a.from_name}</div>
+                  <div className="eml-account-email">{a.from_email}</div>
+                </div>
+                <Switch
+                  checked={a.warmup_enabled}
+                  onChange={(next) => setEnabled(a, next)}
+                  label="Warmup"
+                  hideLabel
+                />
+              </div>
+
+              {a.warmup_enabled ? (
+                <>
+                  <div
+                    className="eml-warmup-bar eml-wu-bar"
+                    role="progressbar"
+                    aria-valuemin={0}
+                    aria-valuemax={100}
+                    aria-valuenow={a.warmup_progress}
+                    aria-label={`Warmup progress for ${a.from_email}`}
+                  >
+                    <div
+                      className={`eml-warmup-fill${done ? " is-done" : ""}`}
+                      style={{ width: `${Math.max(2, a.warmup_progress)}%` }}
+                    />
+                  </div>
+                  <div className="eml-warmup-meta">
+                    <span className="eml-wu-stage">
+                      {done
+                        ? "100% · fully warmed — maintenance mode"
+                        : `${a.warmup_progress}% warmed · ${a.warmup_stage ?? ""}`}
+                    </span>
+                    {!done && a.warmup_blended_ready && (
+                      <Badge tone="accent">
+                        blended-ready — start low-volume real sends
+                      </Badge>
+                    )}
+                    {a.warmup_health != null ? (
+                      <Badge
+                        tone={
+                          a.warmup_health >= 80
+                            ? "ok"
+                            : a.warmup_health >= 50
+                              ? "warn"
+                              : "danger"
+                        }
+                      >
+                        health {a.warmup_health}
+                      </Badge>
+                    ) : (
+                      <Badge tone="neutral">health pending</Badge>
+                    )}
+                  </div>
+
+                  <dl className="eml-wu-stats">
+                    <div>
+                      <dt>Warmup today</dt>
+                      <dd>
+                        {int(a.warmup_sends_today)} of{" "}
+                        {a.warmup_volume_today > 0
+                          ? int(a.warmup_volume_today)
+                          : "0 (weekend pause)"}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt>Sending cap (ramped)</dt>
+                      <dd>
+                        {int(a.effective_daily_cap)} / {int(a.daily_send_cap)} per
+                        day
+                      </dd>
+                    </div>
+                    <div>
+                      <dt>Exchanged</dt>
+                      <dd>
+                        {int(a.warmup_totals.sent)} sent ·{" "}
+                        {int(a.warmup_totals.delivered)} confirmed ·{" "}
+                        {int(a.warmup_totals.junk)} junk-rescued
+                      </dd>
+                    </div>
+                  </dl>
+
+                  <div className="eml-wu-target">
+                    <label htmlFor={`wu-target-${a.id}`}>Warmup target/day</label>
+                    <input
+                      id={`wu-target-${a.id}`}
+                      type="number"
+                      min={10}
+                      max={500}
+                      value={targets[a.id] ?? String(a.warmup_target_daily)}
+                      onChange={(e) =>
+                        setTargets((cur) => ({ ...cur, [a.id]: e.target.value }))
+                      }
+                    />
+                    {targets[a.id] != null &&
+                      targets[a.id] !== String(a.warmup_target_daily) && (
+                        <Button
+                          size="sm"
+                          busy={savingTarget === a.id}
+                          onClick={() => void saveTarget(a)}
+                        >
+                          Save
+                        </Button>
+                      )}
+                  </div>
+                </>
+              ) : (
+                <p className="eml-wu-off">
+                  {fresh
+                    ? "New inbox — flip the switch to start the 28-day ramp before any real outreach."
+                    : "Warmup is paused. Re-enabling restarts the ramp from day 1."}
+                </p>
+              )}
+            </GlassCard>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
 
 function SuppressionPanel() {
   const toast = useToast();

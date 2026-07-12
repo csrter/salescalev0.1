@@ -118,6 +118,14 @@ def _account_out(db: Session, a: EmailAccount) -> dict:
         # peer delivery), None until there's enough data.
         "warmup_progress": email_warmup.warmup_progress(a),
         "warmup_health": email_warmup.warmup_health(db, a),
+        # Dedicated warmup UI: today's planned synthetic volume vs done, and
+        # lifetime engagement counters ({sent, delivered, junk}).
+        "warmup_volume_today": email_warmup.warmup_volume_today(a),
+        "warmup_sends_today": email_warmup.warmup_sends_today(db, a),
+        "warmup_totals": email_warmup.warmup_totals(db, a),
+        # Day 10+ of the ramp: low-volume real sends should begin (research:
+        # real replies out-signal any synthetic warmup engagement).
+        "warmup_blended_ready": email_warmup.warmup_blended_ready(a),
     }
 
 

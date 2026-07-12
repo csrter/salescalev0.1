@@ -711,6 +711,42 @@ live activation + the entitlement flip, the Outreach module build
       auth-gated. Deploy-runbook correction: the compose file on the VPS is
       deploy/docker-compose.traefik.yml (under the deploy/ subdir), not
       repo-root docker-compose.traefik.yml.
+- [x] Warmup tab + research-tuned fast-warmup strategy (same-day session,
+      two-Opus-agent research pass first — vendor consensus + provider-side
+      reputation physics): (1) NEW dedicated "Warmup" tab in the Email module
+      (admin-only) — one card per mailbox with a proper toggle Switch (new
+      shared primitive components/ui.tsx Switch + .switch styles in ui.css,
+      visually-hidden-label support), hero progress bar, week/stage line,
+      health badge, "Warmup today X of Y", ramped-cap line, lifetime
+      exchanged counters (sent/confirmed/junk-rescued from EmailWarmupPeer,
+      new email_warmup.warmup_totals), and a warmup_target_daily inline
+      editor. Accounts cards slimmed to a one-line warmup summary + "Manage
+      warmup" link (panel switch via onGoWarmup prop). _account_out gained
+      warmup_volume_today / warmup_sends_today / warmup_totals /
+      warmup_blended_ready. (2) ENGINE updates encoding the research: weekend
+      warmup volume is now WEEKEND_RATIO (40%) of the weekday figure instead
+      of zero — the hard weekday/weekend cliff reads as scripted and a full
+      stop "resets momentum" (run_warmup_tick's weekday gate removed; the
+      budget itself is weekend-reduced); BLENDED_READY_DAY=10 +
+      warmup_blended_ready() — from day 10 the UI badges "blended-ready —
+      start low-volume real sends", per the strongest research finding:
+      post-MPP, real replies from real prospects are the signal providers
+      still fully credit, so low-volume real sending from ~day 10 warms
+      FASTER than warmup-only to 100%. Research verdicts worth keeping:
+      21-day floor/28-day target is corroborated across vendors (14-day
+      claims are marketing); never double volume day-over-day (Gmail
+      421-4.7.28 throttling); scale horizontally (2–3 inboxes/domain,
+      20–50/day each) not per-inbox; domain age ~2–4 weeks is unbuyable
+      wall-clock (SEM-FRESH blocklists); Google Postmaster v2 (Oct 2025)
+      killed reputation tiers → binary compliance + spam rate; warmup POOLS
+      are being actively neutralized by Google (GMass shut down, Apollo
+      dropped fake engagement) — our same-org peer exchange is volume pacing
+      + threaded replies, not a cross-tenant pool, and stays. Tests 366 → 367
+      (weekend-reduction + blended-ready cases; weekend tick test now expects
+      sends). Verified live on alt2 ON A SUNDAY: budgets showed 2 and 9
+      (exactly 40% of weekday 5/22), blended-ready badge on the day-14
+      mailbox, switch toggles round-trip with toasts, re-enable restarts ramp
+      at day 1, Accounts summary line + Manage warmup link render.
 - [ ] Stripe live activation + entitlement flip (after 12–14, so real
       limits land everywhere in one pass)
 - [ ] Outreach module build (dev-mode) — go-live gated on Meta App
