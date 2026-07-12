@@ -40,6 +40,7 @@ import {
   listEmailThreadMessages,
   listEmailThreads,
   markEmailThreadRead,
+  archiveEmailCampaign,
   pauseEmailCampaign,
   previewEmailStep,
   replyEmailThread,
@@ -419,7 +420,10 @@ function DashboardPanel({ accounts }: { accounts: EmailAccount[] }) {
                       {int(a.sends_today)} of {int(a.effective_daily_cap)} today
                     </span>
                     {a.warmup_stage && (
-                      <Badge tone="info">warmup: {a.warmup_stage}</Badge>
+                      <Badge tone="info">
+                        warmup {a.warmup_progress}%
+                        {a.warmup_health != null ? ` · health ${a.warmup_health}` : ""}
+                      </Badge>
                     )}
                     <Badge tone={bounceHot ? "danger" : "neutral"}>
                       7d bounce {pct(a.bounce_rate_7d)}
@@ -678,6 +682,7 @@ function CampaignEditor({
   const [busy, setBusy] = useState(false);
   const [preview, setPreview] = useState<{ position: number } | null>(null);
   const [enrolling, setEnrolling] = useState(false);
+  const [archiveConfirm, setArchiveConfirm] = useState(false);
 
   const load = useCallback(() => {
     getEmailCampaign(campaignId)
@@ -745,6 +750,21 @@ function CampaignEditor({
     }
   };
 
+  const archive = async () => {
+    if (!detail) return;
+    setBusy(true);
+    try {
+      const d = await archiveEmailCampaign(detail.id);
+      setDetail((cur) => (cur ? { ...cur, ...d } : d));
+      setArchiveConfirm(false);
+      onToast("Campaign archived", "ok");
+    } catch (e) {
+      onToast(e instanceof Error ? e.message : "Archive failed", "error");
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
     <Dialog
       open
@@ -757,15 +777,35 @@ function CampaignEditor({
           <Button variant="ghost" onClick={onClose}>
             Close
           </Button>
+          {detail && (detail.status === "draft" || detail.status === "paused") && (
+            archiveConfirm ? (
+              <>
+                <Button variant="danger-outline" busy={busy} onClick={archive}>
+                  Really archive?
+                </Button>
+                <Button
+                  variant="ghost"
+                  disabled={busy}
+                  onClick={() => setArchiveConfirm(false)}
+                >
+                  Keep it
+                </Button>
+              </>
+            ) : (
+              <Button variant="ghost" onClick={() => setArchiveConfirm(true)}>
+                Archive
+              </Button>
+            )
+          )}
           {detail && detail.status === "active" ? (
             <Button variant="danger-outline" busy={busy} onClick={pause}>
               Pause campaign
             </Button>
-          ) : (
+          ) : detail && detail.status !== "archived" ? (
             <Button variant="primary" busy={busy} onClick={activate}>
               Activate campaign
             </Button>
-          )}
+          ) : null}
         </>
       }
     >
@@ -798,13 +838,22 @@ function CampaignEditor({
           )}
 
           {tab === "steps" && (
-            <StepsEditor
-              steps={steps}
-              setSteps={setSteps}
-              onSave={saveSteps}
-              busy={busy}
-              onPreview={(position) => setPreview({ position })}
-            />
+            <>
+              {detail.status === "active" && (
+                <Alert tone="info">
+                  This campaign is live — saved step edits apply to future
+                  sends only. Contacts mid-sequence continue from their
+                  current position; emails already sent are unchanged.
+                </Alert>
+              )}
+              <StepsEditor
+                steps={steps}
+                setSteps={setSteps}
+                onSave={saveSteps}
+                busy={busy}
+                onPreview={(position) => setPreview({ position })}
+              />
+            </>
           )}
 
           {tab === "audience" && (
@@ -1881,7 +1930,12 @@ function AccountsPanel({
                   onChange={(e) =>
                     updateEmailAccount(a.id, { warmup_enabled: e.target.checked })
                       .then(() => {
-                        toast("Warmup updated", "ok");
+                        toast(
+                          e.target.checked
+                            ? "Warmup started — 28-day ramp begins now"
+                            : "Warmup off",
+                          "ok",
+                        );
                         onChanged();
                       })
                       .catch((err) =>
@@ -1889,15 +1943,47 @@ function AccountsPanel({
                       )
                   }
                 />
-                Warmup{" "}
-                {a.warmup_enabled
-                  ? `→ ${int(a.warmup_target_daily)}/day${
-                      a.warmup_started_at
-                        ? ` (started ${timeAgo(a.warmup_started_at)})`
-                        : ""
-                    }`
-                  : "off"}
+                Warmup {a.warmup_enabled ? `→ ${int(a.warmup_target_daily)}/day` : "off"}
               </label>
+              {a.warmup_enabled && (
+                <div className="eml-warmup">
+                  <div
+                    className="eml-warmup-bar"
+                    role="progressbar"
+                    aria-valuemin={0}
+                    aria-valuemax={100}
+                    aria-valuenow={a.warmup_progress}
+                    aria-label="Warmup progress"
+                  >
+                    <div
+                      className={`eml-warmup-fill${
+                        a.warmup_progress >= 100 ? " is-done" : ""
+                      }`}
+                      style={{ width: `${Math.max(2, a.warmup_progress)}%` }}
+                    />
+                  </div>
+                  <div className="eml-warmup-meta">
+                    <span>
+                      {a.warmup_progress >= 100
+                        ? "100% · fully warmed"
+                        : `${a.warmup_progress}% warmed · ${a.warmup_stage ?? ""}`}
+                    </span>
+                    {a.warmup_health != null && (
+                      <Badge
+                        tone={
+                          a.warmup_health >= 80
+                            ? "ok"
+                            : a.warmup_health >= 50
+                              ? "warn"
+                              : "danger"
+                        }
+                      >
+                        health {a.warmup_health}
+                      </Badge>
+                    )}
+                  </div>
+                </div>
+              )}
 
               {tested[a.id] && <div className="eml-test-result">{tested[a.id]}</div>}
 

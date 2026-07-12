@@ -437,6 +437,7 @@ def register_hooks() -> None:
         lambda db, suppression: exit_on_unsubscribe(db, suppression)
     )
     email_outreach_sync.hooks["on_warmup_received"] = email_warmup.on_warmup_received
+    email_outreach_sync.hooks["on_warmup_junk"] = email_warmup.on_warmup_junk
 
 
 register_hooks()

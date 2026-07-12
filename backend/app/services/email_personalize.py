@@ -37,6 +37,94 @@ _LITERAL_TOKENS = {"unsubscribe_url"}
 # Matches {{ name }} and {{ name | fallback }}.
 _TOKEN_RE = re.compile(r"\{\{\s*([a-zA-Z0-9_.]+)\s*(?:\|\s*([^}]*?)\s*)?\}\}")
 
+# Every non-custom token the renderer understands. A template token outside
+# this set (and not custom.<key>) would silently render as "" — so the steps
+# API validates against this at save time instead of letting typos vanish
+# from sent emails.
+KNOWN_TOKENS = frozenset(
+    {
+        "first_name",
+        "last_name",
+        "company",
+        "city",
+        "state",
+        "email",
+        "ai_snippet",
+        "unsubscribe_url",
+    }
+)
+
+# Person/place tokens get casing normalized when the stored value was clearly
+# never cased by a human (all-lower CSV imports, ALL-CAPS provider data).
+# Deliberately excludes email (case-insensitive anyway) and custom.* (opaque
+# org data — a SKU like "xL-2" must survive verbatim).
+_CASED_TOKENS = frozenset({"first_name", "last_name", "company", "city"})
+
+
+def unknown_tokens(template: Optional[str], custom_keys=None) -> list:
+    """Tokens in `template` the renderer would drop: not in KNOWN_TOKENS and,
+    when `custom_keys` is given, custom.<key> whose key isn't a real field
+    definition. Order of first appearance, deduped."""
+    out: list = []
+    for m in _TOKEN_RE.finditer(template or ""):
+        name = m.group(1)
+        if name in KNOWN_TOKENS:
+            continue
+        if name.startswith("custom.") and name[len("custom.") :]:
+            if custom_keys is None or name[len("custom.") :] in custom_keys:
+                continue
+        if name not in out:
+            out.append(name)
+    return out
+
+
+def _cap_token_word(tok: str) -> str:
+    """One name word: first letter up, rest down, plus the O'Brien/D'Angelo
+    shape (letter-apostrophe-letter) recapitalized after the apostrophe —
+    without touching possessives like Dana's."""
+    if not tok:
+        return tok
+    t = tok[0].upper() + tok[1:].lower()
+    if len(t) > 2 and t[1] == "'":
+        t = t[:2] + t[2].upper() + t[3:]
+    return t
+
+
+def _smart_case(name: str, value: str) -> str:
+    """Normalize casing only when the value carries no human casing signal:
+    all-lowercase or ALL-UPPERCASE strings are re-cased word-wise (spaces and
+    hyphens are word boundaries); anything mixed-case ("McDonald", "iRepair")
+    passes through untouched. States: 2-letter codes are uppercased."""
+    value = value.strip()
+    if name == "state":
+        if len(value) == 2 and value.isalpha():
+            return value.upper()
+        if value.islower() or value.isupper():
+            return re.sub(r"[^\s\-]+", lambda m: _cap_token_word(m.group(0)), value)
+        return value
+    if name in _CASED_TOKENS and (value.islower() or value.isupper()):
+        return re.sub(r"[^\s\-]+", lambda m: _cap_token_word(m.group(0)), value)
+    return value
+
+
+# Substitution artifacts, applied in order after token replacement: an emptied
+# token leaves "Hi ,", "Denver, .", doubled spaces, or a blank line behind —
+# a human proofreader would never send those, so neither do we.
+_TIDY_PASSES = (
+    (re.compile(r"[ \t]+(\n|$)"), r"\1"),  # trailing spaces per line
+    (re.compile(r"[ \t]{2,}"), " "),  # doubled spaces from emptied tokens
+    (re.compile(r" +([,.;:!?])"), r"\1"),  # "Hi ," -> "Hi,"
+    (re.compile(r",\s*([,.!?;:])"), r"\1"),  # "Denver, ." -> "Denver."
+    (re.compile(r"(^|\n)[ \t]*,[ \t]*"), r"\1"),  # line starting with ","
+    (re.compile(r"\n{3,}"), "\n\n"),  # collapsed token left a blank gap
+)
+
+
+def _tidy(text: str) -> str:
+    for pattern, repl in _TIDY_PASSES:
+        text = pattern.sub(repl, text)
+    return text.strip()
+
 _AI_SYSTEM_PROMPT = (
     "You write one or two short, natural sentences for a cold outreach email, "
     "personalizing to one specific contact using ONLY the grounded facts you "
@@ -94,9 +182,9 @@ def _render_template(
         value = _resolve_token(name, contact, company_name, extra)
         if value is None or str(value).strip() == "":
             return fallback if fallback is not None else ""
-        return str(value)
+        return _smart_case(name, str(value))
 
-    return _TOKEN_RE.sub(_repl, template)
+    return _tidy(_TOKEN_RE.sub(_repl, template))
 
 
 def render_step(

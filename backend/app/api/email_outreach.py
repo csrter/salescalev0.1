@@ -61,6 +61,7 @@ from ..schemas import (
 )
 from ..security import encrypt_secret
 from ..services import branding, email_campaigns, email_personalize, entitlements
+from ..services import custom_fields as custom_fields_svc
 from ..services import email_outreach_send as gateway
 from ..services import email_transport
 from ..services import email_warmup
@@ -109,8 +110,14 @@ def _account_out(db: Session, a: EmailAccount) -> dict:
         "sends_today": gateway.sends_today(db, a),
         # Warmup ramps the effective cap up over time; equals daily_send_cap
         # when warmup is off (email_warmup.effective_daily_cap).
-        "effective_daily_cap": email_warmup.effective_daily_cap(a),
+        "effective_daily_cap": email_warmup.effective_daily_cap(a, db),
         "warmup_stage": email_warmup.warmup_stage(a),
+        # Two separate numbers, per warmup industry convention: progress is
+        # the deterministic ramp maturity (0-100, days into the 28-day
+        # schedule), health is measured reputation (bounces/junk placement/
+        # peer delivery), None until there's enough data.
+        "warmup_progress": email_warmup.warmup_progress(a),
+        "warmup_health": email_warmup.warmup_health(db, a),
     }
 
 
@@ -281,6 +288,13 @@ def update_account(
             ),
         )
         _probe_or_400(probe_account)
+
+    # Warmup toggle: enabling starts the 28-day ramp clock; re-enabling after
+    # a disable restarts it (a gap in warmup means reputation decayed — the
+    # ramp must be earned again). Disabling keeps the timestamp; it's inert
+    # while warmup_enabled is False.
+    if data.get("warmup_enabled") is True and not account.warmup_enabled:
+        account.warmup_started_at = utcnow()
 
     for field, value in data.items():
         if field == "smtp_password":
@@ -742,27 +756,78 @@ def set_steps(
     scope: TenantScope = Depends(get_scope),
 ):
     campaign = _scoped_get(db, scope, EmailCampaign, campaign_id)
-    if campaign.status == CAMPAIGN_ACTIVE:
-        raise HTTPException(409, "Pause the campaign before editing its steps")
     positions = sorted(s.position for s in body.steps)
     if positions != list(range(1, len(body.steps) + 1)):
         raise HTTPException(
             422, "step positions must be contiguous starting at 1 (1..n)"
         )
-    # Full replace.
-    db.execute(EmailStep.__table__.delete().where(EmailStep.campaign_id == campaign.id))
+    # A typo'd token would silently render as "" in every sent email — reject
+    # it here, where the author can still see it.
+    custom_keys = set(
+        custom_fields_svc.definitions_by_key(db, campaign.organization_id)
+    )
+    bad: list = []
     for s in body.steps:
-        db.add(
-            EmailStep(
-                organization_id=campaign.organization_id,
-                campaign_id=campaign.id,
-                position=s.position,
-                wait_days=s.wait_days,
-                subject_template=s.subject,
-                body_template=s.body,
-                ai_instructions=s.ai_instructions,
-            )
+        for tok in email_personalize.unknown_tokens(s.subject, custom_keys):
+            if tok not in bad:
+                bad.append(tok)
+        for tok in email_personalize.unknown_tokens(s.body, custom_keys):
+            if tok not in bad:
+                bad.append(tok)
+    if bad:
+        raise HTTPException(
+            422,
+            "Unknown personalization token(s): "
+            + ", ".join("{{%s}}" % t for t in bad)
+            + ". Valid: "
+            + ", ".join(sorted(email_personalize.KNOWN_TOKENS))
+            + ", custom.<field key>",
         )
+    # Upsert in place — editable while ACTIVE. Existing ids keep their row (so
+    # enrollment ai_snippet caches stay valid and in-flight enrollments simply
+    # continue at their position number against the new step list); ids not in
+    # the payload are deleted; id-less entries are new steps. Edits only ever
+    # affect FUTURE sends — already-sent messages are the EmailMessage ledger.
+    existing = {
+        s.id: s
+        for s in db.execute(
+            select(EmailStep).where(EmailStep.campaign_id == campaign.id)
+        ).scalars()
+    }
+    keep_ids = {s.id for s in body.steps if s.id}
+    unknown_ids = keep_ids - set(existing)
+    if unknown_ids:
+        raise HTTPException(422, "Unknown step id(s) for this campaign")
+    for step_id, row in existing.items():
+        if step_id not in keep_ids:
+            db.delete(row)
+    # Two passes so the per-campaign unique(position) constraint never sees a
+    # transient duplicate while rows swap positions: park survivors on
+    # negative positions, then assign the real ones.
+    for i, (step_id, row) in enumerate(existing.items()):
+        if step_id in keep_ids:
+            row.position = -(i + 1)
+    db.flush()
+    for s in body.steps:
+        if s.id:
+            row = existing[s.id]
+            row.position = s.position
+            row.wait_days = s.wait_days
+            row.subject_template = s.subject
+            row.body_template = s.body
+            row.ai_instructions = s.ai_instructions
+        else:
+            db.add(
+                EmailStep(
+                    organization_id=campaign.organization_id,
+                    campaign_id=campaign.id,
+                    position=s.position,
+                    wait_days=s.wait_days,
+                    subject_template=s.subject,
+                    body_template=s.body,
+                    ai_instructions=s.ai_instructions,
+                )
+            )
     db.commit()
     return _campaign_out(db, campaign, full=True)
 
@@ -775,6 +840,8 @@ def activate_campaign(
     scope: TenantScope = Depends(get_scope),
 ):
     campaign = _scoped_get(db, scope, EmailCampaign, campaign_id)
+    if campaign.status not in (CAMPAIGN_DRAFT, CAMPAIGN_PAUSED):
+        raise HTTPException(409, "Only a draft or paused campaign can activate")
     steps = _count(
         db,
         select(func.count(EmailStep.id)).where(EmailStep.campaign_id == campaign.id),
@@ -806,6 +873,23 @@ def pause_campaign(
 ):
     campaign = _scoped_get(db, scope, EmailCampaign, campaign_id)
     campaign.status = CAMPAIGN_PAUSED
+    db.commit()
+    return _campaign_out(db, campaign, full=True)
+
+
+@router.post("/campaigns/{campaign_id}/archive")
+def archive_campaign(
+    campaign_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_admin),
+    scope: TenantScope = Depends(get_scope),
+):
+    """Terminal state: enrollments self-park (the engine skips non-active
+    campaigns) and the mailbox becomes deletable. Un-archiving isn't offered —
+    a stopped campaign's history should stay immutable; start a new campaign
+    instead."""
+    campaign = _scoped_get(db, scope, EmailCampaign, campaign_id)
+    campaign.status = CAMPAIGN_ARCHIVED
     db.commit()
     return _campaign_out(db, campaign, full=True)
 
@@ -1081,8 +1165,10 @@ def _analytics_accounts(db: Session, scope: TenantScope) -> list:
                 "from_email": a.from_email,
                 "status": a.status,
                 "sends_today": gateway.sends_today(db, a),
-                "effective_daily_cap": email_warmup.effective_daily_cap(a),
+                "effective_daily_cap": email_warmup.effective_daily_cap(a, db),
                 "warmup_stage": email_warmup.warmup_stage(a),
+                "warmup_progress": email_warmup.warmup_progress(a),
+                "warmup_health": email_warmup.warmup_health(db, a),
                 "bounce_rate_7d": _rate(bounced_7d, sent_7d),
             }
         )

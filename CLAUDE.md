@@ -594,6 +594,53 @@ live activation + the entitlement flip, the Outreach module build
       dropping the inherited security headers; hashed /assets stay
       immutable+1y. BOTH DEPLOYED to production (2026-07-12), migration
       applied cleanly, health green.
+- [x] Email outreach: editable campaigns + functional warmup + personalization
+      correctness (same-day session, research-driven — two Opus research agents
+      mapped the module and compiled 2025–26 warmup vendor consensus first):
+      (1) EDITABILITY — PUT /steps is now an UPSERT-IN-PLACE (EmailStepIn.id;
+      ids kept → enrollment ai_snippets caches survive edits, in-flight
+      enrollments continue at their position number) and works while ACTIVE
+      (edits affect future sends only; two-pass negative-position parking
+      avoids transient unique(campaign,position) violations). Activate gained
+      a real status guard (draft/paused only); POST /campaigns/{id}/archive
+      added (state existed, no setter — mailbox deletion was impossible).
+      Step saves also validate personalization tokens (unknown → 422 listing
+      them; custom.* checked against the org's field defs).
+      (2) WARMUP — was fully inert (schemas dropped warmup_enabled, started_at
+      never written, UI toggle no-oped). Now: EmailAccountPatch carries
+      warmup_enabled/warmup_target_daily; disabled→enabled stamps
+      warmup_started_at (re-enable restarts the ramp). Engine rewritten to the
+      vendor consensus (services/email_warmup.py): warmup volume ramps 5 →
+      min(40, target) linearly over 28 days, weekdays only, spread over an
+      08–18 UTC window with deterministic ±25% hash jitter and peer ROTATION;
+      after day 28 maintenance never stops (20% of cold cap, floor 10).
+      ~35% of received warmup mail gets a THREADED auto-reply (strongest
+      placement signal; deterministic on Message-ID hash, loop-safe via
+      X-Salescale-Warmup-Depth < 2). IMAP sync gained warmup hygiene
+      (email_transport.warmup_inbox_hygiene): junk-folder RESCUE of warmup
+      mail (moved to INBOX, charged to the sender pair's junk_count) +
+      mark-\Seen opens. EmailWarmupPeer gained sent/received/junk counters
+      (migration d7f3b9c1e4a6). effective_daily_cap(account, db) halves while
+      bounce_rate_7d > 2% (auto-throttle). TWO NUMBERS per industry
+      convention: warmup_progress (deterministic 0–100, days/28) and
+      warmup_health (100 − bounce/junk/delivery penalties, None till ≥5
+      sends) — surfaced in _account_out + analytics accounts; frontend
+      Accounts tab renders a 0–100% progress bar ("N% warmed · week X of 4" /
+      "fully warmed") + health badge, dashboard strip shows "warmup N%".
+      (3) PERSONALIZATION — values now smart-cased ("john"→"John",
+      "o'brien"→"O'Brien", "MESA"→"Mesa", 2-letter states upper; mixed-case
+      values and emails/custom.* untouched), a tidy pass removes emptied-token
+      artifacts ("Denver, ." → "Denver.", doubled spaces, blank-line runs),
+      and KNOWN_TOKENS/unknown_tokens() backs the save-time 422. Campaign
+      editor shows a live-edit notice on active campaigns + a two-step
+      Archive button. Tests 343 → 359 (test_email_warmup.py — NOTE it defines
+      its own org fixture; importing test_email_campaigns' module-scoped
+      cc_org would re-run the same signup and collide). Verified live on alt2:
+      warmup toggle → started stamp → bar at 0%/50%/"week 3 of 4", ramped cap
+      (0 of 20 / 0 of 60 today), live step edit on an active campaign with
+      stable ids, archive → activate 409, and preview rendering
+      "Hi John O'Brien … Mesa, AZ" from all-lowercase CRM data. NOT yet
+      deployed to production.
 - [ ] Stripe live activation + entitlement flip (after 12–14, so real
       limits land everywhere in one pass)
 - [ ] Outreach module build (dev-mode) — go-live gated on Meta App

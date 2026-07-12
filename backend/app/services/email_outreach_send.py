@@ -214,6 +214,11 @@ def send(
     step: Optional[EmailStep] = None,
     enrollment: Optional[EmailEnrollment] = None,
     in_reply_to_message: Optional[EmailMessage] = None,
+    # Warmup-only threading: the inbound warmup mail has no EmailMessage row,
+    # so its Message-ID comes in raw. Depth rides a header so two mailboxes
+    # auto-replying at each other can't loop (reply only when depth < cap).
+    reply_to_header: Optional[str] = None,
+    warmup_depth: int = 0,
 ) -> Tuple[str, Optional[EmailMessage]]:
     """Send one email. Returns (code, message_row). Never raises for a policy
     outcome — the caller branches on the code; only programming errors
@@ -252,7 +257,7 @@ def send(
     # (email_warmup sends through this gateway).
     from . import email_warmup
 
-    if sends_today(db, account) >= email_warmup.effective_daily_cap(account):
+    if sends_today(db, account) >= email_warmup.effective_daily_cap(account, db):
         return CAP_REACHED, None
 
     # Threading + subject resolution (campaign/manual only — warmup is
@@ -284,10 +289,14 @@ def send(
     in_reply_to_header = None
     if in_reply_to_message is not None and in_reply_to_message.message_id_header:
         in_reply_to_header = in_reply_to_message.message_id_header
+    elif reply_to_header:
+        in_reply_to_header = reply_to_header
+    if in_reply_to_header:
         mime["In-Reply-To"] = in_reply_to_header
         mime["References"] = in_reply_to_header
     if is_warmup:
         mime["X-Salescale-Warmup"] = "1"
+        mime["X-Salescale-Warmup-Depth"] = str(warmup_depth)
     elif unsub_url is not None:
         mime["List-Unsubscribe"] = f"<{unsub_url}>"
         mime["List-Unsubscribe-Post"] = "List-Unsubscribe=One-Click"

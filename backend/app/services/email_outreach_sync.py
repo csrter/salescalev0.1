@@ -60,11 +60,14 @@ def _noop(*args, **kwargs) -> None:
 #   on_bounce(db, original_message, contact) — a send hard-bounced
 #   on_unsubscribe(db, suppression)        — an opt-out was recorded
 #   on_warmup_received(db, account, parsed_message)
+#   on_warmup_junk(db, account, sender_addr) — a warmup mail from sender_addr
+#     was found in `account`'s spam folder (and rescued to INBOX)
 hooks: Dict[str, Callable] = {
     "on_reply": _noop,
     "on_bounce": _noop,
     "on_unsubscribe": _noop,
     "on_warmup_received": _noop,
+    "on_warmup_junk": _noop,
 }
 
 _MSGID_RE = re.compile(r"<[^<>@\s]+@[^<>@\s]+>")
@@ -278,6 +281,21 @@ def sync_account(db: Session, account: EmailAccount) -> dict:
         counts[outcome] = counts.get(outcome, 0) + 1
         if uid > max_uid:
             max_uid = uid
+
+    # Warmup engagement signals on the receiving side: rescue warmup mail out
+    # of the spam folder and mark inbox warmup read. Fail-soft — hygiene must
+    # never cost us the UID/timestamp bookkeeping above.
+    if account.warmup_enabled:
+        try:
+            hygiene = email_transport.warmup_inbox_hygiene(account)
+            for sender_addr in hygiene["rescued_from"]:
+                hooks["on_warmup_junk"](db, account, sender_addr)
+            if hygiene["rescued_from"] or hygiene["seen"]:
+                counts["warmup_hygiene"] = (
+                    len(hygiene["rescued_from"]) + hygiene["seen"]
+                )
+        except email_transport.EmailTransportError as e:
+            log.info("warmup hygiene skipped for %s: %s", account.id, e)
 
     account.last_imap_uid = max_uid
     account.last_synced_at = utcnow()

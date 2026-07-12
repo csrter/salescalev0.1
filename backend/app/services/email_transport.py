@@ -15,6 +15,7 @@ live server.
 
 import concurrent.futures
 import email
+import email.utils
 import imaplib
 import smtplib
 import ssl
@@ -192,6 +193,81 @@ def fetch_new(account, last_uid: int) -> List[Tuple[int, bytes]]:
             pass
     out.sort(key=lambda t: t[0])
     return out
+
+
+# Folder names the common servers use for spam. select() on a name the server
+# doesn't have just returns NO — each candidate is try-and-skip.
+_JUNK_FOLDERS = ("Junk", "Spam", "INBOX.Junk", "INBOX.Spam", "[Gmail]/Spam")
+
+
+def _from_address(header_bytes: bytes) -> str:
+    """The bare address out of a fetched 'From: …' header block."""
+    text = header_bytes.decode(errors="replace")
+    _, _, rest = text.partition(":")
+    return email.utils.parseaddr(rest.strip())[1].lower()
+
+
+def warmup_inbox_hygiene(account) -> dict:
+    """The receiving half of warmup's engagement signals, one IMAP session:
+    (1) rescue — any warmup-tagged message sitting in a spam folder is moved
+    back to INBOX (the strongest counter-signal to a bad placement); (2) open —
+    unread warmup messages in INBOX are marked \\Seen. Returns
+    {"rescued_from": [sender addresses], "seen": n} so the caller can charge
+    each rescue to the sending mailbox's reputation ledger. Raises
+    EmailTransportError on transport failure (callers treat it as fail-soft)."""
+    conn = imap_connect(account)
+    rescued: List[str] = []
+    seen = 0
+    try:
+        for folder in _JUNK_FOLDERS:
+            typ, _ = conn.select(f'"{folder}"')
+            if typ != "OK":
+                continue
+            typ, data = conn.uid("search", None, "HEADER", "X-Salescale-Warmup", "1")
+            if typ != "OK" or not data or not data[0]:
+                continue
+            for raw_uid in data[0].split():
+                ftyp, fdata = conn.uid(
+                    "fetch", raw_uid, "(BODY.PEEK[HEADER.FIELDS (FROM)])"
+                )
+                from_addr = ""
+                if ftyp == "OK" and fdata and isinstance(fdata[0], tuple):
+                    from_addr = _from_address(fdata[0][1])
+                moved = False
+                try:
+                    mtyp, _ = conn.uid("move", raw_uid, "INBOX")
+                    moved = mtyp == "OK"
+                except imaplib.IMAP4.error:
+                    moved = False  # server lacks MOVE — fall back below
+                if not moved:
+                    ctyp, _ = conn.uid("copy", raw_uid, "INBOX")
+                    if ctyp == "OK":
+                        conn.uid("store", raw_uid, "+FLAGS", r"(\Deleted)")
+                        moved = True
+                if moved and from_addr:
+                    rescued.append(from_addr)
+            try:
+                conn.expunge()
+            except imaplib.IMAP4.error:
+                pass
+        typ, _ = conn.select("INBOX")
+        if typ == "OK":
+            typ, data = conn.uid(
+                "search", None, "UNSEEN", "HEADER", "X-Salescale-Warmup", "1"
+            )
+            if typ == "OK" and data and data[0]:
+                for raw_uid in data[0].split():
+                    styp, _ = conn.uid("store", raw_uid, "+FLAGS", r"(\Seen)")
+                    if styp == "OK":
+                        seen += 1
+    except (imaplib.IMAP4.error, OSError, ssl.SSLError) as e:
+        raise EmailTransportError(str(e)) from e
+    finally:
+        try:
+            conn.logout()
+        except Exception:
+            pass
+    return {"rescued_from": rescued, "seen": seen}
 
 
 def probe(account) -> dict:

@@ -633,7 +633,7 @@ def test_effective_daily_cap_ramp():
     # Never exceeds the account's own hard cap.
     a.daily_send_cap = 30
     assert email_warmup.effective_daily_cap(a) == 30
-    assert email_warmup.warmup_stage(a) == "target reached"
+    assert email_warmup.warmup_stage(a) == "fully warmed"
 
 
 def _enable_warmup(account_id, *, target=100, days_ago=40):
@@ -662,7 +662,10 @@ def test_warmup_peer_send_tags_header_and_skips_meter(cc_org, api, probe_ok, cap
     try:
         org = db.get(Organization, cc_org["org"])
         used_before = entitlements.email_outreach_usage(db, org)["used"]
-        res = email_warmup.run_warmup_tick(db, cc_org["org"])
+        # Pin a weekday inside the 08–18 UTC window — the tick is a no-op on
+        # weekends/outside the window by design.
+        wednesday_noon = dt.datetime(2026, 7, 8, 12, 0, tzinfo=dt.timezone.utc)
+        res = email_warmup.run_warmup_tick(db, cc_org["org"], now=wednesday_noon)
         db.commit()
         used_after = entitlements.email_outreach_usage(db, org)["used"]
     finally:
@@ -761,12 +764,14 @@ def test_steps_must_be_contiguous_and_not_while_active(cc_org, api, probe_ok):
 
     _set_steps(cc_org, api, camp["id"], [{"position": 1, "body": "a"}])
     assert _activate(cc_org, api, camp["id"]).status_code == 200
+    # Steps ARE editable while active (edits only affect future sends).
     r2 = api.put(
         f"/api/email-outreach/campaigns/{camp['id']}/steps",
         json={"steps": [{"position": 1, "body": "changed"}]},
         headers=cc_org["headers"],
     )
-    assert r2.status_code == 409  # must pause first
+    assert r2.status_code == 200
+    assert r2.json()["steps"][0]["body"] == "changed"
 
 
 # --- analytics + usage ------------------------------------------------------

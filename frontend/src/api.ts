@@ -1293,6 +1293,11 @@ export interface EmailAccount {
   warmup_enabled: boolean;
   warmup_started_at: string | null;
   warmup_target_daily: number;
+  warmup_stage: string | null;
+  /** Deterministic ramp maturity 0–100 (100 = fully warmed, maintenance). */
+  warmup_progress: number;
+  /** Measured reputation 0–100, null until enough warmup data exists. */
+  warmup_health: number | null;
   effective_daily_cap: number;
   sends_today: number;
   last_synced_at: string | null;
@@ -1473,6 +1478,8 @@ export interface EmailAnalytics {
     sends_today: number;
     effective_daily_cap: number;
     warmup_stage: string | null;
+    warmup_progress: number;
+    warmup_health: number | null;
     bounce_rate_7d: number | null;
   }[];
 }
@@ -1519,6 +1526,8 @@ export const activateEmailCampaign = (id: string) =>
   api<EmailCampaignDetail>(`${EO}/campaigns/${id}/activate`, { method: "POST" });
 export const pauseEmailCampaign = (id: string) =>
   api<EmailCampaignDetail>(`${EO}/campaigns/${id}/pause`, { method: "POST" });
+export const archiveEmailCampaign = (id: string) =>
+  api<EmailCampaignDetail>(`${EO}/campaigns/${id}/archive`, { method: "POST" });
 export const enrollEmailContacts = (id: string, contactIds: string[]) =>
   api<EnrollReceipt>(`${EO}/campaigns/${id}/enroll`, {
     method: "POST",

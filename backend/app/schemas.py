@@ -1192,6 +1192,10 @@ class EmailAccountPatch(BaseModel):
     imap_password: Optional[str] = Field(default=None, min_length=1, max_length=1000)
     daily_send_cap: Optional[int] = Field(default=None, ge=1, le=10000)
     signature: Optional[str] = Field(default=None, max_length=5000)
+    # Warmup controls. Turning warmup on stamps warmup_started_at server-side
+    # (the ramp clock); toggling off and back on restarts the ramp.
+    warmup_enabled: Optional[bool] = None
+    warmup_target_daily: Optional[int] = Field(default=None, ge=10, le=500)
 
     @field_validator("smtp_security", "imap_security")
     @classmethod
@@ -1264,6 +1268,10 @@ class EmailCampaignPatch(BaseModel):
 
 
 class EmailStepIn(BaseModel):
+    # id present = update that existing step in place (keeps the step's
+    # identity stable so enrollment ai_snippet caches survive edits); absent =
+    # create. Steps whose ids are missing from the payload are deleted.
+    id: Optional[str] = None
     position: int = Field(ge=1)
     wait_days: int = Field(default=0, ge=0, le=365)
     subject: Optional[str] = Field(default=None, max_length=500)

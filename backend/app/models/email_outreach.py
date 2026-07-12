@@ -396,4 +396,17 @@ class EmailWarmupPeer(Base):
     last_received_at: Mapped[Optional[dt.datetime]] = mapped_column(
         DateTime(timezone=True)
     )
+    # Warmup health inputs: lifetime counters for this ordered pair. sent/
+    # received feed the delivery-ratio check; junk_count is how many of THIS
+    # account's warmup sends the peer's sync found in its spam folder (each
+    # one was rescued to the inbox — the count is the placement signal).
+    sent_count: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0", nullable=False
+    )
+    received_count: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0", nullable=False
+    )
+    junk_count: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0", nullable=False
+    )
     created_at: Mapped[dt.datetime] = created_at_column()
