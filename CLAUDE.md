@@ -574,6 +574,26 @@ live activation + the entitlement flip, the Outreach module build
       push credential on this Mac (no gh CLI, no HTTPS credential
       helper, SSH key not registered on GitHub) — the branch is deployed
       but not yet backed up to GitHub; push it manually when convenient.
+- [x] Pitch-target position + SPA cache fix (same-day follow-up):
+      (1) contacts.job_title (migration c9e4a7b2d8f1, nullable) — the
+      decision-maker's role, previously buried in source_detail.owner_title,
+      is now a first-class field: filled by enrichment fill-blanks-only,
+      editable in the drawer (Position), CSV-import target with header
+      auto-detect (title/position/role/designation), optional lead-list
+      column, and it leads the drawer identity line ("Owner · Desert Air
+      HVAC · Scottsdale, AZ"). OWNER_TITLES extended with marketing
+      leadership (CMO/VP marketing/marketing director/manager/GM) and
+      Apollo people results are re-ranked by that priority order
+      (enrichment._rank_pitch_target) instead of trusting provider order.
+      Tests 342 → 343. (2) frontend/nginx.conf: index.html had NO
+      Cache-Control, so browsers heuristically cached the SPA document and
+      kept users on pre-deploy bundles for hours (surfaced as "provider-key
+      entry not working" — the card simply wasn't in the user's cached
+      bundle; the feature itself was fine). `expires -1` on
+      `location = /index.html` emits Cache-Control: no-cache without
+      dropping the inherited security headers; hashed /assets stay
+      immutable+1y. BOTH DEPLOYED to production (2026-07-12), migration
+      applied cleanly, health green.
 - [ ] Stripe live activation + entitlement flip (after 12–14, so real
       limits land everywhere in one pass)
 - [ ] Outreach module build (dev-mode) — go-live gated on Meta App
