@@ -23,7 +23,7 @@ from ..db import get_db
 from ..deps import TenantScope, get_scope, require_admin, require_team
 from ..models.base import utcnow
 from ..models.core import Client, Organization, User
-from ..models.crm import Contact
+from ..models.crm import Contact, ContactList, ContactListMember
 from ..models.sms_outreach import (
     SMS_ACCOUNT_ACTIVE,
     SMS_ACCOUNT_ERROR,
@@ -629,7 +629,16 @@ def enroll_campaign(
     # front (402 when already exhausted) so an org can't queue what it can't
     # send.
     entitlements.enforce_can_send_sms(db, org)
-    if body.client_id:
+    if body.list_id:
+        contact_list = scope.get_or_404(db, ContactList, body.list_id)
+        contact_ids = list(
+            db.execute(
+                select(ContactListMember.contact_id).where(
+                    ContactListMember.list_id == contact_list.id
+                )
+            ).scalars()
+        )
+    elif body.client_id:
         client = _client_or_404(db, scope, body.client_id)
         contact_ids = [
             cid
@@ -643,10 +652,16 @@ def enroll_campaign(
     elif body.contact_ids:
         contact_ids = body.contact_ids
     else:
-        raise HTTPException(422, "Provide contact_ids or client_id")
-    result = sms_campaigns.enroll_contacts(
-        db, campaign, contact_ids, enrolled_by=user.id
-    )
+        raise HTTPException(422, "Provide contact_ids, client_id, or list_id")
+    # >500 members enroll in slices through the same function, merged into
+    # one receipt — enroll_contacts itself is unchanged.
+    result = {"enrolled": 0, "skipped": []}
+    for i in range(0, len(contact_ids), 500):
+        chunk = sms_campaigns.enroll_contacts(
+            db, campaign, contact_ids[i : i + 500], enrolled_by=user.id
+        )
+        result["enrolled"] += chunk["enrolled"]
+        result["skipped"].extend(chunk["skipped"])
     db.commit()
     return result
 

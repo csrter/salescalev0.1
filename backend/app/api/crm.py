@@ -28,7 +28,7 @@ from fastapi import (
     Query,
     Response,
 )
-from sqlalchemy import select
+from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from ..db import get_db
@@ -40,6 +40,8 @@ from ..models.crm import (
     Activity,
     Company,
     Contact,
+    ContactList,
+    ContactListMember,
     CrmTask,
     CustomFieldDefinition,
     Deal,
@@ -52,7 +54,12 @@ from ..schemas import (
     ActivityCreateIn,
     ActivityOut,
     ContactBulkDeleteIn,
+    ContactBulkUpdateIn,
     ContactCreateIn,
+    ContactListCreateIn,
+    ContactListMembersIn,
+    ContactListOut,
+    ContactListRenameIn,
     ContactOutPublic,
     ContactOutTeam,
     ContactUpdateIn,
@@ -344,6 +351,9 @@ def list_contacts(
     verification: Optional[str] = Query(
         default=None, description="Filter by verification_status (Phase 12)"
     ),
+    list_id: Optional[str] = Query(
+        default=None, description="Filter to members of a contact list"
+    ),
     scope: TenantScope = Depends(get_scope),
     db: Session = Depends(get_db),
 ):
@@ -359,6 +369,16 @@ def list_contacts(
         if verification not in VERIFICATION_STATUSES:
             raise HTTPException(400, "Unknown verification status")
         stmt = stmt.where(Contact.verification_status == verification)
+    if list_id:
+        scope.get_or_404(db, ContactList, list_id)
+        stmt = stmt.where(
+            select(ContactListMember.id)
+            .where(
+                ContactListMember.list_id == list_id,
+                ContactListMember.contact_id == Contact.id,
+            )
+            .exists()
+        )
 
     definitions = custom_fields_svc.definitions_by_key(db, scope.organization_id)
     if cf_filter:
@@ -429,6 +449,10 @@ def create_contact(
         )
     if body.sms_opt_in:
         sms_consent.record_opt_in(contact, "manual")
+    else:
+        sms_consent.apply_org_default(
+            db.get(Organization, client.organization_id), contact
+        )
     try:
         custom_fields_svc.validate_and_merge(
             db,
@@ -444,19 +468,13 @@ def create_contact(
     return _serialize_contact(db, contact, scope)
 
 
-@router.patch("/contacts/{contact_id}")
-def update_contact(
-    contact_id: str,
-    body: ContactUpdateIn,
-    user: User = Depends(require_team),
-    scope: TenantScope = Depends(get_scope),
-    db: Session = Depends(get_db),
-):
-    """Edit a contact's identity fields and/or custom-field values. Custom-field
-    writes go through the same validation as create; only the keys present are
-    changed (a null clears one). Required is enforced on create, not on partial
-    edits."""
-    contact = scope.get_or_404(db, Contact, contact_id)
+def _apply_contact_update(
+    db: Session, scope: TenantScope, contact: Contact, body: ContactUpdateIn
+) -> None:
+    """Apply a ContactUpdateIn's field-application rules to one contact.
+    Shared by the single PATCH and the bulk-update endpoint — behavior is
+    identical either way. Raises custom_fields_svc.CustomFieldError on a bad
+    custom-field value; caller decides how to surface it."""
     if body.first_name is not None:
         contact.first_name = body.first_name
     if body.last_name is not None:
@@ -495,18 +513,62 @@ def update_contact(
             # the original consent event.
             contact.sms_opt_in = False
     if body.custom_fields is not None:
-        try:
-            custom_fields_svc.validate_and_merge(
-                db,
-                scope.organization_id,
-                contact,
-                body.custom_fields,
-                enforce_required=False,
-            )
-        except custom_fields_svc.CustomFieldError as e:
-            raise HTTPException(400, str(e))
+        custom_fields_svc.validate_and_merge(
+            db,
+            scope.organization_id,
+            contact,
+            body.custom_fields,
+            enforce_required=False,
+        )
+
+
+@router.patch("/contacts/{contact_id}")
+def update_contact(
+    contact_id: str,
+    body: ContactUpdateIn,
+    user: User = Depends(require_team),
+    scope: TenantScope = Depends(get_scope),
+    db: Session = Depends(get_db),
+):
+    """Edit a contact's identity fields and/or custom-field values. Custom-field
+    writes go through the same validation as create; only the keys present are
+    changed (a null clears one). Required is enforced on create, not on partial
+    edits."""
+    contact = scope.get_or_404(db, Contact, contact_id)
+    try:
+        _apply_contact_update(db, scope, contact, body)
+    except custom_fields_svc.CustomFieldError as e:
+        raise HTTPException(400, str(e))
     db.commit()
     return _serialize_contact(db, contact, scope)
+
+
+@router.post("/contacts/bulk-update")
+def bulk_update_contacts(
+    body: ContactBulkUpdateIn,
+    user: User = Depends(require_team),
+    scope: TenantScope = Depends(get_scope),
+    db: Session = Depends(get_db),
+):
+    """Apply the same field change(s) to many contacts at once. Cross-org/
+    unknown ids are silently skipped (same convention as bulk-delete). A bad
+    custom-field value aborts the whole batch before commit — all-or-nothing,
+    never a half-applied bulk edit."""
+    contacts = list(
+        db.execute(
+            select(Contact).where(
+                Contact.organization_id == scope.organization_id,
+                Contact.id.in_(body.contact_ids),
+            )
+        ).scalars()
+    )
+    try:
+        for contact in contacts:
+            _apply_contact_update(db, scope, contact, body.fields)
+    except custom_fields_svc.CustomFieldError as e:
+        raise HTTPException(400, str(e))
+    db.commit()
+    return {"updated": len(contacts), "skipped": len(body.contact_ids) - len(contacts)}
 
 
 @router.get("/contacts/{contact_id}")
@@ -726,6 +788,8 @@ def import_contacts(
         )
         if row_opted_in:
             sms_consent.record_opt_in(contact, "csv_import:website_attested")
+        else:
+            sms_consent.apply_org_default(org, contact)
         if company_name:
             cache_key = company_name.lower()
             if cache_key not in company_cache:
@@ -855,6 +919,178 @@ def bulk_delete_contacts(
         crm_svc.delete_contact(db, contact)
     db.commit()
     return {"deleted": len(contacts)}
+
+
+# --- Contact lists ---
+# Named, client-scoped audiences (managed like Tags) used to target outreach
+# enrollment. Same TenantScope conventions as everywhere else in this file.
+
+
+def _list_for(db: Session, scope: TenantScope, list_id: str) -> ContactList:
+    return scope.get_or_404(db, ContactList, list_id)
+
+
+def _list_out(db: Session, contact_list: ContactList) -> dict:
+    member_count = db.execute(
+        select(func.count(ContactListMember.id)).where(
+            ContactListMember.list_id == contact_list.id
+        )
+    ).scalar_one()
+    return {
+        "id": contact_list.id,
+        "name": contact_list.name,
+        "client_id": contact_list.client_id,
+        "member_count": member_count,
+    }
+
+
+@router.get("/lists")
+def list_contact_lists(
+    client_id: str,
+    user: User = Depends(require_team),
+    scope: TenantScope = Depends(get_scope),
+    db: Session = Depends(get_db),
+):
+    client = _client_for(db, scope, client_id)
+    lists = (
+        db.execute(
+            select(ContactList)
+            .where(
+                ContactList.organization_id == client.organization_id,
+                ContactList.client_id == client.id,
+            )
+            .order_by(ContactList.name)
+        )
+        .scalars()
+        .all()
+    )
+    return [_list_out(db, l) for l in lists]
+
+
+@router.post("/lists", status_code=201)
+def create_contact_list(
+    body: ContactListCreateIn,
+    user: User = Depends(require_team),
+    scope: TenantScope = Depends(get_scope),
+    db: Session = Depends(get_db),
+):
+    client = _client_for(db, scope, body.client_id)
+    existing = db.execute(
+        select(ContactList.id).where(
+            ContactList.client_id == client.id, ContactList.name == body.name
+        )
+    ).scalar_one_or_none()
+    if existing:
+        raise HTTPException(409, "A list with this name already exists")
+    contact_list = ContactList(
+        organization_id=client.organization_id, client_id=client.id, name=body.name
+    )
+    db.add(contact_list)
+    db.commit()
+    return _list_out(db, contact_list)
+
+
+@router.patch("/lists/{list_id}")
+def rename_contact_list(
+    list_id: str,
+    body: ContactListRenameIn,
+    user: User = Depends(require_team),
+    scope: TenantScope = Depends(get_scope),
+    db: Session = Depends(get_db),
+):
+    contact_list = _list_for(db, scope, list_id)
+    existing = db.execute(
+        select(ContactList.id).where(
+            ContactList.client_id == contact_list.client_id,
+            ContactList.name == body.name,
+            ContactList.id != contact_list.id,
+        )
+    ).scalar_one_or_none()
+    if existing:
+        raise HTTPException(409, "A list with this name already exists")
+    contact_list.name = body.name
+    db.commit()
+    return _list_out(db, contact_list)
+
+
+@router.delete("/lists/{list_id}", status_code=204)
+def delete_contact_list(
+    list_id: str,
+    user: User = Depends(require_team),
+    scope: TenantScope = Depends(get_scope),
+    db: Session = Depends(get_db),
+):
+    """Deletes the list and its membership rows only — contacts are untouched."""
+    contact_list = _list_for(db, scope, list_id)
+    db.execute(
+        delete(ContactListMember).where(ContactListMember.list_id == contact_list.id)
+    )
+    db.delete(contact_list)
+    db.commit()
+    return Response(status_code=204)
+
+
+@router.post("/lists/{list_id}/contacts")
+def add_contacts_to_list(
+    list_id: str,
+    body: ContactListMembersIn,
+    user: User = Depends(require_team),
+    scope: TenantScope = Depends(get_scope),
+    db: Session = Depends(get_db),
+):
+    """Bulk-add contacts to a list. Cross-org/wrong-client ids are silently
+    skipped (same convention as bulk-delete); duplicates are idempotent."""
+    contact_list = _list_for(db, scope, list_id)
+    contacts = list(
+        db.execute(
+            select(Contact.id).where(
+                Contact.organization_id == contact_list.organization_id,
+                Contact.client_id == contact_list.client_id,
+                Contact.id.in_(body.contact_ids),
+            )
+        ).scalars()
+    )
+    existing_ids = set(
+        db.execute(
+            select(ContactListMember.contact_id).where(
+                ContactListMember.list_id == contact_list.id,
+                ContactListMember.contact_id.in_(contacts),
+            )
+        ).scalars()
+    )
+    added = 0
+    for cid in contacts:
+        if cid in existing_ids:
+            continue
+        db.add(
+            ContactListMember(
+                organization_id=contact_list.organization_id,
+                list_id=contact_list.id,
+                contact_id=cid,
+            )
+        )
+        added += 1
+    db.commit()
+    return {"added": added, "skipped": len(body.contact_ids) - added}
+
+
+@router.post("/lists/{list_id}/contacts/remove")
+def remove_contacts_from_list(
+    list_id: str,
+    body: ContactListMembersIn,
+    user: User = Depends(require_team),
+    scope: TenantScope = Depends(get_scope),
+    db: Session = Depends(get_db),
+):
+    contact_list = _list_for(db, scope, list_id)
+    result = db.execute(
+        delete(ContactListMember).where(
+            ContactListMember.list_id == contact_list.id,
+            ContactListMember.contact_id.in_(body.contact_ids),
+        )
+    )
+    db.commit()
+    return {"removed": result.rowcount}
 
 
 # --- Deals ---

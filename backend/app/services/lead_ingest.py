@@ -24,8 +24,9 @@ from typing import Optional, Tuple
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from ..models.core import Client
+from ..models.core import Client, Organization
 from ..models.crm import Contact
+from . import sms_consent
 
 _CONTACT_FIELDS = ("first_name", "last_name", "email", "phone")
 
@@ -109,6 +110,9 @@ def upsert_contact(
             source_external_id=source_external_id,
             source_detail=source_detail,
             **incoming,
+        )
+        sms_consent.apply_org_default(
+            db.get(Organization, client.organization_id), contact
         )
         db.add(contact)
         db.flush()

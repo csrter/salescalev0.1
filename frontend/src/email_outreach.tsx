@@ -32,6 +32,7 @@ import {
   enrollEmailContacts,
   getEmailCampaign,
   getHouseClient,
+  listContactLists,
   listCrmContactsForClient,
   listEmailAccounts,
   listEmailCampaigns,
@@ -63,6 +64,7 @@ import {
   type EmailThread,
   type EmailUsage,
   type EnrollReceipt,
+  type ContactList,
 } from "./api";
 import { LineChart } from "./components/charts";
 import { DataTable, type Column } from "./components/DataTable";
@@ -155,6 +157,29 @@ function useHouseContacts(active: boolean) {
     };
   }, [active]);
   return contacts;
+}
+
+/** House-CRM contact lists for the enroll picker's "Audience" select — lists
+ * a `list_id` enroll (the whole list, server-side) instead of picking
+ * individual contacts. */
+function useHouseContactLists(active: boolean) {
+  const [lists, setLists] = useState<ContactList[]>([]);
+  useEffect(() => {
+    if (!active) return;
+    let alive = true;
+    getHouseClient()
+      .then((r) => listContactLists(r.client_id))
+      .then((rows) => {
+        if (alive) setLists(rows);
+      })
+      .catch(() => {
+        if (alive) setLists([]);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [active]);
+  return lists;
 }
 
 // ==========================================================================
@@ -1375,6 +1400,8 @@ function EnrollDialog({
 }) {
   const toast = useToast();
   const contacts = useHouseContacts(true);
+  const lists = useHouseContactLists(true);
+  const [listId, setListId] = useState("");
   const [search, setSearch] = useState("");
   const [picked, setPicked] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
@@ -1391,6 +1418,11 @@ function EnrollDialog({
     );
   }, [contacts, search]);
 
+  const selectedList = lists.find((l) => l.id === listId) ?? null;
+  const allShownSelected =
+    filtered.length > 0 && filtered.every((c) => picked.has(c.id));
+  const overCap = !listId && picked.size > ENROLL_SELECT_CAP;
+
   const toggle = (id: string) => {
     setPicked((cur) => {
       const next = new Set(cur);
@@ -1400,14 +1432,42 @@ function EnrollDialog({
     });
   };
 
+  const toggleAllShown = (on: boolean) => {
+    setPicked((cur) => {
+      const next = new Set(cur);
+      for (const c of filtered) {
+        if (on) next.add(c.id);
+        else next.delete(c.id);
+      }
+      return next;
+    });
+  };
+
   const submit = async () => {
+    if (listId) {
+      setBusy(true);
+      try {
+        const r = await enrollEmailContacts(campaignId, { list_id: listId });
+        setReceipt(r);
+        if (r.enrolled > 0) toast(`Enrolled ${r.enrolled}`, "ok");
+      } catch (e) {
+        toast(e instanceof Error ? e.message : "Enroll failed", "error");
+      } finally {
+        setBusy(false);
+      }
+      return;
+    }
     if (picked.size === 0) {
       toast("Select at least one contact", "error");
       return;
     }
+    if (overCap) {
+      toast(`Selection exceeds ${ENROLL_SELECT_CAP} — enroll by list instead`, "error");
+      return;
+    }
     setBusy(true);
     try {
-      const r = await enrollEmailContacts(campaignId, [...picked]);
+      const r = await enrollEmailContacts(campaignId, { contact_ids: [...picked] });
       setReceipt(r);
       if (r.enrolled > 0) toast(`Enrolled ${r.enrolled}`, "ok");
     } catch (e) {
@@ -1480,49 +1540,95 @@ function EnrollDialog({
           <Button variant="ghost" onClick={onClose}>
             Cancel
           </Button>
-          <Button variant="primary" busy={busy} onClick={submit}>
-            Enroll {picked.size > 0 ? `(${picked.size})` : ""}
+          <Button variant="primary" busy={busy} disabled={overCap} onClick={submit}>
+            {listId
+              ? `Enroll list${selectedList ? ` (${selectedList.member_count})` : ""}`
+              : `Enroll ${picked.size > 0 ? `(${picked.size})` : ""}`}
           </Button>
         </>
       }
     >
       <div className="eml-form">
-        <input
-          className="input"
-          placeholder="Search house-CRM contacts…"
-          aria-label="Search contacts"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-        />
-        {contacts === null ? (
-          <SkeletonText lines={6} />
-        ) : filtered.length === 0 ? (
-          <EmptyState title="No contacts">
-            Import leads into the house CRM (Lead Finder or CSV) to build an
-            audience.
-          </EmptyState>
-        ) : (
-          <div className="eml-picklist">
-            {filtered.map((c) => (
-              <label key={c.id} className="eml-pickrow">
-                <input
-                  type="checkbox"
-                  checked={picked.has(c.id)}
-                  onChange={() => toggle(c.id)}
-                />
-                <span className="eml-pickrow-name">{contactLabel(c)}</span>
-                <span className="eml-pickrow-email">{c.email || "no email"}</span>
-                {c.verification_status && (
-                  <Badge tone={c.verification_status}>{c.verification_status}</Badge>
-                )}
-              </label>
+        <Field label="Audience">
+          <select
+            className="select"
+            aria-label="Audience"
+            value={listId}
+            onChange={(e) => setListId(e.target.value)}
+          >
+            <option value="">All contacts (house CRM)</option>
+            {lists.map((l) => (
+              <option key={l.id} value={l.id}>
+                {l.name} ({l.member_count})
+              </option>
             ))}
-          </div>
+          </select>
+        </Field>
+
+        {!listId && (
+          <>
+            <input
+              className="input"
+              placeholder="Search house-CRM contacts…"
+              aria-label="Search contacts"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+            />
+            {overCap && (
+              <Alert tone="warn" title="Too many contacts selected">
+                Selecting more than {ENROLL_SELECT_CAP} contacts at once isn't
+                supported here — add them to a list instead and enroll the
+                whole list.
+              </Alert>
+            )}
+            {contacts === null ? (
+              <SkeletonText lines={6} />
+            ) : filtered.length === 0 ? (
+              <EmptyState title="No contacts">
+                Import leads into the house CRM (Lead Finder or CSV) to build an
+                audience.
+              </EmptyState>
+            ) : (
+              <>
+                <label className="eml-pickrow eml-pickrow--all">
+                  <input
+                    type="checkbox"
+                    checked={allShownSelected}
+                    onChange={(e) => toggleAllShown(e.target.checked)}
+                  />
+                  <span className="eml-pickrow-name">
+                    Select all ({filtered.length} shown)
+                  </span>
+                </label>
+                <div className="eml-picklist">
+                  {filtered.map((c) => (
+                    <label key={c.id} className="eml-pickrow">
+                      <input
+                        type="checkbox"
+                        checked={picked.has(c.id)}
+                        onChange={() => toggle(c.id)}
+                      />
+                      <span className="eml-pickrow-name">{contactLabel(c)}</span>
+                      <span className="eml-pickrow-email">{c.email || "no email"}</span>
+                      {c.verification_status && (
+                        <Badge tone={c.verification_status}>{c.verification_status}</Badge>
+                      )}
+                    </label>
+                  ))}
+                </div>
+              </>
+            )}
+          </>
         )}
       </div>
     </Dialog>
   );
 }
+
+/** Client-side cap on picking individual contacts in the enroll dialog — the
+ * backend enrolls a list in slices of 500, but hand-picking past that many
+ * checkboxes is neither realistic UI nor honest about the cost; use a list. */
+const ENROLL_SELECT_CAP = 500;
 
 const SKIP_LABELS: Record<EnrollReceipt["skipped"][number]["reason"], string> = {
   invalid_email: "invalid email (verified undeliverable)",

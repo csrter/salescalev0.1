@@ -516,7 +516,9 @@ export default function App() {
                 {tab === "leads" && isTeam && <LeadFinderView isAdmin={isAdmin} />}
                 {tab === "outreach" && isTeam && <OutreachView isAdmin={isAdmin} />}
                 {tab === "email" && isTeam && <EmailOutreachView isAdmin={isAdmin} />}
-                {tab === "sms" && isTeam && <SmsOutreachView isAdmin={isAdmin} />}
+                {tab === "sms" && isTeam && (
+                  <SmsOutreachView isAdmin={isAdmin} isOwner={isOwner} />
+                )}
                 {tab === "changes" && <PendingChangesPanel />}
                 {tab === "audit" && <AuditLogView />}
                 {tab === "team" && isAdmin && (

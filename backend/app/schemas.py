@@ -8,6 +8,7 @@ from pydantic import (
     EmailStr,
     Field,
     field_validator,
+    model_validator,
 )
 
 from . import platforms as platform_registry
@@ -151,6 +152,7 @@ class OrganizationOut(BaseModel):
     name: str
     require_mfa: bool = False
     allow_remember_device: bool = True
+    sms_opt_in_default: bool = False
     created_at: dt.datetime
 
 
@@ -160,6 +162,10 @@ class OrgSecurityIn(BaseModel):
 
 class OrgRememberDeviceIn(BaseModel):
     allow_remember_device: bool
+
+
+class OrgSmsOptInDefaultIn(BaseModel):
+    sms_opt_in_default: bool
 
 
 class TeamMemberCreate(BaseModel):
@@ -821,6 +827,33 @@ class ContactBulkDeleteIn(BaseModel):
     contact_ids: List[str] = Field(min_length=1, max_length=500)
 
 
+class ContactBulkUpdateIn(BaseModel):
+    contact_ids: List[str] = Field(min_length=1, max_length=500)
+    fields: ContactUpdateIn
+
+
+class ContactListOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    name: str
+    client_id: str
+    member_count: int = 0
+
+
+class ContactListCreateIn(BaseModel):
+    client_id: str
+    name: str = Field(min_length=1, max_length=100)
+
+
+class ContactListRenameIn(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+
+
+class ContactListMembersIn(BaseModel):
+    contact_ids: List[str] = Field(min_length=1, max_length=1000)
+
+
 # --- Phase 14: custom field definitions ---
 
 CUSTOM_FIELD_TYPES = (
@@ -1300,7 +1333,15 @@ class EmailStepsIn(BaseModel):
 
 
 class EmailEnrollIn(BaseModel):
-    contact_ids: List[str] = Field(min_length=1, max_length=1000)
+    # Exactly one of contact_ids / list_id must be provided (validated below).
+    contact_ids: Optional[List[str]] = Field(default=None, max_length=1000)
+    list_id: Optional[str] = None
+
+    @model_validator(mode="after")
+    def _one_of(self):
+        if bool(self.contact_ids) == bool(self.list_id):
+            raise ValueError("Provide exactly one of contact_ids or list_id")
+        return self
 
 
 class EmailPreviewIn(BaseModel):
@@ -1367,6 +1408,7 @@ class SmsEnrollIn(BaseModel):
 
     contact_ids: Optional[List[str]] = Field(default=None, max_length=1000)
     client_id: Optional[str] = None
+    list_id: Optional[str] = None
 
     @field_validator("contact_ids")
     @classmethod

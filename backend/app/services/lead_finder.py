@@ -25,6 +25,7 @@ from sqlalchemy.orm import Session
 
 from ..models.core import Client, Organization
 from ..models.crm import Company, Contact
+from . import sms_consent
 from .enrichment import normalize_domain
 from .lead_ingest import _digits
 from .places import PlaceResult
@@ -159,6 +160,7 @@ def import_places(
                 "types": place.types[:5],
             },
         )
+        sms_consent.apply_org_default(org, contact)
         db.add(contact)
         db.flush()
         created.append(contact)

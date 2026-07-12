@@ -79,6 +79,7 @@ from ..schemas import (
     OkResponse,
     OrganizationOut,
     OrgRememberDeviceIn,
+    OrgSmsOptInDefaultIn,
     OrgSecurityIn,
     OrgSignupRequest,
     QualifiedLeadCriteriaIn,
@@ -232,6 +233,23 @@ def set_allow_remember_device(
     trusted_devices for the explicit per-device/revoke-all controls."""
     org = db.get(Organization, user.organization_id)
     org.allow_remember_device = body.allow_remember_device
+    db.commit()
+    return org
+
+
+@router.put("/me/sms-opt-in-default", response_model=OrganizationOut)
+def set_sms_opt_in_default(
+    body: OrgSmsOptInDefaultIn,
+    user: User = Depends(require_owner),
+    db: Session = Depends(get_db),
+):
+    """Owner policy: when true, every newly created contact is stamped with
+    the org's standing SMS-consent attestation (services/sms_consent.
+    apply_org_default) — for agencies whose own intake funnels already
+    collect SMS consent before a lead reaches Salescale. STOP/suppression at
+    send time is unaffected."""
+    org = db.get(Organization, user.organization_id)
+    org.sms_opt_in_default = body.sms_opt_in_default
     db.commit()
     return org
 

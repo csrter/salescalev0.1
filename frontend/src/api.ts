@@ -202,6 +202,7 @@ export interface Org {
   name: string;
   require_mfa: boolean;
   allow_remember_device: boolean;
+  sms_opt_in_default: boolean;
   created_at: string;
 }
 export const getMyOrg = () => api<Org>("/api/orgs/me");
@@ -211,6 +212,15 @@ export const setAllowRememberDevice = (allow_remember_device: boolean) =>
   api<Org>("/api/orgs/me/allow-remember-device", {
     method: "PUT",
     body: JSON.stringify({ allow_remember_device }),
+  });
+/** Stamps every NEW contact with a standing SMS-consent attestation
+ * (source "org_default:pre_opted_funnel") — for agencies whose intake
+ * funnels collect SMS consent before leads reach Salescale. STOP/suppression
+ * still always wins at send time; this only affects contact creation. */
+export const setOrgSmsOptInDefault = (sms_opt_in_default: boolean) =>
+  api<Org>("/api/orgs/me/sms-opt-in-default", {
+    method: "PUT",
+    body: JSON.stringify({ sms_opt_in_default }),
   });
 
 /** The org's own "house" prospect pipeline lives on a hidden client that the
@@ -1272,6 +1282,10 @@ export interface ContactEditBody {
   city?: string | null;
   state?: string | null;
   company_name?: string | null;
+  /** True records a manual opt-in; false revokes it. */
+  sms_opt_in?: boolean | null;
+  /** Only the keys present are changed; a key set to null clears that value. */
+  custom_fields?: Record<string, unknown> | null;
 }
 
 export const updateContact = (id: string, body: ContactEditBody) =>
@@ -1285,6 +1299,58 @@ export const deleteContact = (id: string) =>
 
 export const bulkDeleteContacts = (contactIds: string[]) =>
   api<{ deleted: number }>("/api/crm/contacts/bulk-delete", {
+    method: "POST",
+    body: JSON.stringify({ contact_ids: contactIds }),
+  });
+
+/** Apply ONE field (or one custom_fields key) across many contacts at once —
+ * the bulk-selection bar's "Edit" action. Identity fields (name/email/phone)
+ * are deliberately not exposed in that UI even though this shape accepts
+ * them; only city/state/company_name/job_title/sms_opt_in/custom_fields are
+ * offered. Cross-org or unknown ids are silently skipped. */
+export const bulkUpdateContacts = (contactIds: string[], fields: ContactEditBody) =>
+  api<{ updated: number; skipped: number }>("/api/crm/contacts/bulk-update", {
+    method: "POST",
+    body: JSON.stringify({ contact_ids: contactIds, fields }),
+  });
+
+// --- CRM contact lists ---
+// Named, client-scoped audiences — like Tags but managed + used directly as
+// outreach audiences (enroll-by-list, below).
+
+export interface ContactList {
+  id: string;
+  name: string;
+  client_id: string;
+  member_count: number;
+}
+
+export const listContactLists = (clientId: string) =>
+  api<ContactList[]>(`/api/crm/lists?client_id=${clientId}`);
+
+export const createContactList = (clientId: string, name: string) =>
+  api<ContactList>("/api/crm/lists", {
+    method: "POST",
+    body: JSON.stringify({ client_id: clientId, name }),
+  });
+
+export const renameContactList = (id: string, name: string) =>
+  api<ContactList>(`/api/crm/lists/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify({ name }),
+  });
+
+export const deleteContactList = (id: string) =>
+  api<void>(`/api/crm/lists/${id}`, { method: "DELETE" });
+
+export const addContactsToList = (id: string, contactIds: string[]) =>
+  api<{ added: number; skipped: number }>(`/api/crm/lists/${id}/contacts`, {
+    method: "POST",
+    body: JSON.stringify({ contact_ids: contactIds }),
+  });
+
+export const removeContactsFromList = (id: string, contactIds: string[]) =>
+  api<{ removed: number }>(`/api/crm/lists/${id}/contacts/remove`, {
     method: "POST",
     body: JSON.stringify({ contact_ids: contactIds }),
   });
@@ -1561,10 +1627,13 @@ export const pauseEmailCampaign = (id: string) =>
   api<EmailCampaignDetail>(`${EO}/campaigns/${id}/pause`, { method: "POST" });
 export const archiveEmailCampaign = (id: string) =>
   api<EmailCampaignDetail>(`${EO}/campaigns/${id}/archive`, { method: "POST" });
-export const enrollEmailContacts = (id: string, contactIds: string[]) =>
+export const enrollEmailContacts = (
+  id: string,
+  body: { contact_ids: string[] } | { list_id: string },
+) =>
   api<EnrollReceipt>(`${EO}/campaigns/${id}/enroll`, {
     method: "POST",
-    body: JSON.stringify({ contact_ids: contactIds }),
+    body: JSON.stringify(body),
   });
 export const listEmailEnrollments = (id: string) =>
   api<EmailEnrollment[]>(`${EO}/campaigns/${id}/enrollments`);
@@ -1850,7 +1919,7 @@ export const archiveSmsCampaign = (id: string) =>
   api<SmsCampaignDetail>(`${SO}/campaigns/${id}/archive`, { method: "POST" });
 export const enrollSmsContacts = (
   id: string,
-  body: { contact_ids?: string[]; client_id?: string },
+  body: { contact_ids?: string[]; client_id?: string; list_id?: string },
 ) =>
   api<SmsEnrollReceipt>(`${SO}/campaigns/${id}/enroll`, {
     method: "POST",

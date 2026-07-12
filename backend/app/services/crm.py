@@ -29,6 +29,7 @@ from ..models.crm import (
     Activity,
     Company,
     Contact,
+    ContactListMember,
     ContactTag,
     CrmTask,
     Deal,
@@ -166,6 +167,7 @@ def delete_contact(db: Session, contact: Contact) -> None:
     db.execute(delete(Activity).where(Activity.contact_id == cid))
     db.execute(delete(CrmTask).where(CrmTask.contact_id == cid))
     db.execute(delete(ContactTag).where(ContactTag.contact_id == cid))
+    db.execute(delete(ContactListMember).where(ContactListMember.contact_id == cid))
     db.execute(delete(Deal).where(Deal.contact_id == cid))
     for model in (
         LandingEvent,

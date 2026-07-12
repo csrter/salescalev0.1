@@ -27,15 +27,23 @@ import {
   ADMIN_ROLES,
   TEAM_ROLES,
   api,
+  addContactsToList,
   bulkDeleteContacts,
+  bulkUpdateContacts,
+  createContactList,
   deleteContact,
+  deleteContactList,
+  listContactLists,
+  renameContactList,
   updateContact,
   verifyContacts,
+  type ContactEditBody,
+  type ContactList,
   type Session,
   type VerificationStatus,
 } from "./api";
 import { DataTable, type Column } from "./components/DataTable";
-import { ConfirmDialog, type ReceiptRow } from "./components/Dialog";
+import { ConfirmDialog, Dialog, type ReceiptRow } from "./components/Dialog";
 import {
   Alert,
   Badge,
@@ -45,11 +53,13 @@ import {
   PlatformChip,
   Skeleton,
   SkeletonText,
+  Switch,
 } from "./components/ui";
 import { useToast } from "./components/Toast";
 import { ChevronRight, Inbox, Pencil, Plus, Settings, Trash2 } from "./components/icons";
 import {
   CsvImportDialog,
+  CustomFieldControl,
   CustomFieldInputs,
   CustomFieldsPanel,
   FieldManager,
@@ -240,6 +250,15 @@ export function CrmView({
   // server-side. Team roles get archived too via the manager's own fetch.
   const { active: customDefs, reload: reloadDefs } = useCustomFieldDefs(true);
 
+  // Contact lists (audiences) for this client — team-only, used by the list
+  // filter, the bulk "Add to list" action, and the enroll pickers elsewhere.
+  const [lists, setLists] = useState<ContactList[]>([]);
+  const reloadLists = useCallback(() => {
+    if (isTeam) listContactLists(clientId).then(setLists).catch(() => {});
+  }, [clientId, isTeam]);
+  useEffect(reloadLists, [reloadLists]);
+  const [listId, setListId] = useState("");
+
   useEffect(() => {
     let alive = true;
     setRefetching(bump > 0);
@@ -247,7 +266,9 @@ export function CrmView({
       try {
         const [b, cs] = await Promise.all([
           api<Board>(`/api/crm/board?client_id=${clientId}`),
-          api<ContactRow[]>(`/api/crm/contacts?client_id=${clientId}`),
+          api<ContactRow[]>(
+            `/api/crm/contacts?client_id=${clientId}${listId ? `&list_id=${listId}` : ""}`
+          ),
         ]);
         if (!alive) return;
         setBoard(b);
@@ -266,7 +287,7 @@ export function CrmView({
     return () => {
       alive = false;
     };
-  }, [clientId, bump, isTeam]);
+  }, [clientId, bump, isTeam, listId]);
 
   const canDrag = isTeam && board != null && !board.read_only;
 
@@ -362,6 +383,10 @@ export function CrmView({
         refetching={refetching}
         onSelect={setSelectedId}
         onCreated={refresh}
+        lists={lists}
+        listId={listId}
+        onListIdChange={setListId}
+        onListsChanged={reloadLists}
       />
 
       {selectedId && (
@@ -371,6 +396,8 @@ export function CrmView({
           clientId={clientId}
           session={session}
           criteria={criteria}
+          lists={lists}
+          onListsChanged={reloadLists}
           stages={board.stages}
           customDefs={customDefs}
           onClose={closeDrawer}
@@ -805,6 +832,10 @@ function LeadList({
   refetching,
   onSelect,
   onCreated,
+  lists,
+  listId,
+  onListIdChange,
+  onListsChanged,
 }: {
   contacts: ContactRow[];
   clientId: string;
@@ -815,12 +846,19 @@ function LeadList({
   refetching: boolean;
   onSelect: (id: string) => void;
   onCreated: () => void;
+  lists: ContactList[];
+  listId: string;
+  onListIdChange: (id: string) => void;
+  onListsChanged: () => void;
 }) {
   const toast = useToast();
   const [adding, setAdding] = useState(false);
   const [showImport, setShowImport] = useState(false);
   const [showCols, setShowCols] = useState(false);
   const [showFilters, setShowFilters] = useState(false);
+  const [showManageLists, setShowManageLists] = useState(false);
+  const [addingToList, setAddingToList] = useState(false);
+  const [bulkEditing, setBulkEditing] = useState(false);
   const [cols, setCols] = useState<string[]>([]);
   const [sysCols, setSysCols] = useState<string[]>([]);
   const [filters, setFilters] = useState<CfFilter[]>([]);
@@ -1037,6 +1075,26 @@ function LeadList({
           {isTeam && (
             <select
               className="crm-verif-filter"
+              aria-label="Filter by list"
+              value={listId}
+              onChange={(e) => onListIdChange(e.target.value)}
+            >
+              <option value="">All contacts</option>
+              {lists.map((l) => (
+                <option key={l.id} value={l.id}>
+                  {l.name} ({l.member_count})
+                </option>
+              ))}
+            </select>
+          )}
+          {isTeam && (
+            <Button variant="ghost" size="sm" onClick={() => setShowManageLists(true)}>
+              Manage lists
+            </Button>
+          )}
+          {isTeam && (
+            <select
+              className="crm-verif-filter"
               aria-label="Filter by email verification"
               value={verifFilter}
               onChange={(e) => setVerifFilter(e.target.value)}
@@ -1175,6 +1233,12 @@ function LeadList({
                 >
                   Clear
                 </Button>
+                <Button variant="ghost" size="sm" onClick={() => setBulkEditing(true)}>
+                  <Pencil size={14} /> Edit
+                </Button>
+                <Button variant="ghost" size="sm" onClick={() => setAddingToList(true)}>
+                  Add to list
+                </Button>
                 <Button
                   variant="danger-outline"
                   size="sm"
@@ -1213,7 +1277,354 @@ function LeadList({
           onDone={onCreated}
         />
       )}
+
+      {showManageLists && (
+        <ManageListsDialog
+          lists={lists}
+          onClose={() => setShowManageLists(false)}
+          onChanged={onListsChanged}
+        />
+      )}
+
+      {addingToList && (
+        <AddToListDialog
+          clientId={clientId}
+          contactIds={selectedVisible}
+          lists={lists}
+          onClose={() => setAddingToList(false)}
+          onDone={onListsChanged}
+        />
+      )}
+
+      {bulkEditing && (
+        <BulkEditDialog
+          contactIds={selectedVisible}
+          customDefs={customDefs}
+          onClose={() => setBulkEditing(false)}
+          onDone={onCreated}
+        />
+      )}
     </div>
+  );
+}
+
+/** Rename/delete existing contact lists — reachable from the list filter's
+ * "Manage lists" button. Rename is inline (blur-to-save, like the custom-field
+ * manager); delete is a two-step confirm (existing drawer-delete pattern). */
+function ManageListsDialog({
+  lists,
+  onClose,
+  onChanged,
+}: {
+  lists: ContactList[];
+  onClose: () => void;
+  onChanged: () => void;
+}) {
+  return (
+    <Dialog open onClose={onClose} title="Manage lists" size="sm">
+      <div className="crm-form">
+        {lists.length === 0 && <p className="crm-muted">No lists yet.</p>}
+        {lists.map((l) => (
+          <ManageListRow key={l.id} list={l} onChanged={onChanged} />
+        ))}
+      </div>
+    </Dialog>
+  );
+}
+
+function ManageListRow({
+  list,
+  onChanged,
+}: {
+  list: ContactList;
+  onChanged: () => void;
+}) {
+  const toast = useToast();
+  const [name, setName] = useState(list.name);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => setName(list.name), [list.name]);
+
+  const rename = () => {
+    if (!name.trim() || name === list.name) return;
+    renameContactList(list.id, name.trim())
+      .then(onChanged)
+      .catch((e) => {
+        toast((e as Error).message, "error");
+        setName(list.name);
+      });
+  };
+
+  const del = () => {
+    setBusy(true);
+    deleteContactList(list.id)
+      .then(() => {
+        toast(`Deleted list "${list.name}"`, "ok");
+        onChanged();
+      })
+      .catch((e) => toast((e as Error).message, "error"))
+      .finally(() => setBusy(false));
+  };
+
+  return (
+    <div className="crm-cf-manage-row">
+      <div className="crm-cf-manage-main">
+        <input
+          className="crm-cf-label-input"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          onBlur={rename}
+          aria-label={`Rename ${list.name}`}
+        />
+        <span className="crm-count">
+          {list.member_count} contact{list.member_count === 1 ? "" : "s"}
+        </span>
+      </div>
+      <div className="crm-cf-manage-controls">
+        {confirmDelete ? (
+          <>
+            <Button variant="danger" size="sm" busy={busy} onClick={del}>
+              Delete
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              disabled={busy}
+              onClick={() => setConfirmDelete(false)}
+            >
+              Cancel
+            </Button>
+          </>
+        ) : (
+          <Button
+            variant="ghost"
+            size="sm"
+            aria-label={`Delete ${list.name}`}
+            onClick={() => setConfirmDelete(true)}
+          >
+            <Trash2 size={14} />
+          </Button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** Bulk-bar "Add to list": pick an existing list or name a new one, then adds
+ * every selected contact to it (idempotent — duplicates are skipped, not
+ * errors). */
+function AddToListDialog({
+  clientId,
+  contactIds,
+  lists,
+  onClose,
+  onDone,
+}: {
+  clientId: string;
+  contactIds: string[];
+  lists: ContactList[];
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const toast = useToast();
+  const [listId, setListId] = useState("");
+  const [newName, setNewName] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const submit = async () => {
+    if (!listId && !newName.trim()) {
+      toast("Pick a list or name a new one", "error");
+      return;
+    }
+    setBusy(true);
+    try {
+      const targetId = listId || (await createContactList(clientId, newName.trim())).id;
+      const r = await addContactsToList(targetId, contactIds);
+      toast(
+        `Added ${r.added} contact${r.added === 1 ? "" : "s"}${
+          r.skipped ? ` (${r.skipped} already on the list)` : ""
+        }`,
+        "ok"
+      );
+      onDone();
+      onClose();
+    } catch (e) {
+      toast((e as Error).message, "error");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Dialog
+      open
+      onClose={onClose}
+      title={`Add ${contactIds.length} lead${contactIds.length === 1 ? "" : "s"} to a list`}
+      size="sm"
+      footer={
+        <>
+          <Button variant="ghost" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button variant="primary" busy={busy} onClick={submit}>
+            Add
+          </Button>
+        </>
+      }
+    >
+      <div className="crm-form">
+        <Field label="Existing list">
+          <select
+            value={listId}
+            onChange={(e) => {
+              setListId(e.target.value);
+              if (e.target.value) setNewName("");
+            }}
+          >
+            <option value="">— choose —</option>
+            {lists.map((l) => (
+              <option key={l.id} value={l.id}>
+                {l.name} ({l.member_count})
+              </option>
+            ))}
+          </select>
+        </Field>
+        <Field label="Or create a new list" optional>
+          <input
+            placeholder="New list name"
+            value={newName}
+            disabled={!!listId}
+            onChange={(e) => setNewName(e.target.value)}
+          />
+        </Field>
+      </div>
+    </Dialog>
+  );
+}
+
+/** Bulk-bar "Edit": apply ONE field across every selected contact. Identity
+ * fields (name/email/phone) are deliberately excluded — the same value across
+ * many contacts is never right. Custom fields reuse the drawer's own
+ * per-type input control. */
+const BULK_EDIT_SYS_FIELDS: { key: "city" | "state" | "company_name" | "job_title"; label: string }[] = [
+  { key: "city", label: "City" },
+  { key: "state", label: "State" },
+  { key: "company_name", label: "Business name" },
+  { key: "job_title", label: "Position" },
+];
+
+function BulkEditDialog({
+  contactIds,
+  customDefs,
+  onClose,
+  onDone,
+}: {
+  contactIds: string[];
+  customDefs: CustomFieldDef[];
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const toast = useToast();
+  const activeDefs = customDefs.filter((d) => !d.archived_at);
+  const [sel, setSel] = useState<string>(BULK_EDIT_SYS_FIELDS[0].key);
+  const [textValue, setTextValue] = useState("");
+  const [optIn, setOptIn] = useState(true);
+  const [customValue, setCustomValue] = useState<unknown>(null);
+  const [busy, setBusy] = useState(false);
+
+  const customDef = sel.startsWith("custom:")
+    ? activeDefs.find((d) => `custom:${d.key}` === sel) ?? null
+    : null;
+
+  const submit = async () => {
+    let fields: ContactEditBody;
+    if (sel === "sms_opt_in") {
+      fields = { sms_opt_in: optIn };
+    } else if (customDef) {
+      fields = { custom_fields: { [customDef.key]: customValue } };
+    } else {
+      fields = { [sel]: textValue.trim() || null } as ContactEditBody;
+    }
+    setBusy(true);
+    try {
+      const r = await bulkUpdateContacts(contactIds, fields);
+      toast(
+        `Updated ${r.updated} contact${r.updated === 1 ? "" : "s"}${
+          r.skipped ? ` (${r.skipped} skipped)` : ""
+        }`,
+        "ok"
+      );
+      onDone();
+      onClose();
+    } catch (e) {
+      toast((e as Error).message, "error");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Dialog
+      open
+      onClose={onClose}
+      title={`Edit ${contactIds.length} lead${contactIds.length === 1 ? "" : "s"}`}
+      size="sm"
+      footer={
+        <>
+          <Button variant="ghost" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button variant="primary" busy={busy} onClick={submit}>
+            Apply
+          </Button>
+        </>
+      }
+    >
+      <div className="crm-form">
+        <Field label="Field">
+          <select value={sel} onChange={(e) => setSel(e.target.value)}>
+            <optgroup label="Contact fields">
+              {BULK_EDIT_SYS_FIELDS.map((f) => (
+                <option key={f.key} value={f.key}>
+                  {f.label}
+                </option>
+              ))}
+              <option value="sms_opt_in">SMS opt-in</option>
+            </optgroup>
+            {activeDefs.length > 0 && (
+              <optgroup label="Custom fields">
+                {activeDefs.map((d) => (
+                  <option key={d.key} value={`custom:${d.key}`}>
+                    {d.label}
+                  </option>
+                ))}
+              </optgroup>
+            )}
+          </select>
+        </Field>
+
+        {sel === "sms_opt_in" ? (
+          <Field
+            label="Value"
+            description="Records a manual SMS-consent attestation across every selected lead."
+          >
+            <Switch
+              checked={optIn}
+              onChange={setOptIn}
+              label={optIn ? "Opted in" : "Not opted in"}
+            />
+          </Field>
+        ) : customDef ? (
+          <Field label="Value">
+            <CustomFieldControl def={customDef} value={customValue} onChange={setCustomValue} />
+          </Field>
+        ) : (
+          <Field label="Value">
+            <input value={textValue} onChange={(e) => setTextValue(e.target.value)} />
+          </Field>
+        )}
+      </div>
+    </Dialog>
   );
 }
 
@@ -1477,6 +1888,8 @@ function ContactDrawer({
   criteria,
   stages,
   customDefs,
+  lists,
+  onListsChanged,
   onClose,
   onChanged,
 }: {
@@ -1486,6 +1899,8 @@ function ContactDrawer({
   criteria: Criterion[];
   stages: Stage[];
   customDefs: CustomFieldDef[];
+  lists: ContactList[];
+  onListsChanged: () => void;
   onClose: () => void;
   onChanged: () => void;
 }) {
@@ -1556,6 +1971,15 @@ function ContactDrawer({
             onChanged();
           }}
         />
+
+        {isTeam && (
+          <AddToListControl
+            clientId={clientId}
+            contactId={detail.id}
+            lists={lists}
+            onListsChanged={onListsChanged}
+          />
+        )}
 
         {isTeam && detail.email && (
           <div className="crm-verify-row">
@@ -1738,6 +2162,102 @@ function ContactDrawer({
         </div>
         {body()}
       </div>
+    </div>
+  );
+}
+
+/** Single-contact "Add to list" affordance in the drawer — pick an existing
+ * list or type a new name, mirroring the bulk-bar's AddToListDialog but for
+ * just this one lead. */
+function AddToListControl({
+  clientId,
+  contactId,
+  lists,
+  onListsChanged,
+}: {
+  clientId: string;
+  contactId: string;
+  lists: ContactList[];
+  onListsChanged: () => void;
+}) {
+  const toast = useToast();
+  const [value, setValue] = useState("");
+  const [creating, setCreating] = useState(false);
+  const [newName, setNewName] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const addToExisting = async (listId: string) => {
+    setBusy(true);
+    try {
+      const r = await addContactsToList(listId, [contactId]);
+      toast(r.added ? "Added to list" : "Already on that list", "ok");
+      onListsChanged();
+    } catch (e) {
+      toast((e as Error).message, "error");
+    } finally {
+      setBusy(false);
+      setValue("");
+    }
+  };
+
+  const createAndAdd = async () => {
+    if (!newName.trim() || busy) return;
+    setBusy(true);
+    try {
+      const l = await createContactList(clientId, newName.trim());
+      await addContactsToList(l.id, [contactId]);
+      toast(`Added to new list "${l.name}"`, "ok");
+      setNewName("");
+      setCreating(false);
+      onListsChanged();
+    } catch (e) {
+      toast((e as Error).message, "error");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="crm-add-to-list">
+      {!creating ? (
+        <select
+          aria-label="Add to list"
+          value={value}
+          disabled={busy}
+          onChange={(e) => {
+            const v = e.target.value;
+            if (v === "__new__") {
+              setCreating(true);
+              setValue("");
+              return;
+            }
+            if (v) addToExisting(v);
+          }}
+        >
+          <option value="">Add to list…</option>
+          {lists.map((l) => (
+            <option key={l.id} value={l.id}>
+              {l.name}
+            </option>
+          ))}
+          <option value="__new__">+ New list…</option>
+        </select>
+      ) : (
+        <div className="crm-form-actions">
+          <input
+            autoFocus
+            placeholder="List name"
+            value={newName}
+            onChange={(e) => setNewName(e.target.value)}
+          />
+          <Button variant="primary" size="sm" busy={busy} onClick={createAndAdd}>
+            Add
+          </Button>
+          <Button variant="ghost" size="sm" onClick={() => setCreating(false)}>
+            Cancel
+          </Button>
+        </div>
+      )}
     </div>
   );
 }

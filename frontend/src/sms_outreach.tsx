@@ -24,7 +24,9 @@ import {
   deleteSmsSuppression,
   enrollSmsContacts,
   getHouseClient,
+  getMyOrg,
   getSmsCampaign,
+  listContactLists,
   listSmsAccounts,
   listSmsCampaigns,
   listSmsCrmContactsForClient,
@@ -34,6 +36,7 @@ import {
   pauseSmsCampaign,
   previewSmsStep,
   saveSmsSteps,
+  setOrgSmsOptInDefault,
   smsAnalytics,
   smsUsage,
   smsWebhookUrls,
@@ -41,6 +44,7 @@ import {
   unenrollSms,
   updateSmsAccount,
   updateSmsCampaign,
+  type ContactList,
   type SmsAccount,
   type SmsAccountBody,
   type SmsAnalytics,
@@ -70,6 +74,7 @@ import {
   KpiSkeleton,
   Segmented,
   SkeletonText,
+  Switch,
   Tabs,
 } from "./components/ui";
 import { Plus } from "./components/icons";
@@ -152,13 +157,47 @@ function useHouseContacts(active: boolean) {
   return contacts;
 }
 
+/** House-CRM contact lists for the enroll picker's "Audience" select — lists
+ * a `list_id` enroll (the whole list, server-side) instead of picking
+ * individual contacts. */
+function useHouseContactLists(active: boolean) {
+  const [lists, setLists] = useState<ContactList[]>([]);
+  useEffect(() => {
+    if (!active) return;
+    let alive = true;
+    getHouseClient()
+      .then((r) => listContactLists(r.client_id))
+      .then((rows) => {
+        if (alive) setLists(rows);
+      })
+      .catch(() => {
+        if (alive) setLists([]);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [active]);
+  return lists;
+}
+
+/** Client-side cap on picking individual contacts in the enroll dialog — the
+ * backend enrolls a list in slices of 500, but hand-picking past that many
+ * checkboxes is neither realistic UI nor honest about the cost; use a list. */
+const ENROLL_SELECT_CAP = 500;
+
 // ==========================================================================
 // Root view
 // ==========================================================================
 
 type Panel = "dashboard" | "campaigns" | "messages" | "accounts" | "suppression";
 
-export function SmsOutreachView({ isAdmin }: { isAdmin: boolean }) {
+export function SmsOutreachView({
+  isAdmin,
+  isOwner,
+}: {
+  isAdmin: boolean;
+  isOwner: boolean;
+}) {
   const [panel, setPanel] = useState<Panel>("dashboard");
   const [accounts, setAccounts] = useState<SmsAccount[]>([]);
   const [usage, setUsage] = useState<SmsUsage | null>(null);
@@ -209,7 +248,9 @@ export function SmsOutreachView({ isAdmin }: { isAdmin: boolean }) {
         <UsageChip usage={usage} />
       </div>
 
-      {panel === "dashboard" && <DashboardPanel accounts={accounts} />}
+      {panel === "dashboard" && (
+        <DashboardPanel accounts={accounts} isAdmin={isAdmin} isOwner={isOwner} />
+      )}
       {panel === "campaigns" && isAdmin && <CampaignsPanel accounts={accounts} />}
       {panel === "messages" && <MessagesPanel accounts={accounts} />}
       {panel === "accounts" && isAdmin && (
@@ -236,7 +277,15 @@ function UsageChip({ usage }: { usage: SmsUsage | null }) {
 // 1. Dashboard
 // ==========================================================================
 
-function DashboardPanel({ accounts }: { accounts: SmsAccount[] }) {
+function DashboardPanel({
+  accounts,
+  isAdmin,
+  isOwner,
+}: {
+  accounts: SmsAccount[];
+  isAdmin: boolean;
+  isOwner: boolean;
+}) {
   const [campaignId, setCampaignId] = useState<string>("");
   const [days, setDays] = useState(30);
   const [campaigns, setCampaigns] = useState<SmsCampaign[]>([]);
@@ -286,6 +335,8 @@ function DashboardPanel({ accounts }: { accounts: SmsAccount[] }) {
           them everywhere, immediately, org-wide.
         </Alert>
       </div>
+
+      {isAdmin && <OrgOptInDefaultCard isOwner={isOwner} />}
 
       <div className="sms-bar">
         <select
@@ -435,6 +486,55 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
       <h3 className="sms-section-title">{title}</h3>
       {children}
     </section>
+  );
+}
+
+/** Admin-only: the org-wide standing consent attestation for agencies whose
+ * own intake funnels already collect SMS consent before leads reach
+ * Salescale. STOP/suppression at send time is unaffected either way. */
+function OrgOptInDefaultCard({ isOwner }: { isOwner: boolean }) {
+  const toast = useToast();
+  const [value, setValue] = useState<boolean | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    getMyOrg()
+      .then((o) => setValue(o.sms_opt_in_default))
+      .catch(() => {});
+  }, []);
+
+  const toggle = async (next: boolean) => {
+    setBusy(true);
+    try {
+      const o = await setOrgSmsOptInDefault(next);
+      setValue(o.sms_opt_in_default);
+    } catch (e) {
+      toast(e instanceof Error ? e.message : "Failed to update", "error");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (value == null) return null;
+
+  return (
+    <div className="sms-redline">
+      <GlassCard className="sms-optin-card">
+        <Switch
+          checked={value}
+          onChange={toggle}
+          disabled={busy || !isOwner}
+          label="New contacts are pre-opted-in"
+        />
+        <p className="sms-hint">
+          Every new contact added to the CRM is stamped with SMS consent,
+          source “org_default:pre_opted_funnel”. Only enable this if your
+          intake funnels collect SMS consent before leads reach Salescale.
+          STOP/suppression always wins.
+          {!isOwner && " Only the organization owner can change this."}
+        </p>
+      </GlassCard>
+    </div>
   );
 }
 
@@ -1296,6 +1396,8 @@ function EnrollDialog({
 }) {
   const toast = useToast();
   const contacts = useHouseContacts(true);
+  const lists = useHouseContactLists(true);
+  const [listId, setListId] = useState("");
   const [search, setSearch] = useState("");
   const [picked, setPicked] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
@@ -1312,6 +1414,11 @@ function EnrollDialog({
     );
   }, [contacts, search]);
 
+  const selectedList = lists.find((l) => l.id === listId) ?? null;
+  const allShownSelected =
+    filtered.length > 0 && filtered.every((c) => picked.has(c.id));
+  const overCap = !listId && picked.size > ENROLL_SELECT_CAP;
+
   const toggle = (id: string) => {
     setPicked((cur) => {
       const next = new Set(cur);
@@ -1321,9 +1428,37 @@ function EnrollDialog({
     });
   };
 
+  const toggleAllShown = (on: boolean) => {
+    setPicked((cur) => {
+      const next = new Set(cur);
+      for (const c of filtered) {
+        if (on) next.add(c.id);
+        else next.delete(c.id);
+      }
+      return next;
+    });
+  };
+
   const submit = async () => {
+    if (listId) {
+      setBusy(true);
+      try {
+        const r = await enrollSmsContacts(campaignId, { list_id: listId });
+        setReceipt(r);
+        if (r.enrolled > 0) toast(`Enrolled ${r.enrolled}`, "ok");
+      } catch (e) {
+        toast(e instanceof Error ? e.message : "Enroll failed", "error");
+      } finally {
+        setBusy(false);
+      }
+      return;
+    }
     if (picked.size === 0) {
       toast("Select at least one contact", "error");
+      return;
+    }
+    if (overCap) {
+      toast(`Selection exceeds ${ENROLL_SELECT_CAP} — enroll by list instead`, "error");
       return;
     }
     setBusy(true);
@@ -1391,43 +1526,84 @@ function EnrollDialog({
           <Button variant="ghost" onClick={onClose}>
             Cancel
           </Button>
-          <Button variant="primary" busy={busy} onClick={submit}>
-            Enroll {picked.size > 0 ? `(${picked.size})` : ""}
+          <Button variant="primary" busy={busy} disabled={overCap} onClick={submit}>
+            {listId
+              ? `Enroll list${selectedList ? ` (${selectedList.member_count})` : ""}`
+              : `Enroll ${picked.size > 0 ? `(${picked.size})` : ""}`}
           </Button>
         </>
       }
     >
       <div className="sms-form">
-        <input
-          className="input"
-          placeholder="Search house-CRM contacts…"
-          aria-label="Search contacts"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-        />
-        {contacts === null ? (
-          <SkeletonText lines={6} />
-        ) : filtered.length === 0 ? (
-          <EmptyState title="No contacts">
-            Import leads into the house CRM (Lead Finder or CSV) to build an
-            audience.
-          </EmptyState>
-        ) : (
-          <div className="sms-picklist">
-            {filtered.map((c) => (
-              <label key={c.id} className="sms-pickrow">
-                <input
-                  type="checkbox"
-                  checked={picked.has(c.id)}
-                  onChange={() => toggle(c.id)}
-                />
-                <span className="sms-pickrow-name">{contactLabel(c)}</span>
-                <span className="sms-pickrow-phone">{c.phone || "no number"}</span>
-                {c.sms_opt_in === false && <Badge tone="warn">no opt-in</Badge>}
-                {c.sms_opt_in === true && <Badge tone="ok">opted in</Badge>}
-              </label>
+        <Field label="Audience">
+          <select
+            className="select"
+            aria-label="Audience"
+            value={listId}
+            onChange={(e) => setListId(e.target.value)}
+          >
+            <option value="">All contacts (house CRM)</option>
+            {lists.map((l) => (
+              <option key={l.id} value={l.id}>
+                {l.name} ({l.member_count})
+              </option>
             ))}
-          </div>
+          </select>
+        </Field>
+
+        {!listId && (
+          <>
+            <input
+              className="input"
+              placeholder="Search house-CRM contacts…"
+              aria-label="Search contacts"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+            />
+            {overCap && (
+              <Alert tone="warn" title="Too many contacts selected">
+                Selecting more than {ENROLL_SELECT_CAP} contacts at once isn't
+                supported here — add them to a list instead and enroll the
+                whole list.
+              </Alert>
+            )}
+            {contacts === null ? (
+              <SkeletonText lines={6} />
+            ) : filtered.length === 0 ? (
+              <EmptyState title="No contacts">
+                Import leads into the house CRM (Lead Finder or CSV) to build an
+                audience.
+              </EmptyState>
+            ) : (
+              <>
+                <label className="sms-pickrow sms-pickrow--all">
+                  <input
+                    type="checkbox"
+                    checked={allShownSelected}
+                    onChange={(e) => toggleAllShown(e.target.checked)}
+                  />
+                  <span className="sms-pickrow-name">
+                    Select all ({filtered.length} shown)
+                  </span>
+                </label>
+                <div className="sms-picklist">
+                  {filtered.map((c) => (
+                    <label key={c.id} className="sms-pickrow">
+                      <input
+                        type="checkbox"
+                        checked={picked.has(c.id)}
+                        onChange={() => toggle(c.id)}
+                      />
+                      <span className="sms-pickrow-name">{contactLabel(c)}</span>
+                      <span className="sms-pickrow-phone">{c.phone || "no number"}</span>
+                      {c.sms_opt_in === false && <Badge tone="warn">no opt-in</Badge>}
+                      {c.sms_opt_in === true && <Badge tone="ok">opted in</Badge>}
+                    </label>
+                  ))}
+                </div>
+              </>
+            )}
+          </>
         )}
       </div>
     </Dialog>

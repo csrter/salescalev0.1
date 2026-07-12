@@ -18,8 +18,11 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..models.base import utcnow
+from ..models.core import Organization
 from ..models.crm import Contact
 from ..models.sms_outreach import SmsSuppression
+
+ORG_DEFAULT_SOURCE = "org_default:pre_opted_funnel"
 
 
 class SmsBlockedError(Exception):
@@ -102,6 +105,13 @@ def record_opt_in(
     contact.sms_opt_in = True
     contact.sms_opt_in_at = at or utcnow()
     contact.sms_opt_in_source = source[:100]
+
+
+def apply_org_default(org: Optional[Organization], contact: Contact) -> None:
+    """Stamp the org's standing consent attestation on a newly created
+    contact. Never overwrites an existing opt-in record."""
+    if org and org.sms_opt_in_default and not contact.sms_opt_in:
+        record_opt_in(contact, source=ORG_DEFAULT_SOURCE)
 
 
 def record_opt_out(

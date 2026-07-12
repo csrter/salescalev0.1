@@ -23,7 +23,7 @@ from sqlalchemy.orm import Session
 from ..db import get_db
 from ..deps import TenantScope, get_scope, require_admin, require_team
 from ..models.core import Organization, User
-from ..models.crm import Contact
+from ..models.crm import Contact, ContactList, ContactListMember
 from ..models.base import utcnow
 from ..models.email_outreach import (
     ACCOUNT_ACTIVE,
@@ -915,9 +915,27 @@ def enroll_campaign(
     # Enrollment implies future sends — gate on the monthly send quota up front
     # (402 when already exhausted) so an org can't queue what it can't send.
     entitlements.enforce_can_send_email(db, org)
-    result = email_campaigns.enroll_contacts(
-        db, campaign, body.contact_ids, enrolled_by=user.id
-    )
+    if body.list_id:
+        contact_list = scope.get_or_404(db, ContactList, body.list_id)
+        contact_ids = list(
+            db.execute(
+                select(ContactListMember.contact_id).where(
+                    ContactListMember.list_id == contact_list.id
+                )
+            ).scalars()
+        )
+    else:
+        contact_ids = body.contact_ids
+    # >500 members enroll in slices through the same function, merged into
+    # one receipt — enroll_contacts itself is unchanged.
+    result = {"enrolled": 0, "risky": [], "skipped": []}
+    for i in range(0, len(contact_ids), 500):
+        chunk = email_campaigns.enroll_contacts(
+            db, campaign, contact_ids[i : i + 500], enrolled_by=user.id
+        )
+        result["enrolled"] += chunk["enrolled"]
+        result["risky"].extend(chunk["risky"])
+        result["skipped"].extend(chunk["skipped"])
     db.commit()
     return result
 

@@ -75,6 +75,13 @@ class Organization(Base):
     allow_remember_device: Mapped[bool] = mapped_column(
         Boolean, default=True, server_default=text("true"), nullable=False
     )
+    # Org policy: some agencies collect SMS consent upstream (their own site
+    # funnel) before a lead ever reaches Salescale. When true, every NEWLY
+    # created contact is stamped opted-in at creation (services/sms_consent.
+    # apply_org_default) — STOP/suppression at send time is unaffected.
+    sms_opt_in_default: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=text("false"), nullable=False
+    )
     # Phase 8 — Stripe subscription linkage. Populated by the billing webhook.
     stripe_customer_id: Mapped[Optional[str]] = mapped_column(
         String(64), unique=True, index=True

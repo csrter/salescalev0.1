@@ -351,6 +351,44 @@ class ContactTag(Base):
     tag_id: Mapped[str] = mapped_column(ForeignKey("tags.id"), nullable=False)
 
 
+class ContactList(Base):
+    """A named, client-scoped audience of contacts — managed like Tags but
+    used to target outreach enrollment (email/SMS campaign pickers)."""
+
+    __tablename__ = "contact_lists"
+    __table_args__ = (
+        UniqueConstraint("client_id", "name", name="uq_contact_list_client_name"),
+    )
+
+    id: Mapped[str] = id_column()
+    organization_id: Mapped[str] = mapped_column(
+        ForeignKey("organizations.id"), nullable=False, index=True
+    )
+    client_id: Mapped[str] = mapped_column(
+        ForeignKey("clients.id"), nullable=False, index=True
+    )
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    created_at: Mapped[dt.datetime] = created_at_column()
+
+
+class ContactListMember(Base):
+    __tablename__ = "contact_list_members"
+    __table_args__ = (
+        UniqueConstraint("list_id", "contact_id", name="uq_contact_list_member"),
+    )
+
+    id: Mapped[str] = id_column()
+    organization_id: Mapped[str] = mapped_column(
+        ForeignKey("organizations.id"), nullable=False, index=True
+    )
+    list_id: Mapped[str] = mapped_column(
+        ForeignKey("contact_lists.id"), nullable=False, index=True
+    )
+    contact_id: Mapped[str] = mapped_column(
+        ForeignKey("contacts.id"), nullable=False, index=True
+    )
+
+
 # Custom-field value types (Phase 14). Kept here so the model, the validation
 # layer, and the API schemas all read one definition.
 CUSTOM_FIELD_TYPES: frozenset[str] = frozenset(

@@ -801,8 +801,9 @@ live activation + the entitlement flip, the Outreach module build
       production gap the mocked tests couldn't catch, caught + fixed:
       python-multipart was missing (requirements.txt) — Starlette's
       request.form() hard-requires it, so every form-encoded Twilio webhook
-      would have 500'd in prod. NOT DEPLOYED yet (migration f3c7d9e2a1b5 +
-      new tables; awaiting deploy consent). Go-live also needs, user-side:
+      would have 500'd in prod. DEPLOYED to production (2026-07-12, with the
+      Sendblue integration below; migration f3c7d9e2a1b5 applied cleanly,
+      routes live and auth-gated). Go-live also needs, user-side:
       the org's Twilio account connected in SMS → Accounts, A2P 10DLC brand +
       campaign registration in the Twilio console, and the per-account inbound
       webhook URL pasted into the Twilio number config (required for STOP).
@@ -834,13 +835,54 @@ live activation + the entitlement flip, the Outreach module build
       provider badge + the correct tokened webhook URLs; smsWebhookUrls is
       provider-aware. Tests 379 → 385 (5 Sendblue cases). Verified live on
       alt2 (provider selector flips the dialog to "Connect Sendblue" with
-      relabeled fields). NOT deployed (ships with the SMS module).
+      relabeled fields). DEPLOYED to production with the SMS module
+      (2026-07-12).
 - [x] Bug fix (found by the SMS engine agent mirroring email_campaigns):
       email_campaigns._next_valid_send_time returned the stale original
       `after` in its in-window branch instead of the loop's advanced day —
       invisible when send_window_start > 0 (default) but with start == 0 could
       schedule a send on a disallowed day. Fixed + regression test. The SMS
       copy shipped already-fixed.
+- [x] CRM lists + bulk edit + org SMS opt-in default + enroll-by-list
+      (post-SMS session, two Sonnet agents against a pinned contract,
+      independently re-verified): (1) Organization.sms_opt_in_default —
+      org-level standing attestation that intake funnels collect SMS consent
+      upstream; sms_consent.apply_org_default() stamps every NEW contact at
+      all four creation sites (POST /contacts, CSV import as fallback under
+      an explicit attestation, lead_ingest, lead_finder) with source
+      "org_default:pre_opted_funnel", never overwriting an existing record;
+      STOP/suppression still wins at send time. Owner-only toggle (PUT
+      /api/orgs/me/sms-opt-in-default, mirrors allow-remember-device) +
+      Switch card under the SMS dashboard's compliance banner (renders for
+      admins, disabled unless owner — isOwner threaded App→SmsOutreachView).
+      Atlas Reach's pre-existing contacts were backfilled the same day via
+      backend/scripts/backfill_sms_optin_atlas_reach.py (user-run on prod,
+      dry-run then --write; source "agency_attested:pre_existing_crm_consent").
+      (2) CRM contact lists: ContactList/ContactListMember mirror Tag/
+      ContactTag (client-scoped, unique name per client, org-scoped +
+      TenantScope); CRUD under /api/crm/lists, bulk add/remove (≤1000,
+      cross-org ids silently skipped, idempotent), list_id EXISTS-filter on
+      GET /contacts composing with cf_filter/verification, delete_contact
+      cascades membership. Frontend: list filter select + Manage lists in
+      the lead list, "Add to list" on the bulk bar (pick-or-create) and in
+      the contact drawer. (3) Bulk edit: update_contact's field application
+      extracted to _apply_contact_update; POST /api/crm/contacts/bulk-update
+      {contact_ids ≤500, fields: ContactUpdateIn} → {updated, skipped},
+      all-or-nothing on custom-field validation errors; bulk-bar "Edit"
+      dialog applies one field per pass (city/state/company/position/
+      sms_opt_in/custom fields — identity fields deliberately excluded).
+      (4) Enroll-by-list: EmailEnrollIn/SmsEnrollIn gained list_id (exactly-
+      one-of validator); both enroll endpoints resolve the scoped list and
+      feed the existing enroll_contacts in ≤500 slices, merging receipts;
+      both EnrollDialogs gained an Audience select (whole-list mode:
+      "Enroll list (N)") + "Select all (N shown)" over the filtered rows
+      (>500 selection blocks with a use-a-list hint). Migration
+      a1b7e3f9c2d6 (down_revision f3c7d9e2a1b5). Tests 385 → 404
+      (test_crm_lists.py, own lc_org fixture). Verified live on alt2:
+      list create/filter (member counts), bulk city edit persisted
+      ({"updated":2}), toggle → new contact born opted-in with the
+      org_default source, email enroll-by-list returned {"enrolled":2}.
+      NOT deployed yet.
 - [ ] Stripe live activation + entitlement flip (after 12–14, so real
       limits land everywhere in one pass)
 - [ ] Outreach module build (dev-mode) — go-live gated on Meta App
