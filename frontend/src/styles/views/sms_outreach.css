@@ -1,0 +1,635 @@
+/* ==========================================================================
+   sms_outreach.css — .sms-* layout/composition only (mirrors email_outreach.css).
+   Owner: SMS outreach view. Primitives (.card, .btn, .badge, .tabs, .seg,
+   .kpi, .table, .dialog, .field, .alert, .empty) live in components/ui.css.
+   Tokens only — no color/size/duration/z-index literals.
+   ========================================================================== */
+
+/* ---- shell: banner + subnav + usage chip -------------------------------- */
+
+.sms-banner {
+  margin-bottom: var(--space-4);
+}
+
+.sms-banner .btn--link {
+  margin-left: var(--space-2);
+}
+
+.sms-subnav {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+  margin-bottom: var(--space-5);
+}
+
+.sms-usage {
+  font-size: var(--text-sm);
+  color: var(--ink-soft);
+  padding: var(--space-1) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  background: var(--surface);
+  white-space: nowrap;
+}
+
+.sms-usage strong {
+  color: var(--ink);
+  font-weight: var(--weight-semibold);
+}
+
+.sms-usage--over {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+.sms-usage--load {
+  width: 160px;
+  height: 26px;
+  border-color: transparent;
+  background: var(--surface);
+}
+
+/* ---- section head rows -------------------------------------------------- */
+
+.sms-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+  margin-bottom: var(--space-4);
+}
+
+.sms-sub {
+  margin: 0;
+  max-width: 72ch;
+  font-size: var(--text-sm);
+  color: var(--ink-soft);
+}
+
+.sms-hint {
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--ink-soft);
+}
+
+.sms-select {
+  width: auto;
+  min-width: 180px;
+}
+
+/* ==========================================================================
+   Dashboard
+   ========================================================================== */
+
+.sms-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  margin-bottom: var(--space-4);
+}
+
+.sms-kpis {
+  margin-bottom: var(--space-4);
+}
+
+.sms-redline {
+  margin-bottom: var(--space-4);
+}
+
+.sms-section {
+  margin-top: var(--space-6);
+}
+
+.sms-section-title {
+  margin: 0 0 var(--space-3);
+  font-size: var(--text-lg);
+  font-weight: var(--weight-semibold);
+  color: var(--ink);
+}
+
+/* ---- account health strip ----------------------------------------------- */
+
+.sms-health {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: var(--space-3);
+}
+
+.sms-health-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.sms-health-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.sms-health-number {
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sms-health-meta {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  font-size: var(--text-xs);
+  color: var(--ink-soft);
+}
+
+/* ==========================================================================
+   Forms (shared dialog scaffold)
+   ========================================================================== */
+
+.sms-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.sms-form-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-3);
+}
+
+@media (max-width: 640px) {
+  .sms-form-row {
+    grid-template-columns: 1fr;
+  }
+}
+
+.sms-fieldset {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.sms-days {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-4);
+}
+
+.sms-check {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-sm);
+  color: var(--ink);
+}
+
+.sms-tokens {
+  margin: 0 0 var(--space-4);
+  font-size: var(--text-sm);
+  color: var(--ink-soft);
+}
+
+.sms-tokens code {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  padding: 1px 5px;
+  border-radius: var(--radius-xs);
+  background: var(--surface);
+  color: var(--ink);
+}
+
+/* ==========================================================================
+   Campaign editor — steps + preview + audience
+   ========================================================================== */
+
+.sms-editor-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  margin-bottom: var(--space-4);
+}
+
+.sms-activate-err {
+  margin-bottom: var(--space-4);
+}
+
+.sms-step {
+  margin-bottom: var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.sms-step-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.sms-step-title {
+  font-weight: var(--weight-semibold);
+}
+
+.sms-step-actions {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.sms-step-add {
+  display: flex;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  margin-top: var(--space-3);
+}
+
+.sms-step-charcount {
+  font-size: var(--text-xs);
+  color: var(--ink-faint);
+}
+
+.sms-step-charcount--over {
+  color: var(--danger);
+}
+
+/* ---- preview ------------------------------------------------------------ */
+
+.sms-preview {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+}
+
+.sms-preview-label {
+  display: block;
+  font-size: var(--text-2xs);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-caps);
+  color: var(--ink-faint);
+  margin-bottom: var(--space-1);
+}
+
+.sms-preview-body {
+  font-size: var(--text-sm);
+  color: var(--ink);
+  white-space: pre-wrap;
+  line-height: var(--leading-normal);
+}
+
+/* ---- enroll receipt ----------------------------------------------------- */
+
+.sms-receipt-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin-top: var(--space-2);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+}
+
+.sms-skip-list {
+  margin: var(--space-1) 0 0;
+  padding-left: var(--space-4);
+  font-size: var(--text-sm);
+}
+
+/* ---- pick list (enroll) ------------------------------------------------- */
+
+.sms-picklist {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  max-height: 46vh;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: var(--space-2);
+}
+
+.sms-pickrow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-xs);
+  font-size: var(--text-sm);
+  color: var(--ink);
+}
+
+.sms-pickrow:hover {
+  background: var(--accent-ghost);
+}
+
+.sms-pickrow-name {
+  font-weight: var(--weight-medium);
+}
+
+.sms-pickrow-phone {
+  color: var(--ink-soft);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sms-pickrow .badge {
+  margin-left: auto;
+}
+
+/* ==========================================================================
+   Messages — filter bar + two-pane conversation list (no threads/subjects)
+   ========================================================================== */
+
+.sms-inbox-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  margin-bottom: var(--space-4);
+}
+
+.sms-inbox {
+  display: grid;
+  grid-template-columns: 340px minmax(0, 1fr);
+  gap: var(--space-4);
+  align-items: start;
+}
+
+@media (max-width: 820px) {
+  .sms-inbox {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ---- conversation list ---------------------------------------------------- */
+
+.sms-threads {
+  padding: var(--space-2);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  max-height: 72vh;
+  overflow-y: auto;
+}
+
+.sms-thread-item {
+  appearance: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  width: 100%;
+  text-align: left;
+  padding: var(--space-2) var(--space-3);
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--ink);
+  cursor: pointer;
+  transition: background-color var(--dur-fast) var(--ease-out);
+}
+
+.sms-thread-item:hover {
+  background: var(--accent-ghost);
+}
+
+.sms-thread-item--active {
+  background: var(--accent-soft);
+}
+
+.sms-thread-item:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.sms-thread-top {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.sms-thread-name {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+}
+
+.sms-thread-name > span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sms-thread-time {
+  flex: none;
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  color: var(--ink-faint);
+}
+
+.sms-thread-snippet {
+  font-size: var(--text-xs);
+  color: var(--ink-soft);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---- conversation pane -------------------------------------------------- */
+
+.sms-thread-pane {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-height: 440px;
+}
+
+.sms-thread-head {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.sms-thread-title {
+  margin: 0;
+  font-size: var(--text-lg);
+  font-weight: var(--weight-semibold);
+  color: var(--ink);
+}
+
+.sms-thread-with {
+  font-size: var(--text-sm);
+  color: var(--ink-soft);
+}
+
+.sms-messages {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  flex: 1;
+  min-height: 240px;
+  max-height: 52vh;
+  overflow-y: auto;
+  padding-block: var(--space-1);
+}
+
+.sms-msg {
+  max-width: 82%;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-md);
+  font-size: var(--text-sm);
+}
+
+.sms-msg--out {
+  align-self: flex-end;
+  background: var(--accent);
+  color: var(--ink-on-accent);
+}
+
+.sms-msg--in {
+  align-self: flex-start;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--ink);
+}
+
+.sms-msg-body {
+  white-space: pre-wrap;
+  line-height: var(--leading-normal);
+}
+
+.sms-msg-meta {
+  display: block;
+  margin-top: var(--space-1);
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+}
+
+.sms-msg--in .sms-msg-meta {
+  color: var(--ink-faint);
+}
+
+.sms-msg--out .sms-msg-meta {
+  color: color-mix(in srgb, var(--ink-on-accent) 78%, transparent);
+}
+
+/* ==========================================================================
+   Accounts
+   ========================================================================== */
+
+.sms-account-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: var(--space-4);
+}
+
+.sms-account {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.sms-account-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.sms-account-name {
+  font-size: var(--text-md);
+  font-weight: var(--weight-semibold);
+  color: var(--ink);
+}
+
+.sms-account-number {
+  font-size: var(--text-sm);
+  color: var(--ink-soft);
+}
+
+.sms-account-stat {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-2);
+  font-size: var(--text-sm);
+  color: var(--ink);
+}
+
+.sms-test-result {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--ink-soft);
+  padding: var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+
+.sms-account-actions {
+  display: flex;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  margin-top: auto;
+}
+
+/* ---- webhook URLs card ---------------------------------------------------- */
+
+.sms-webhooks {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+}
+
+.sms-webhook-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.sms-webhook-label {
+  flex: none;
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semibold);
+  color: var(--ink-soft);
+  min-width: 84px;
+}
+
+.sms-webhook-uri {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+  padding: var(--space-1) var(--space-2);
+}
+
+/* ==========================================================================
+   Suppression
+   ========================================================================== */

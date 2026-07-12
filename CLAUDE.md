@@ -747,6 +747,65 @@ live activation + the entitlement flip, the Outreach module build
       (exactly 40% of weekday 5/22), blended-ready badge on the day-14
       mailbox, switch toggles round-trip with toasts, re-enable restarts ramp
       at day 1, Accounts summary line + Manage warmup link render.
+- [x] SMS outreach module (agency-level, BYO Twilio, opted-in numbers only):
+      a full SMS send module parallel to the cold-email module, gated the same
+      way (require_team read, require_admin config, client role locked out).
+      COMPLIANCE-FIRST by design — SMS carries TCPA statutory damages per text,
+      so the framework enforces consent before volume. Models/migration
+      (backend/app/models/sms_outreach.py, f3c7d9e2a1b5): SmsAccount,
+      SmsCampaign, SmsStep, SmsEnrollment, SmsMessage (append-only send ledger
+      + monthly meter), SmsSuppression; plus contacts gained
+      sms_opt_in/at/source (the TCPA consent record — a phone number alone is
+      never enough; the where/when is the proof). THE CONSENT GATE:
+      services/sms_consent.assert_can_sms/sendable is the one shared check
+      every send routes through (requires recorded opt-in AND not suppressed;
+      STOP always beats opt-in) — plus E.164 normalize_phone so a formatted
+      number and its canonical form can't diverge in the suppression ledger.
+      THE SEND GATEWAY: services/sms_send.send() is the ONE choke point
+      (ordered guards: account active → suppression → consent gate → quiet
+      hours [TCPA 8am–9pm recipient-local via the campaign send window,
+      default 11–20 America/New_York keeps continental-US inside the window] →
+      account + campaign daily caps); thin httpx Twilio client (no SDK, BYO
+      creds Fernet-encrypted + never serialized), Twilio 21610 → carrier
+      suppression row so our ledger converges with Twilio Advanced Opt-Out,
+      CTIA sender-id + "Reply STOP to opt out" appended to step 1 only.
+      services/sms_campaigns.py is the enrollment engine (mirrors
+      email_campaigns): enroll buckets every contact through the consent gate
+      (skipped: no_number/no_consent/suppressed/already/duplicate/not_found),
+      run_due advances/completes/window-defers, STOP/reply exits handled in
+      the inbound webhook (synchronous, not a sync tick). Public
+      signature-validated Twilio webhooks (api/sms_webhooks.py): inbound
+      STOP/HELP/reply — a STOP suppresses the number, clears sms_opt_in on
+      every matching contact, and exits ALL of the contact's active SMS
+      enrollments org-wide (compliance guardrail #9); plus delivery-status
+      callbacks. entitlements.sms_sends tier limit (starter 500 / pro 5000 /
+      agency 50000) with usage/enforce pair. CONTACT/LEAD INTEGRATION (the
+      requested piece): CSV import carries consent — a whole-file
+      sms_opt_in_all "these all opted in on our website" attestation OR a
+      per-column sms_opt_in target (truthy cells), each recording
+      source="csv_import:website_attested"; manual opt-in/revoke on contact
+      create/patch; consent fields are ContactOutTeam-only. Frontend
+      (src/sms_outreach.tsx, team-only "SMS" nav item): Dashboard (KPIs +
+      leading "only opted-in contacts are textable" banner), Campaigns
+      (config + step editor w/ char/segment counter + preview + house-CRM
+      enroll with a skipped-bucket receipt), Messages (per-contact
+      conversation view — SMS has no threads), Accounts (Twilio connect:
+      Account SID + auth token + from-number-OR-messaging-service, test
+      button, A2P 10DLC reminder, and each card shows the two per-account
+      webhook URLs with copy buttons — inbound is REQUIRED for STOP handling),
+      Suppression. Framework built by the primary session; engine + campaign
+      routes + frontend + tests handed to Sonnet 5 agents against a pinned
+      contract, then verified: 379 tests pass (367 + 12 new
+      test_sms_outreach.py, own sms_org fixture), tsc clean, live click-through
+      on alt2 (nav, dashboard, accounts, connect dialog all render). One real
+      production gap the mocked tests couldn't catch, caught + fixed:
+      python-multipart was missing (requirements.txt) — Starlette's
+      request.form() hard-requires it, so every form-encoded Twilio webhook
+      would have 500'd in prod. NOT DEPLOYED yet (migration f3c7d9e2a1b5 +
+      new tables; awaiting deploy consent). Go-live also needs, user-side:
+      the org's Twilio account connected in SMS → Accounts, A2P 10DLC brand +
+      campaign registration in the Twilio console, and the per-account inbound
+      webhook URL pasted into the Twilio number config (required for STOP).
 - [ ] Stripe live activation + entitlement flip (after 12–14, so real
       limits land everywhere in one pass)
 - [ ] Outreach module build (dev-mode) — go-live gated on Meta App

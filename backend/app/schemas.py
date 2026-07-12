@@ -1306,3 +1306,76 @@ class EmailEnrollIn(BaseModel):
 class EmailPreviewIn(BaseModel):
     contact_id: str
     position: int = Field(ge=1)
+
+
+# --- SMS campaigns (campaign engine) ---------------------------------------
+
+
+class SmsCampaignIn(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    account_id: str
+    client_id: Optional[str] = None
+    timezone: str = Field(default="America/New_York", max_length=64)
+    send_window_start: int = Field(default=11, ge=0, le=23)
+    send_window_end: int = Field(default=20, ge=1, le=24)
+    send_days: Optional[List[int]] = Field(default=None)
+    daily_cap: int = Field(default=100, ge=1, le=100000)
+    exit_on_reply: bool = True
+
+    @field_validator("send_days")
+    @classmethod
+    def _days(cls, v):
+        return _valid_send_days(v)
+
+
+class SmsCampaignPatch(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=1, max_length=200)
+    account_id: Optional[str] = None
+    client_id: Optional[str] = None
+    timezone: Optional[str] = Field(default=None, max_length=64)
+    send_window_start: Optional[int] = Field(default=None, ge=0, le=23)
+    send_window_end: Optional[int] = Field(default=None, ge=1, le=24)
+    send_days: Optional[List[int]] = Field(default=None)
+    daily_cap: Optional[int] = Field(default=None, ge=1, le=100000)
+    exit_on_reply: Optional[bool] = None
+
+    @field_validator("send_days")
+    @classmethod
+    def _days(cls, v):
+        return _valid_send_days(v)
+
+
+class SmsStepIn(BaseModel):
+    # id present = update that existing step in place; absent = create.
+    # Steps whose ids are missing from the payload are deleted (upsert-in-
+    # place, mirrors EmailStepIn — same two-pass negative-position parking
+    # on the API side keeps the unique(campaign,position) constraint happy).
+    id: Optional[str] = None
+    position: int = Field(ge=1)
+    wait_days: int = Field(default=0, ge=0, le=365)
+    body: str = Field(min_length=1, max_length=1600)
+
+
+class SmsStepsIn(BaseModel):
+    steps: List[SmsStepIn] = Field(min_length=1, max_length=50)
+
+
+class SmsEnrollIn(BaseModel):
+    """Either an explicit contact list, or a client_id to enroll every
+    opted-in contact under that client (the house CRM client qualifies —
+    it's just another org-scoped client_id, no special-casing)."""
+
+    contact_ids: Optional[List[str]] = Field(default=None, max_length=1000)
+    client_id: Optional[str] = None
+
+    @field_validator("contact_ids")
+    @classmethod
+    def _nonempty(cls, v):
+        if v is not None and len(v) == 0:
+            raise ValueError("contact_ids must be non-empty when provided")
+        return v
+
+
+class SmsPreviewIn(BaseModel):
+    contact_id: str
+    position: int = Field(ge=1)

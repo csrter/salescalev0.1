@@ -237,7 +237,12 @@ async def _email_outreach_scheduler():
       (b) drips warmup peer exchanges + ramps caps (email_warmup.run_due),
       (c) polls each connected mailbox's INBOX for replies/bounces
           (email_outreach_sync.sync_due, per-account floor via
-          email_sync_min_interval_seconds).
+          email_sync_min_interval_seconds),
+      (d) fires due SMS campaign enrollment steps (sms_campaigns.run_due) —
+          the SMS module shares this loop rather than running its own; its
+          reply/opt-out exits happen synchronously in the inbound Twilio
+          webhook instead of a sync tick, so there's nothing else for it to
+          do here.
     Same pattern as the IG scheduler. Disabled in tests (they drive run_due /
     sync_account / run_warmup_tick synchronously)."""
     if not _settings.email_outreach_scheduler_enabled:
@@ -246,6 +251,7 @@ async def _email_outreach_scheduler():
 
     from .db import SessionLocal
     from .services import email_campaigns, email_outreach_sync, email_warmup
+    from .services import sms_campaigns
 
     log = logging.getLogger("salescale.email_outreach")
 
@@ -257,6 +263,16 @@ async def _email_outreach_scheduler():
             email_outreach_sync.sync_due(db)
         finally:
             db.close()
+        # Isolated session + its own try/except: an SMS failure must never
+        # stall (or roll back) the email tick that already ran above.
+        try:
+            sms_db = SessionLocal()
+            try:
+                sms_campaigns.run_due(sms_db)
+            finally:
+                sms_db.close()
+        except Exception:
+            log.exception("sms campaign scheduler tick failed")
 
     async def _loop():
         while True:

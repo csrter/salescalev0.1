@@ -11,6 +11,10 @@ bcrypt
 cryptography
 email-validator
 httpx
+# Required for Request.form() — the Twilio SMS webhooks (api/sms_webhooks.py)
+# receive application/x-www-form-urlencoded bodies, which Starlette can only
+# parse with this installed (a hard runtime dependency, not test-only).
+python-multipart
 stripe
 sentry-sdk
 alembic

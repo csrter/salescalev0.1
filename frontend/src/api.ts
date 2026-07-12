@@ -1,4 +1,7 @@
 const BASE = import.meta.env.VITE_API_URL ?? "http://localhost:8000";
+/** Absolute API origin — exported so views can build full URLs (e.g. webhook
+ * endpoints a user pastes into a third-party provider's config). */
+export const API_BASE = BASE;
 
 export type Role = "owner" | "admin" | "member" | "client";
 export const TEAM_ROLES: Role[] = ["owner", "admin", "member"];
@@ -1623,3 +1626,269 @@ export interface EmailPickContact {
 }
 export const listCrmContactsForClient = (clientId: string) =>
   api<EmailPickContact[]>(`/api/crm/contacts?client_id=${clientId}`);
+
+/** Same picker contract as EmailPickContact, plus the SMS opt-in flag the
+ * gate keys off (services/sms_consent.py — only opted-in contacts are
+ * textable, regardless of what number is on file). */
+export interface SmsPickContact extends EmailPickContact {
+  sms_opt_in?: boolean;
+}
+export const listSmsCrmContactsForClient = (clientId: string) =>
+  api<SmsPickContact[]>(`/api/crm/contacts?client_id=${clientId}`);
+
+// ==========================================================================
+// SMS outreach module (base /api/sms).
+// Mirrors the cold-email module's shapes (see EmailAccount/EmailCampaign
+// above) minus email-only concepts: no threads/subjects/open-tracking/
+// ai_snippet/unsubscribe. Every send routes server-side through
+// services/sms_consent.sendable() — only contacts with a recorded SMS
+// opt-in are textable; the enroll receipt surfaces the skip buckets
+// (no_number/no_consent/suppressed/already) rather than silently dropping
+// anyone.
+// ==========================================================================
+
+export type SmsAccountStatus = "active" | "error";
+
+export interface SmsAccount {
+  id: string;
+  name: string;
+  provider: string;
+  account_sid: string;
+  from_number: string | null;
+  messaging_service_sid: string | null;
+  status: SmsAccountStatus;
+  error_detail: string | null;
+  daily_send_cap: number;
+  sends_today: number;
+  created_at: string;
+}
+
+export interface SmsAccountBody {
+  name?: string;
+  account_sid?: string;
+  /** Only sent to rotate the Twilio auth token (write-only, never returned). */
+  auth_token?: string;
+  from_number?: string | null;
+  messaging_service_sid?: string | null;
+  daily_send_cap?: number;
+}
+
+export type SmsCampaignStatus = "draft" | "active" | "paused" | "archived";
+
+export interface SmsCampaign {
+  id: string;
+  name: string;
+  status: SmsCampaignStatus;
+  account_id: string;
+  steps_count: number;
+  enrolled: number;
+  active_enrollments: number;
+  sent: number;
+  delivery_rate: number | null;
+  reply_rate: number | null;
+  opt_out_rate: number | null;
+  created_at: string;
+}
+
+export interface SmsStep {
+  id?: string;
+  position: number;
+  wait_days: number;
+  body: string;
+}
+
+export interface SmsCampaignDetail extends SmsCampaign {
+  timezone: string;
+  send_window_start: number;
+  send_window_end: number;
+  send_days: number[];
+  daily_cap: number | null;
+  steps: SmsStep[];
+}
+
+export interface SmsCampaignBody {
+  name?: string;
+  account_id?: string;
+  timezone?: string;
+  send_window_start?: number;
+  send_window_end?: number;
+  send_days?: number[];
+  daily_cap?: number | null;
+}
+
+export interface SmsEnrollment {
+  id: string;
+  contact: {
+    id: string;
+    first_name: string | null;
+    last_name: string | null;
+    email: string | null;
+    company_name: string | null;
+  };
+  status: string;
+  exit_reason: string | null;
+  current_position: number;
+  next_run_at: string | null;
+  created_at: string;
+}
+
+export interface SmsEnrollReceipt {
+  enrolled: number;
+  skipped: {
+    contact_id: string;
+    reason: "no_number" | "no_consent" | "suppressed" | "already";
+  }[];
+}
+
+export interface SmsMessage {
+  id: string;
+  direction: EmailMessageDirection;
+  status: string;
+  kind: string;
+  body: string;
+  contact: {
+    id: string;
+    first_name: string | null;
+    last_name: string | null;
+    phone: string | null;
+  } | null;
+  sent_at: string | null;
+  received_at: string | null;
+}
+
+export interface SmsSuppression {
+  id: string;
+  phone_e164: string;
+  reason: string;
+  detail: string | null;
+  created_at: string;
+}
+
+export interface SmsRateBlock {
+  sent: number;
+  delivered: number;
+  failed: number;
+  replied: number;
+  opted_out: number;
+  delivery_rate: number | null;
+  reply_rate: number | null;
+  opt_out_rate: number | null;
+}
+
+export interface SmsAnalytics {
+  totals: SmsRateBlock;
+  by_day: {
+    date: string;
+    sent: number;
+    delivered: number;
+    replied: number;
+    failed: number;
+  }[];
+  by_campaign: {
+    campaign_id: string;
+    name: string;
+    sent: number;
+    delivery_rate: number | null;
+    reply_rate: number | null;
+  }[];
+  accounts: {
+    account_id: string;
+    from_number: string | null;
+    status: SmsAccountStatus;
+    sends_today: number;
+    daily_send_cap: number;
+  }[];
+}
+
+export interface SmsUsage {
+  sends: { used: number; limit: number | null };
+  plan: string;
+}
+
+const SO = "/api/sms";
+
+// --- accounts ---
+export const listSmsAccounts = () => api<SmsAccount[]>(`${SO}/accounts`);
+export const createSmsAccount = (
+  body: SmsAccountBody & { name: string; account_sid: string; auth_token: string },
+) => api<SmsAccount>(`${SO}/accounts`, { method: "POST", body: JSON.stringify(body) });
+export const updateSmsAccount = (id: string, body: SmsAccountBody) =>
+  api<SmsAccount>(`${SO}/accounts/${id}`, { method: "PATCH", body: JSON.stringify(body) });
+export const deleteSmsAccount = (id: string) =>
+  api(`${SO}/accounts/${id}`, { method: "DELETE" });
+export const testSmsAccount = (id: string) =>
+  api<{ ok: boolean; detail: string | null }>(`${SO}/accounts/${id}/test`, {
+    method: "POST",
+  });
+
+// --- campaigns ---
+export const listSmsCampaigns = () => api<SmsCampaign[]>(`${SO}/campaigns`);
+export const getSmsCampaign = (id: string) =>
+  api<SmsCampaignDetail>(`${SO}/campaigns/${id}`);
+export const createSmsCampaign = (body: SmsCampaignBody & { name: string; account_id: string }) =>
+  api<SmsCampaignDetail>(`${SO}/campaigns`, { method: "POST", body: JSON.stringify(body) });
+export const updateSmsCampaign = (id: string, body: SmsCampaignBody) =>
+  api<SmsCampaignDetail>(`${SO}/campaigns/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify(body),
+  });
+export const saveSmsSteps = (id: string, steps: SmsStep[]) =>
+  api<SmsCampaignDetail>(`${SO}/campaigns/${id}/steps`, {
+    method: "PUT",
+    body: JSON.stringify({ steps }),
+  });
+export const activateSmsCampaign = (id: string) =>
+  api<SmsCampaignDetail>(`${SO}/campaigns/${id}/activate`, { method: "POST" });
+export const pauseSmsCampaign = (id: string) =>
+  api<SmsCampaignDetail>(`${SO}/campaigns/${id}/pause`, { method: "POST" });
+export const archiveSmsCampaign = (id: string) =>
+  api<SmsCampaignDetail>(`${SO}/campaigns/${id}/archive`, { method: "POST" });
+export const enrollSmsContacts = (
+  id: string,
+  body: { contact_ids?: string[]; client_id?: string },
+) =>
+  api<SmsEnrollReceipt>(`${SO}/campaigns/${id}/enroll`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+export const listSmsEnrollments = (id: string) =>
+  api<SmsEnrollment[]>(`${SO}/campaigns/${id}/enrollments`);
+export const unenrollSms = (campaignId: string, enrollmentId: string) =>
+  api(`${SO}/campaigns/${campaignId}/enrollments/${enrollmentId}`, { method: "DELETE" });
+export const previewSmsStep = (id: string, contactId: string, position: number) =>
+  api<{ body: string }>(`${SO}/campaigns/${id}/preview`, {
+    method: "POST",
+    body: JSON.stringify({ contact_id: contactId, position }),
+  });
+
+// --- messages (conversation list — SMS has no threads) ---
+export const listSmsMessages = (contactId?: string) =>
+  api<SmsMessage[]>(`${SO}/messages${q({ contact_id: contactId })}`);
+
+// --- suppression ---
+export const listSmsSuppression = () => api<SmsSuppression[]>(`${SO}/suppression`);
+export const addSmsSuppression = (phone: string, detail?: string) =>
+  api<{ ok: boolean; phone_e164: string }>(`${SO}/suppression`, {
+    method: "POST",
+    body: JSON.stringify({ phone, detail }),
+  });
+export const deleteSmsSuppression = (id: string) =>
+  api(`${SO}/suppression/${id}`, { method: "DELETE" });
+
+// --- analytics & usage ---
+export const smsAnalytics = (campaignId?: string, days = 30) =>
+  api<SmsAnalytics>(`${SO}/analytics${q({ campaign_id: campaignId, days: String(days) })}`);
+export const smsUsage = () => api<SmsUsage>(`${SO}/usage`);
+
+/** The two per-account Twilio webhook URLs the user must paste into their
+ * Twilio number / Messaging Service config. Built client-side from API_BASE —
+ * inbound is REQUIRED for STOP/HELP keyword handling to ever reach us. */
+export function smsWebhookUrls(accountId: string): {
+  inbound: string;
+  status: string;
+} {
+  return {
+    inbound: `${API_BASE}/api/sms/webhooks/inbound/${accountId}`,
+    status: `${API_BASE}/api/sms/webhooks/status/${accountId}`,
+  };
+}

@@ -57,6 +57,7 @@ import { LeadFinderView } from "./leadfinder";
 import { AccountPickerDialog } from "./components/AccountPicker";
 import { OutreachView } from "./outreach";
 import { EmailOutreachView } from "./email_outreach";
+import { SmsOutreachView } from "./sms_outreach";
 import { CommandPalette, type Command } from "./components/CommandPalette";
 import { ToastProvider, useToast } from "./components/Toast";
 import {
@@ -84,6 +85,7 @@ import {
   Link2,
   LogOut,
   Mail,
+  MessageSquare,
   Moon,
   Palette,
   Plus,
@@ -135,6 +137,7 @@ type Tab =
   | "leads"
   | "outreach"
   | "email"
+  | "sms"
   | "changes"
   | "audit"
   | "team"
@@ -150,6 +153,7 @@ const PAGE_TITLES: Record<Tab, string> = {
   leads: "Lead Finder",
   outreach: "Outreach",
   email: "Email",
+  sms: "SMS",
   changes: "Pending changes",
   audit: "Audit log",
   team: "Team",
@@ -365,6 +369,7 @@ export default function App() {
     { key: "leads", label: "Lead Finder", icon: Compass, section: "Workspace", show: isTeam },
     { key: "outreach", label: "Outreach", icon: Send, section: "Workspace", show: isTeam },
     { key: "email", label: "Email", icon: Mail, section: "Workspace", show: isTeam },
+    { key: "sms", label: "SMS", icon: MessageSquare, section: "Workspace", show: isTeam },
     { key: "changes", label: "Pending changes", icon: GitBranch, section: "Ads", show: isTeam },
     { key: "audit", label: "Audit log", icon: Eye, section: "Ads", show: true },
     { key: "team", label: "Team", icon: Users, section: "Settings", show: isAdmin },
@@ -511,6 +516,7 @@ export default function App() {
                 {tab === "leads" && isTeam && <LeadFinderView isAdmin={isAdmin} />}
                 {tab === "outreach" && isTeam && <OutreachView isAdmin={isAdmin} />}
                 {tab === "email" && isTeam && <EmailOutreachView isAdmin={isAdmin} />}
+                {tab === "sms" && isTeam && <SmsOutreachView isAdmin={isAdmin} />}
                 {tab === "changes" && <PendingChangesPanel />}
                 {tab === "audit" && <AuditLogView />}
                 {tab === "team" && isAdmin && (
