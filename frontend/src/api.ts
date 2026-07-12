@@ -1243,6 +1243,7 @@ export interface ContactEditBody {
   email?: string | null;
   phone?: string | null;
   mobile_phone?: string | null;
+  job_title?: string | null;
   city?: string | null;
   state?: string | null;
   company_name?: string | null;

@@ -92,6 +92,9 @@ interface ContactRow {
   email: string | null;
   phone: string | null;
   mobile_phone?: string | null;
+  // The person's role at the company ("Owner", "Marketing Director") — the
+  // pitch target. Enrichment-filled or typed in; team payloads only.
+  job_title?: string | null;
   city: string | null;
   state: string | null;
   company_name: string | null;
@@ -780,6 +783,7 @@ function matchesFilter(c: ContactRow, def: CustomFieldDef, f: CfFilter): boolean
 /** Choosable non-custom contact columns (Phase-12 contract adds these fields to
  * list payloads). Kept alongside the custom-field column choices in the picker. */
 const SYS_COLUMNS: { key: string; label: string; get: (c: ContactRow) => string | null }[] = [
+  { key: "job_title", label: "Position", get: (c) => c.job_title ?? null },
   { key: "city", label: "City", get: (c) => c.city },
   { key: "state", label: "State", get: (c) => c.state },
   { key: "company_name", label: "Business name", get: (c) => c.company_name },
@@ -1760,6 +1764,7 @@ function IdentityBlock({
     email: "",
     phone: "",
     mobile_phone: "",
+    job_title: "",
     city: "",
     state: "",
     company_name: "",
@@ -1772,6 +1777,7 @@ function IdentityBlock({
       email: detail.email ?? "",
       phone: detail.phone ?? "",
       mobile_phone: detail.mobile_phone ?? "",
+      job_title: detail.job_title ?? "",
       city: detail.city ?? "",
       state: detail.state ?? "",
       company_name: detail.company_name ?? "",
@@ -1792,6 +1798,7 @@ function IdentityBlock({
       email: form.email.trim() || null,
       phone: form.phone.trim() || null,
       mobile_phone: form.mobile_phone.trim() || null,
+      job_title: form.job_title.trim() || null,
       city: form.city.trim() || null,
       state: form.state.trim() || null,
       company_name: form.company_name.trim() || null,
@@ -1836,6 +1843,13 @@ function IdentityBlock({
             onChange={(e) => set({ mobile_phone: e.target.value })}
           />
         </Field>
+        <Field label="Position">
+          <input
+            value={form.job_title}
+            onChange={(e) => set({ job_title: e.target.value })}
+            placeholder="Owner, Marketing Director…"
+          />
+        </Field>
         <Field label="City">
           <input value={form.city} onChange={(e) => set({ city: e.target.value })} />
         </Field>
@@ -1874,7 +1888,9 @@ function IdentityBlock({
   }
 
   const location = [detail.city, detail.state].filter(Boolean).join(", ");
-  const orgLine = [detail.company_name, location].filter(Boolean).join(" · ");
+  const orgLine = [detail.job_title, detail.company_name, location]
+    .filter(Boolean)
+    .join(" · ");
   const firmoLine = [
     detail.company_estimated_revenue
       ? `Est. revenue ${detail.company_estimated_revenue}/yr`

@@ -899,6 +899,7 @@ const SYSTEM_TARGETS: { value: string; label: string }[] = [
   { value: "full_name", label: "Full name" },
   { value: "email", label: "Email" },
   { value: "phone", label: "Phone" },
+  { value: "job_title", label: "Position / title" },
   { value: "city", label: "City" },
   { value: "state", label: "State" },
   { value: "company", label: "Business name" },
@@ -925,6 +926,10 @@ const HEADER_SYNONYMS: { target: string; keys: string[] }[] = [
       "mobilenumber",
       "contactnumber",
     ],
+  },
+  {
+    target: "job_title",
+    keys: ["jobtitle", "title", "position", "role", "jobrole", "designation"],
   },
   { target: "city", keys: ["city", "town", "locality"] },
   { target: "state", keys: ["state", "province", "region", "stateprovince"] },

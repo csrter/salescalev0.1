@@ -710,6 +710,7 @@ def test_profile_enrichment_pipeline(api, lf_org, monkeypatch):
     c = db.get(Contact, cid)
     assert (c.first_name, c.last_name) == ("Dana", "Ruiz")
     assert c.mobile_phone == "+14805559999"
+    assert c.job_title == "Owner"
     assert c.source_detail["owner_title"] == "Owner"
     # Owner's own address outranks the generic site address…
     assert c.email == "dana@profiletarget.com"
@@ -727,6 +728,7 @@ def test_profile_enrichment_pipeline(api, lf_org, monkeypatch):
 
     # …and the team payload carries all of it.
     detail = api.get(f"/api/crm/contacts/{cid}", headers=lf_org["headers"]).json()
+    assert detail["job_title"] == "Owner"
     assert detail["mobile_phone"] == "+14805559999"
     assert detail["company_estimated_revenue"] == "$2.5M"
     assert detail["company_employee_count"] == 12
@@ -747,6 +749,30 @@ def test_profile_enrichment_pipeline(api, lf_org, monkeypatch):
     db.close()
 
     api.delete("/api/lead-finder/providers/apollo", headers=lf_org["headers"])
+
+
+def test_pitch_target_ranking():
+    """Provider result order never trumps our priority list: the owner beats a
+    marketing manager, a marketing decision-maker beats an unmatched title."""
+    from app.services.enrichment import _rank_pitch_target
+
+    people = [
+        {"title": "Office Administrator"},
+        {"title": "Marketing Manager"},
+        {"title": "Owner & CEO"},
+    ]
+    best = min(people, key=_rank_pitch_target)
+    assert best["title"] == "Owner & CEO"
+
+    people = [
+        {"title": "Regional Sales Lead"},
+        {"title": "Director of Marketing"},
+    ]
+    best = min(people, key=_rank_pitch_target)
+    assert best["title"] == "Director of Marketing"
+
+    # No title at all ranks last, never crashes.
+    assert _rank_pitch_target({}) > _rank_pitch_target({"title": "Owner"})
 
 
 def test_site_description_without_provider(api, lf_org, monkeypatch):

@@ -80,10 +80,15 @@ def test_create_and_patch_identity_city_state_company(api, cc_org):
     finally:
         db.close()
 
-    # Rename identity + move to a new company.
+    # Rename identity + move to a new company; job_title round-trips too.
     r = api.patch(
         f"/api/crm/contacts/{cid}",
-        json={"first_name": "Dana R", "city": "Mesa", "company_name": "Beta Inc"},
+        json={
+            "first_name": "Dana R",
+            "city": "Mesa",
+            "company_name": "Beta Inc",
+            "job_title": "Marketing Director",
+        },
         headers=cc_org["headers"],
     )
     assert r.status_code == 200, r.text
@@ -92,6 +97,16 @@ def test_create_and_patch_identity_city_state_company(api, cc_org):
     assert body["city"] == "Mesa"
     assert body["state"] == "AZ"
     assert body["company_name"] == "Beta Inc"
+    assert body["job_title"] == "Marketing Director"
+
+    # Empty job_title clears it.
+    r = api.patch(
+        f"/api/crm/contacts/{cid}",
+        json={"job_title": ""},
+        headers=cc_org["headers"],
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["job_title"] is None
 
     # Empty company_name clears the link.
     r = api.patch(
@@ -114,6 +129,7 @@ def test_csv_import_city_state_company_full_name(api, cc_org):
         "mapping": {
             "Name": "full_name",
             "Email": "email",
+            "Title": "job_title",
             "Town": "city",
             "Region": "state",
             "Org": "company",
@@ -122,6 +138,7 @@ def test_csv_import_city_state_company_full_name(api, cc_org):
             {
                 "Name": "John A. Smith",
                 "Email": "john@example.com",
+                "Title": "Owner",
                 "Town": "Tempe",
                 "Region": "AZ",
                 "Org": "Widgets LLC",
@@ -155,6 +172,7 @@ def test_csv_import_city_state_company_full_name(api, cc_org):
         john = db.query(Contact).filter(Contact.email == "john@example.com").one()
         assert john.first_name == "John"
         assert john.last_name == "A. Smith"
+        assert john.job_title == "Owner"
         assert john.city == "Tempe"
         assert john.state == "AZ"
         # "Widgets LLC" / "widgets llc" dedupe to one Company.

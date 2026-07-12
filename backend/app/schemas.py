@@ -757,6 +757,7 @@ class ContactOutTeam(ContactOutPublic):
     # firmographics from the org's own data provider) — never in the
     # client-portal payload.
     mobile_phone: Optional[str] = None
+    job_title: Optional[str] = None
     company_description: Optional[str] = None
     company_estimated_revenue: Optional[str] = None
     company_employee_count: Optional[int] = None
@@ -778,6 +779,7 @@ class ContactCreateIn(BaseModel):
     email: Optional[EmailStr] = None
     phone: Optional[str] = None
     mobile_phone: Optional[str] = None
+    job_title: Optional[str] = None
     city: Optional[str] = None
     state: Optional[str] = None
     # Non-empty resolves to a get-or-created org-scoped Company; the contact's
@@ -794,6 +796,7 @@ class ContactUpdateIn(BaseModel):
     email: Optional[EmailStr] = None
     phone: Optional[str] = None
     mobile_phone: Optional[str] = None
+    job_title: Optional[str] = None
     city: Optional[str] = None
     state: Optional[str] = None
     # Present + non-empty get-or-creates and links a Company; present + empty

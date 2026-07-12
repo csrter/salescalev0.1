@@ -417,6 +417,7 @@ def create_contact(
         email=body.email.lower() if body.email else None,
         phone=body.phone,
         mobile_phone=body.mobile_phone,
+        job_title=body.job_title,
         city=body.city,
         state=body.state,
         source="manual",
@@ -468,6 +469,8 @@ def update_contact(
         contact.phone = body.phone
     if body.mobile_phone is not None:
         contact.mobile_phone = body.mobile_phone or None
+    if body.job_title is not None:
+        contact.job_title = body.job_title or None
     if body.city is not None:
         contact.city = body.city
     if body.state is not None:
@@ -584,6 +587,7 @@ _CSV_SYSTEM_TARGETS = {
     "last_name",
     "email",
     "phone",
+    "job_title",
     "city",
     "state",
     "company",
@@ -695,6 +699,7 @@ def import_contacts(
             last_name=identity.get("last_name"),
             email=(identity["email"].lower() if identity.get("email") else None),
             phone=identity.get("phone"),
+            job_title=identity.get("job_title"),
             city=identity.get("city"),
             state=identity.get("state"),
             source="csv_import",

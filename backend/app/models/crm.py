@@ -82,6 +82,10 @@ class Contact(Base):
     # provider enrichment only — never scraped (guardrail 6). Team-only in
     # API payloads.
     mobile_phone: Mapped[Optional[str]] = mapped_column(String(50))
+    # The person's role at the company ("Owner", "Marketing Director") — the
+    # pitch target. Filled by licensed provider enrichment (fill-blanks-only)
+    # or typed in; also a CSV-import target.
+    job_title: Mapped[Optional[str]] = mapped_column(String(150))
     city: Mapped[Optional[str]] = mapped_column(String(120))
     state: Mapped[Optional[str]] = mapped_column(String(64))
     # Where the lead came from: meta_instant_form | google_lead_form |
@@ -143,6 +147,7 @@ RESERVED_CONTACT_FIELD_KEYS: frozenset[str] = frozenset(
         "email",
         "phone",
         "mobile_phone",
+        "job_title",
         "city",
         "state",
         "source",

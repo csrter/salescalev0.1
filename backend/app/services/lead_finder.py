@@ -239,6 +239,8 @@ def enrich_and_verify(organization_id: str, contact_ids: List[str]) -> None:
                         c.last_name = owner.last_name
                     if owner.mobile_phone and not c.mobile_phone:
                         c.mobile_phone = owner.mobile_phone
+                    if owner.title and not c.job_title:
+                        c.job_title = owner.title
                     if owner.title:
                         c.source_detail = {
                             **(c.source_detail or {}),

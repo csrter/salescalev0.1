@@ -302,8 +302,11 @@ class ProfileProvider(Protocol):
     def find_owner(self, domain: str) -> Optional[OwnerCandidate]: ...
 
 
-# Titles that identify the person the outreach should reach — the owner /
-# principal of a small business, in rough priority order.
+# Titles that identify the person a marketing pitch should reach, in strict
+# priority order: at a small business that's the owner/principal; at anything
+# big enough to staff marketing, the marketing decision-maker outranks a
+# figurehead CEO for THIS pitch. The list doubles as the provider search
+# filter and the ranking key (_rank_pitch_target).
 OWNER_TITLES = [
     "owner",
     "founder",
@@ -312,7 +315,25 @@ OWNER_TITLES = [
     "president",
     "principal",
     "managing partner",
+    "chief marketing officer",
+    "cmo",
+    "vp marketing",
+    "vp of marketing",
+    "marketing director",
+    "director of marketing",
+    "marketing manager",
+    "general manager",
 ]
+
+
+def _rank_pitch_target(person: dict) -> int:
+    """Lower is better: index of the first OWNER_TITLES entry the person's
+    title contains, so provider result order never trumps our priority."""
+    title = (person.get("title") or "").lower()
+    for i, wanted in enumerate(OWNER_TITLES):
+        if wanted in title:
+            return i
+    return len(OWNER_TITLES)
 
 
 class ApolloProvider:
@@ -368,7 +389,7 @@ class ApolloProvider:
                     "q_organization_domains_list": [domain],
                     "person_titles": OWNER_TITLES,
                     "page": 1,
-                    "per_page": 3,
+                    "per_page": 5,
                 },
                 headers=self._headers,
                 timeout=20,
@@ -378,7 +399,7 @@ class ApolloProvider:
             return None
         if not people:
             return None
-        person = people[0]
+        person = min(people, key=_rank_pitch_target)
         out = OwnerCandidate(
             first_name=person.get("first_name"),
             last_name=person.get("last_name"),
