@@ -393,6 +393,7 @@ def _campaign_out(db: Session, c: SmsCampaign, *, full: bool = False) -> dict:
         "send_days": c.send_days,
         "daily_cap": c.daily_cap,
         "exit_on_reply": c.exit_on_reply,
+        "include_compliance_footer": c.include_compliance_footer,
         "activated_at": c.activated_at.isoformat() if c.activated_at else None,
         "created_at": c.created_at.isoformat(),
         **_campaign_stats(db, c),
@@ -446,6 +447,7 @@ def create_campaign(
         send_days=body.send_days if body.send_days is not None else [0, 1, 2, 3, 4],
         daily_cap=body.daily_cap,
         exit_on_reply=body.exit_on_reply,
+        include_compliance_footer=body.include_compliance_footer,
     )
     db.add(campaign)
     db.commit()
@@ -753,7 +755,10 @@ def preview_campaign(
     rendered = sms_campaigns.render_full(db, org, None, step, contact=contact)
     # Show the compliance suffix too — it's what actually goes out.
     final = sms_send.apply_compliance_suffix(
-        rendered, org.name if org else "", first_step=(step.position == 1)
+        rendered,
+        org.name if org else "",
+        first_step=(step.position == 1),
+        include_footer=campaign.include_compliance_footer,
     )
     return {"body": final}
 

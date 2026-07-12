@@ -936,3 +936,38 @@ def test_sms_too_long_exits_enrollment(sc_org, api, twilio_creds_ok, captured_se
     assert e.status == "exited"
     assert e.exit_reason == "too_long"
     assert captured_sends == []
+
+
+def test_compliance_footer_defaults_on_and_can_be_disabled_per_campaign(
+    sc_org, api, twilio_creds_ok, captured_sends
+):
+    # Default: step 1 gets the org-name prefix + "Reply STOP to opt out".
+    acct = _mk_account(sc_org, api, from_number="+14805550301")
+    camp_on = _mk_campaign(sc_org, api, acct["id"], **_ALWAYS)
+    assert camp_on["include_compliance_footer"] is True
+    contact_on = _mk_contact(sc_org, api, mobile_phone="4805559101", first="Onward")
+    _set_steps(sc_org, api, camp_on["id"], [{"position": 1, "body": "Hi {{first_name}}"}])
+    assert _activate(sc_org, api, camp_on["id"]).status_code == 200
+    _enroll(sc_org, api, camp_on["id"], [contact_on])
+    _tick()
+    assert len(captured_sends) == 1
+    assert "reply stop" in captured_sends[-1]["body"].lower()
+
+    # Opted off: same first-step body, no footer, no org-name prefix.
+    acct2 = _mk_account(sc_org, api, from_number="+14805550302")
+    camp_off = _mk_campaign(
+        sc_org, api, acct2["id"], include_compliance_footer=False, **_ALWAYS
+    )
+    assert camp_off["include_compliance_footer"] is False
+    contact_off = _mk_contact(sc_org, api, mobile_phone="4805559102", first="Skip")
+    _set_steps(sc_org, api, camp_off["id"], [{"position": 1, "body": "Hi {{first_name}}"}])
+    assert _activate(sc_org, api, camp_off["id"]).status_code == 200
+    _enroll(sc_org, api, camp_off["id"], [contact_off])
+    _tick()
+    assert len(captured_sends) == 2
+    assert captured_sends[-1]["body"] == "Hi Skip"
+    assert "stop" not in captured_sends[-1]["body"].lower()
+
+    # STOP handling is unaffected by the toggle either way.
+    e = _get_enrollment(camp_off["id"], contact_off)
+    assert e.status in ("active", "completed")

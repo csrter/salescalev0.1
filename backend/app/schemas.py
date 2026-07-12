@@ -1362,6 +1362,7 @@ class SmsCampaignIn(BaseModel):
     send_days: Optional[List[int]] = Field(default=None)
     daily_cap: int = Field(default=100, ge=1, le=100000)
     exit_on_reply: bool = True
+    include_compliance_footer: bool = True
 
     @field_validator("send_days")
     @classmethod
@@ -1379,6 +1380,7 @@ class SmsCampaignPatch(BaseModel):
     send_days: Optional[List[int]] = Field(default=None)
     daily_cap: Optional[int] = Field(default=None, ge=1, le=100000)
     exit_on_reply: Optional[bool] = None
+    include_compliance_footer: Optional[bool] = None
 
     @field_validator("send_days")
     @classmethod

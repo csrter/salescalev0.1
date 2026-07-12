@@ -1064,6 +1064,23 @@ function ConfigForm({
           ))}
         </div>
       </div>
+
+      <div className="sms-fieldset">
+        <Switch
+          checked={detail.include_compliance_footer}
+          onChange={(v) => onPatch({ include_compliance_footer: v })}
+          label="Sender ID + opt-out footer on the first message"
+        />
+        <p className="sms-hint">
+          Adds "OrgName: " and "Reply STOP to opt out" to the first text of
+          this campaign, when not already present in the template. Turn this
+          off only for contacts who already know they'll hear from you (past
+          clients, warm follow-ups) — STOP still works exactly the same
+          either way, this only controls whether the reminder text is shown.
+          Carriers may filter unidentified bulk SMS more aggressively without
+          it.
+        </p>
+      </div>
     </div>
   );
 }

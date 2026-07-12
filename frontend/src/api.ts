@@ -1778,6 +1778,7 @@ export interface SmsCampaignDetail extends SmsCampaign {
   send_window_end: number;
   send_days: number[];
   daily_cap: number | null;
+  include_compliance_footer: boolean;
   steps: SmsStep[];
 }
 
@@ -1789,6 +1790,7 @@ export interface SmsCampaignBody {
   send_window_end?: number;
   send_days?: number[];
   daily_cap?: number | null;
+  include_compliance_footer?: boolean;
 }
 
 export interface SmsEnrollment {

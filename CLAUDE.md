@@ -916,6 +916,26 @@ live activation + the entitlement flip, the Outreach module build
       enrollments other tests' run_due() can pick up — new tests exit their
       enrollments or filter captured sends by recipient. DEPLOYED to
       production 2026-07-12.
+- [x] SMS per-campaign compliance-footer toggle (same-day follow-up): the
+      CTIA sender-id + "Reply STOP to opt out" suffix on an SMS campaign's
+      first message (services/sms_send.apply_compliance_suffix) is now
+      opt-out per campaign via SmsCampaign.include_compliance_footer
+      (migration c4d9e6a2f815, default true — every existing/new campaign
+      keeps current behavior unless explicitly changed). For contacts who
+      already know they'll hear from you (past clients, warm follow-ups),
+      an org can turn the reminder text off; STOP handling itself is
+      completely unaffected either way — sms_consent/suppression never
+      reads this flag, it only controls whether the CTIA text is appended.
+      Threaded through SmsCampaignIn/Patch, create/PATCH/preview endpoints,
+      and the gateway's send() (derives include_footer from the campaign
+      instead of always-true). Frontend: ConfigForm gained a Switch with an
+      explicit compliance-risk note (carrier filtering) rather than a
+      silent toggle. Test added
+      (test_compliance_footer_defaults_on_and_can_be_disabled_per_campaign).
+      Tests 432 → 433. Verified live on alt2: default-on preview showed the
+      full "OrgName: ... Reply STOP to opt out" text, toggled-off preview on
+      a second campaign showed the bare personalized body, PATCH round-trip
+      confirmed via network inspection. NOT deployed yet.
 - [ ] Stripe live activation + entitlement flip (after 12–14, so real
       limits land everywhere in one pass)
 - [ ] Outreach module build (dev-mode) — go-live gated on Meta App

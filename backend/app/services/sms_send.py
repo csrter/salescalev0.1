@@ -133,12 +133,17 @@ def in_send_window(campaign: SmsCampaign, now: Optional[dt.datetime] = None) -> 
 # --- compliance body suffix ---
 
 
-def apply_compliance_suffix(body: str, org_name: str, first_step: bool) -> str:
+def apply_compliance_suffix(
+    body: str, org_name: str, first_step: bool, include_footer: bool = True
+) -> str:
     """CTIA: the first message of a program identifies the sender and carries
     opt-out language. Idempotent — templates that already include them are
-    left alone."""
+    left alone. `include_footer=False` (a per-campaign, org-chosen setting)
+    skips this entirely for known, already-consenting contacts — STOP
+    handling itself is unaffected either way; this only controls the
+    reminder text."""
     out = body.rstrip()
-    if first_step:
+    if first_step and include_footer:
         lowered = out.lower()
         if org_name and org_name.lower() not in lowered:
             out = f"{org_name}: {out}"
@@ -346,6 +351,7 @@ def send(
         body,
         org_name,
         first_step=(step is None or step.position == 1),
+        include_footer=(campaign is None or campaign.include_compliance_footer),
     )
 
     row = SmsMessage(

@@ -150,6 +150,14 @@ class SmsCampaign(Base):
     )
     daily_cap: Mapped[int] = mapped_column(Integer, default=100, nullable=False)
     exit_on_reply: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    # CTIA sender-id + "Reply STOP to opt out" on the first message of the
+    # program. Default on; an org may turn it off per-campaign for known,
+    # already-consenting contacts (e.g. past clients being followed up with).
+    # STOP handling itself is unaffected either way — this only controls
+    # whether the reminder text is shown.
+    include_compliance_footer: Mapped[bool] = mapped_column(
+        Boolean, default=True, nullable=False
+    )
     settings: Mapped[Optional[dict]] = mapped_column(JSON)
     activated_at: Mapped[Optional[dt.datetime]] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[dt.datetime] = created_at_column()
