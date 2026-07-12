@@ -339,6 +339,30 @@ def test_window_gating_parks_until_open(cc_org, api, probe_ok, captured_sends):
     assert e.next_run_at is not None  # rescheduled to the next open window
 
 
+def test_next_valid_send_time_midnight_window_skips_disallowed_days():
+    """Regression: with send_window_start == 0, an `after` on a disallowed day
+    must resolve to the NEXT allowed day — the old code returned the stale
+    original `after` once the lookahead loop had already advanced past it."""
+    camp = EmailCampaign(
+        organization_id="x",
+        name="w",
+        account_id="x",
+        timezone="UTC",
+        send_window_start=0,
+        send_window_end=17,
+        send_days=[0, 1, 2, 3, 4],  # weekdays only
+        daily_cap=50,
+    )
+    saturday_noon = dt.datetime(2026, 7, 11, 12, 0, tzinfo=dt.timezone.utc)
+    resolved = email_campaigns._next_valid_send_time(saturday_noon, camp)
+    assert resolved is not None
+    assert resolved.weekday() == 0  # Monday, not the stale Saturday
+    assert resolved == dt.datetime(2026, 7, 13, 0, 0, tzinfo=dt.timezone.utc)
+    # Already inside a window: returned unchanged.
+    wednesday_noon = dt.datetime(2026, 7, 8, 12, 0, tzinfo=dt.timezone.utc)
+    assert email_campaigns._next_valid_send_time(wednesday_noon, camp) == wednesday_noon
+
+
 def test_campaign_daily_cap_parks_for_retry(cc_org, api, probe_ok, captured_sends):
     acct = _mk_account(cc_org, api, from_email="cap@campaignco.com")
     camp = _mk_campaign(cc_org, api, acct["id"], daily_cap=1, **_ALWAYS)

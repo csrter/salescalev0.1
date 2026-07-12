@@ -171,7 +171,12 @@ def _next_valid_send_time(
             if local < open_t:
                 return open_t.astimezone(dt.timezone.utc)
             if local < close_t:
-                return _aware(after).astimezone(dt.timezone.utc)
+                # `local`, not the original `after` — identical on the first
+                # loop iteration, but once the loop has advanced past rejected
+                # days, returning the stale `after` could schedule a send on a
+                # disallowed day (manifests when send_window_start == 0, where
+                # an advanced day's midnight passes the open_t check).
+                return local.astimezone(dt.timezone.utc)
         local = (local + dt.timedelta(days=1)).replace(
             hour=0, minute=0, second=0, microsecond=0
         )
