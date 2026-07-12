@@ -705,6 +705,12 @@ live activation + the entitlement flip, the Outreach module build
       verified live on alt2 against a 2-page mock: 40-result search fetched
       2 pages → usage 2/40, 4.0+ server filter returned only ≥4.0 results,
       filter bar + clear-filters behavior correct. Tests 362 → 366.
+      DEPLOYED to production (2026-07-12, 79ca196): migration e5a9c2f7b4d8
+      applied to the live Supabase DB (alembic current = e5a9c2f7b4d8 head),
+      backend/frontend rebuilt, /api/health ok, search endpoint live and
+      auth-gated. Deploy-runbook correction: the compose file on the VPS is
+      deploy/docker-compose.traefik.yml (under the deploy/ subdir), not
+      repo-root docker-compose.traefik.yml.
 - [ ] Stripe live activation + entitlement flip (after 12–14, so real
       limits land everywhere in one pass)
 - [ ] Outreach module build (dev-mode) — go-live gated on Meta App
