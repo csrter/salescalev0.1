@@ -419,9 +419,22 @@ live activation + the entitlement flip, the Outreach module build
       path end-to-end; the IMAP leg to a not-yet-provisioned host timed
       out safely at 25s instead of hanging, and the backend stayed
       responsive to other requests throughout. Tests still 334 passing.
-      NOT deployed yet — build + verification done this session; the
-      real VPS mail server (deploy/MAILSERVER.md) still needs setting up
-      before a live campaign can actually send.
+      DEPLOYED to production (2026-07-12): migrations b1e7d4c9a025 +
+      c2f8e5a1b307 applied cleanly on the live Supabase DB (all 8 email_*
+      tables + split-credential columns verified present), backend/
+      frontend images rebuilt and recreated on the VPS, /api/email-
+      outreach/* routes live and auth-gated (401 without a token), the
+      background scheduler (email_campaigns.run_due + email_warmup.run_due
+      + email_outreach_sync.sync_due) running on its 60s tick. NOTE:
+      backend/.env has no ANTHROPIC_API_KEY, so {{ai_snippet}}
+      personalization is silently disabled (renders empty, never blocks a
+      send) until a key is added — every other send path works without it.
+      Reaching Elastic Email SMTP (smtp.elasticemail.com:2525/587) and the
+      mail.atlasreach.io:993 IMAP hairpin both verified from INSIDE the
+      prod backend container. Remaining before a live send: Elastic domain
+      verification (user-side DNS: merge SPF include, add DKIM/tracking/
+      DMARC + the mail-subdomain MX at Porkbun) and the user connecting the
+      mailbox in the Email → Accounts dialog.
 - [x] VPS mail server bring-up (receive leg, LIVE): docker-mailserver
       14.0.0 running on the VPS as the isolated "mailserver" compose
       project, hosting carter@mail.atlasreach.io — receive-only; sending
