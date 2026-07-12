@@ -50,9 +50,20 @@ def _fake_results():
 def fake_places(monkeypatch):
     calls = []
 
-    def _search_stub(query, location, api_key):
-        calls.append({"query": query, "location": location, "key": api_key})
-        return _fake_results()
+    def _search_stub(
+        query, location, api_key, *, min_rating=None, open_now=False, page_token=None
+    ):
+        calls.append(
+            {
+                "query": query,
+                "location": location,
+                "key": api_key,
+                "min_rating": min_rating,
+                "open_now": open_now,
+                "page_token": page_token,
+            }
+        )
+        return _fake_results(), None
 
     monkeypatch.setattr(places, "search_text", _search_stub)
     return calls
@@ -160,6 +171,137 @@ def test_search_quota_402_at_cap(api, fake_places, places_key):
     r = _search(api, headers)
     assert r.status_code == 402, r.text
     assert "plan" in r.json()["detail"].lower()
+
+
+def _paged_results(page):
+    """20 unique results for page 1, 5 for page 2 — distinct place ids."""
+    n = 20 if page == 1 else 5
+    return [
+        PlaceResult(
+            place_id=f"pl_p{page}_{i}",
+            name=f"Biz {page}-{i}",
+            address="1 Main St, Mesa, AZ",
+            phone=f"(480) 555-{page}{i:03d}",
+            website=f"https://biz{page}{i}.example.com",
+            rating=4.0,
+            types=["hvac_contractor"],
+        )
+        for i in range(n)
+    ]
+
+
+def test_search_pagination_meters_each_page(
+    api, team_headers, monkeypatch, places_key
+):
+    """max_results > 20 loops pages; the ledger row records pages_fetched and
+    the monthly quota counts pages, not searches."""
+    calls = []
+
+    def _stub(query, location, api_key, *, min_rating=None, open_now=False, page_token=None):
+        calls.append(page_token)
+        if page_token is None:
+            return _paged_results(1), "tok-page-2"
+        return _paged_results(2), None
+
+    monkeypatch.setattr(places, "search_text", _stub)
+    before = api.get("/api/lead-finder/usage", headers=team_headers).json()[
+        "searches"
+    ]["used"]
+    r = api.post(
+        "/api/lead-finder/search",
+        json={"query": "HVAC contractors", "location": "Mesa AZ", "max_results": 40},
+        headers=team_headers,
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert calls == [None, "tok-page-2"]  # identical params, token threaded
+    assert len(body["results"]) == 25
+    assert body["pages_fetched"] == 2
+    assert body["quota_clamped"] is False
+    assert body["usage"]["used"] == before + 2
+    db = SessionLocal()
+    row = db.get(LeadFinderSearch, body["search_id"])
+    assert row.pages_fetched == 2 and row.results_count == 25
+    db.close()
+
+
+def test_search_filters_pass_through(api, team_headers, fake_places, places_key):
+    r = api.post(
+        "/api/lead-finder/search",
+        json={
+            "query": "HVAC contractors",
+            "location": "Mesa AZ",
+            "min_rating": 4.0,
+            "open_now": True,
+        },
+        headers=team_headers,
+    )
+    assert r.status_code == 200, r.text
+    assert fake_places[-1]["min_rating"] == 4.0
+    assert fake_places[-1]["open_now"] is True
+
+
+def test_search_quota_clamps_pages_not_402(api, monkeypatch, places_key):
+    """With 1 page left this month, a 60-result request returns one page and
+    flags the clamp instead of refusing the whole search."""
+    r = api.post(
+        "/api/orgs/signup",
+        json={
+            "organization_name": "Clamp Co",
+            "email": "owner@clampco.com",
+            "password": "clamp-pass-123",
+            "full_name": "C",
+        },
+    )
+    assert r.status_code == 201
+    headers = {"Authorization": f"Bearer {r.json()['access_token']}"}
+    org_id = r.json()["organization_id"]
+    db = SessionLocal()
+    for i in range(39):  # starter cap is 40 pages/month → 1 left
+        db.add(LeadFinderSearch(organization_id=org_id, query=f"q{i}"))
+    db.commit()
+    db.close()
+
+    calls = []
+
+    def _stub(query, location, api_key, *, min_rating=None, open_now=False, page_token=None):
+        calls.append(page_token)
+        return _paged_results(1), "tok-page-2"
+
+    monkeypatch.setattr(places, "search_text", _stub)
+    r = api.post(
+        "/api/lead-finder/search",
+        json={"query": "plumbers", "location": "Tempe AZ", "max_results": 60},
+        headers=headers,
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert calls == [None]  # only the one page the quota allowed
+    assert body["pages_fetched"] == 1
+    assert body["quota_clamped"] is True
+    assert body["usage"]["used"] == 40  # now at cap
+
+
+def test_search_mid_pagination_error_keeps_paid_results(
+    api, team_headers, monkeypatch, places_key
+):
+    """A Places failure on page 2 must not throw away billed page-1 results."""
+
+    def _stub(query, location, api_key, *, min_rating=None, open_now=False, page_token=None):
+        if page_token is None:
+            return _paged_results(1), "tok-page-2"
+        raise places.PlacesError("boom")
+
+    monkeypatch.setattr(places, "search_text", _stub)
+    r = api.post(
+        "/api/lead-finder/search",
+        json={"query": "HVAC contractors", "location": "Mesa AZ", "max_results": 40},
+        headers=team_headers,
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert len(body["results"]) == 20
+    assert body["pages_fetched"] == 1
 
 
 def test_search_usage_is_tenant_scoped(api, team_headers, org2_headers):

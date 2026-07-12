@@ -668,6 +668,43 @@ live activation + the entitlement flip, the Outreach module build
       so no re-connects needed). Reminder: extraction of anything over
       ~/salescale MUST come from `git archive` (which contains no .env) —
       the deploy flow never touches .env by design.
+- [x] 2FA-email fallback (same-day fix): real 2FA/reset/invite mail from
+      Atlas Reach silently died because resolve_sender returns the branded
+      sales@atlasreach.io and Resend 403s unverified domains (send_email
+      never raises by design — the failure was invisible). services/email.py
+      send_email now retries ONCE with the platform default sender when the
+      branded sender fails; EmailLog records whichever sender actually
+      delivered. All five call sites are account-lifecycle mail, never
+      client-facing branded surfaces, so the fallback can't leak vendor
+      branding into white-labeled client mail. Tests 362 (3 new in
+      test_email_delivery.py). DEPLOYED to production (2026-07-12, ef2e35f).
+      Permanent fix is user-side: verify atlasreach.io at resend.com/domains,
+      after which the branded sender just works and the fallback never fires.
+- [x] Lead Finder filters + >20 results (same-day session): Text Search
+      pagination lands — places.search_text now takes min_rating/open_now/
+      page_token and returns (results, next_page_token); FieldMask includes
+      nextPageToken (IDs-Only SKU — doesn't raise the billed tier). Search
+      accepts max_results 20/40/60 (Google's documented ceiling is 60 across
+      3 pages) and loops pages server-side with cross-page place-id dedupe;
+      a mid-pagination Places failure keeps already-billed pages instead of
+      502-ing. METERING IS NOW PER PAGE: each page is a separately billed
+      Google request, so lead_finder_searches gained pages_fetched
+      (migration e5a9c2f7b4d8) and lead_finder_usage sums it — a 60-result
+      search honestly costs 3 of the monthly quota, the UI select says so
+      ("60 results · 3 searches"), and when the remaining quota can't cover
+      the request the search clamps to what's left and returns
+      quota_clamped=true (surfaced as a "Partial results" alert) instead of
+      402-ing. Server-side filters: minRating (0.5-cadence snap) + openNow,
+      page-invariant per Google's pageToken rules. Frontend (leadfinder.tsx):
+      results-count + min-rating selects on the search form, and Lead
+      Finder's OWN client-side filter bar over results — category (from
+      result types), rating, has phone, has website, hide already-in-CRM —
+      with filtered counts ("N results (of M)") and filter-aware select-all;
+      import cap raised to 60. places.py gained a PLACES_TEXT_SEARCH_URL env
+      override (local stub verification only, never set in deployments) —
+      verified live on alt2 against a 2-page mock: 40-result search fetched
+      2 pages → usage 2/40, 4.0+ server filter returned only ≥4.0 results,
+      filter bar + clear-filters behavior correct. Tests 362 → 366.
 - [ ] Stripe live activation + entitlement flip (after 12–14, so real
       limits land everywhere in one pass)
 - [ ] Outreach module build (dev-mode) — go-live gated on Meta App

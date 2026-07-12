@@ -37,6 +37,12 @@ router = APIRouter(prefix="/api/lead-finder", tags=["lead-finder"])
 class SearchIn(BaseModel):
     query: str = Field(min_length=2, max_length=300)
     location: Optional[str] = Field(default=None, max_length=300)
+    # How many results to bring back — each page of 20 is a separately
+    # billed Places request and counts 1 against the monthly quota.
+    max_results: int = Field(default=20, ge=1, le=places.MAX_TOTAL_RESULTS)
+    # Server-side Places filters (page-invariant).
+    min_rating: Optional[float] = Field(default=None, ge=0, le=5)
+    open_now: bool = False
 
 
 class PlaceOut(BaseModel):
@@ -53,13 +59,17 @@ class PlaceOut(BaseModel):
 class SearchOut(BaseModel):
     search_id: str
     results: List[PlaceOut]
+    pages_fetched: int
+    # True when the monthly quota had fewer pages left than max_results asked
+    # for — the UI says so instead of silently returning less.
+    quota_clamped: bool = False
     usage: Dict[str, Any]
 
 
 class ImportIn(BaseModel):
     search_id: str
     client_id: str
-    places: List[PlaceOut] = Field(max_length=places.MAX_RESULTS)
+    places: List[PlaceOut] = Field(max_length=places.MAX_TOTAL_RESULTS)
 
 
 class ProviderStatusOut(BaseModel):
@@ -82,27 +92,58 @@ def search(
     user: User = Depends(require_team),
     db: Session = Depends(get_db),
 ):
-    """One metered Places Text Search. The ledger row is written even when
-    zero results come back — Google bills the request either way, so the
-    quota must count it either way."""
+    """One metered Places Text Search, up to 3 billed pages (60 results).
+    The ledger row is written even when zero results come back — Google
+    bills each page request either way, so the quota must count it either
+    way. When the monthly quota has fewer pages left than max_results asks
+    for, the search is clamped to what's left rather than refused outright."""
     org = _org(db, user)
     entitlements.enforce_can_search_leads(db, org)
-    # Per-org burst brake on top of the monthly quota (each search is a paid
+    # Per-org burst brake on top of the monthly quota (each page is a paid
     # upstream call; the monthly meter alone would allow it all in one minute).
     enforce_bucket(f"lead_finder:{org.id}", limit=10, window_seconds=60)
     api_key = integration_creds.resolve_key(db, org.id, "google_places")
+
+    pages_wanted = -(-body.max_results // places.MAX_RESULTS)  # ceil
+    remaining = entitlements.lead_finder_pages_remaining(db, org)
+    pages_allowed = pages_wanted if remaining is None else min(pages_wanted, remaining)
+
+    found: List[places.PlaceResult] = []
+    seen_ids: set = set()
+    pages_fetched = 0
+    page_token: Optional[str] = None
     try:
-        found = places.search_text(body.query, body.location, api_key)
+        for _ in range(pages_allowed):
+            page, page_token = places.search_text(
+                body.query,
+                body.location,
+                api_key,
+                min_rating=body.min_rating,
+                open_now=body.open_now,
+                page_token=page_token,
+            )
+            pages_fetched += 1
+            for p in page:
+                if p.place_id not in seen_ids:
+                    seen_ids.add(p.place_id)
+                    found.append(p)
+            if not page_token or len(found) >= body.max_results:
+                break
     except places.PlacesNotConfigured as e:
         raise HTTPException(503, str(e))
     except places.PlacesError as e:
-        raise HTTPException(502, f"Google Places error: {e}")
+        # Pages already fetched were billed by Google; if the failure was
+        # mid-pagination, keep what we have instead of dropping paid results.
+        if pages_fetched == 0:
+            raise HTTPException(502, f"Google Places error: {e}")
+    found = found[: body.max_results]
     row = LeadFinderSearch(
         organization_id=org.id,
         user_id=user.id,
         query=body.query.strip(),
         location=(body.location or "").strip() or None,
         results_count=len(found),
+        pages_fetched=max(1, pages_fetched),
     )
     db.add(row)
     db.commit()
@@ -123,6 +164,8 @@ def search(
     return SearchOut(
         search_id=row.id,
         results=results,
+        pages_fetched=pages_fetched,
+        quota_clamped=pages_allowed < pages_wanted,
         usage=entitlements.lead_finder_usage(db, org),
     )
 

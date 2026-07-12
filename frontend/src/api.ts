@@ -1183,11 +1183,33 @@ export interface LeadFinderUsage {
   plan: string;
 }
 
-export const searchLeads = (query: string, location?: string) =>
-  api<{ search_id: string; results: LeadFinderPlace[]; usage: MeteredUsage }>(
-    "/api/lead-finder/search",
-    { method: "POST", body: JSON.stringify({ query, location: location || null }) }
-  );
+export interface LeadSearchOptions {
+  maxResults?: number; // 20 / 40 / 60 — each page of 20 costs 1 search
+  minRating?: number; // Places-side filter, 0.5 steps
+  openNow?: boolean;
+}
+
+export const searchLeads = (
+  query: string,
+  location?: string,
+  opts: LeadSearchOptions = {}
+) =>
+  api<{
+    search_id: string;
+    results: LeadFinderPlace[];
+    pages_fetched: number;
+    quota_clamped: boolean;
+    usage: MeteredUsage;
+  }>("/api/lead-finder/search", {
+    method: "POST",
+    body: JSON.stringify({
+      query,
+      location: location || null,
+      max_results: opts.maxResults ?? 20,
+      min_rating: opts.minRating ?? null,
+      open_now: opts.openNow ?? false,
+    }),
+  });
 
 export const importLeads = (
   searchId: string,

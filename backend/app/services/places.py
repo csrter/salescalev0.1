@@ -20,15 +20,22 @@ provider="google_places"), falling back to the operator's global
 GOOGLE_PLACES_API_KEY.
 """
 
+import os
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 import httpx
 
-_TEXT_SEARCH_URL = "https://places.googleapis.com/v1/places:searchText"
+# Overridable for local verification against a stub server only — never set
+# in any deployed environment.
+_TEXT_SEARCH_URL = os.environ.get(
+    "PLACES_TEXT_SEARCH_URL", "https://places.googleapis.com/v1/places:searchText"
+)
 
 # Exactly the fields the feature displays/stores (task 2): name, category,
-# phone, website, rating, address — plus the indefinitely-cacheable place id.
+# phone, website, rating, address — plus the indefinitely-cacheable place id
+# and the pagination token (nextPageToken sits in the IDs-Only SKU tier, so
+# requesting it never changes the billed tier).
 _FIELD_MASK = ",".join(
     [
         "places.id",
@@ -38,10 +45,12 @@ _FIELD_MASK = ",".join(
         "places.nationalPhoneNumber",
         "places.websiteUri",
         "places.rating",
+        "nextPageToken",
     ]
 )
 
 MAX_RESULTS = 20  # Text Search (New) page size ceiling
+MAX_TOTAL_RESULTS = 60  # documented ceiling across all pages (3 pages of 20)
 
 
 class PlacesError(Exception):
@@ -63,21 +72,45 @@ class PlaceResult:
     types: List[str]
 
 
-def search_text(query: str, location: Optional[str], api_key: str) -> List[PlaceResult]:
-    """One Text Search (New) request. `location` is folded into the text
-    query ("HVAC contractors in Scottsdale AZ") — the API's server-side
-    geocoding of the combined query is the documented pattern for
-    city-level search and avoids a separate Geocoding call per search."""
+def search_text(
+    query: str,
+    location: Optional[str],
+    api_key: str,
+    *,
+    min_rating: Optional[float] = None,
+    open_now: bool = False,
+    page_token: Optional[str] = None,
+) -> Tuple[List[PlaceResult], Optional[str]]:
+    """One Text Search (New) request — a single page of up to 20 results
+    plus the token for the next page (None when there isn't one; Google caps
+    the whole result set at MAX_TOTAL_RESULTS).
+
+    `location` is folded into the text query ("HVAC contractors in
+    Scottsdale AZ") — the API's server-side geocoding of the combined query
+    is the documented pattern for city-level search and avoids a separate
+    Geocoding call per search.
+
+    Filters are page-invariant: a pageToken request must carry the exact
+    same textQuery/minRating/openNow as the request that issued the token,
+    so callers must pass identical arguments when paging."""
     if not api_key:
         raise PlacesNotConfigured(
             "Google Places is not configured — connect your organization's "
             "API key or set GOOGLE_PLACES_API_KEY."
         )
     text = f"{query} in {location}" if location else query
+    payload: dict = {"textQuery": text, "pageSize": MAX_RESULTS}
+    if min_rating:
+        # The API accepts 0–5 at a 0.5 cadence; snap rather than 400.
+        payload["minRating"] = min(5.0, max(0.0, round(min_rating * 2) / 2))
+    if open_now:
+        payload["openNow"] = True
+    if page_token:
+        payload["pageToken"] = page_token
     try:
         resp = httpx.post(
             _TEXT_SEARCH_URL,
-            json={"textQuery": text, "pageSize": MAX_RESULTS},
+            json=payload,
             headers={
                 "X-Goog-Api-Key": api_key,
                 "X-Goog-FieldMask": _FIELD_MASK,
@@ -94,8 +127,9 @@ def search_text(query: str, location: Optional[str], api_key: str) -> List[Place
         except Exception:
             detail = None
         raise PlacesError(detail or f"Places API HTTP {resp.status_code}")
+    data = resp.json()
     out: List[PlaceResult] = []
-    for p in resp.json().get("places", []):
+    for p in data.get("places", []):
         out.append(
             PlaceResult(
                 place_id=p.get("id", ""),
@@ -107,4 +141,4 @@ def search_text(query: str, location: Optional[str], api_key: str) -> List[Place
                 types=p.get("types", []),
             )
         )
-    return [r for r in out if r.place_id and r.name]
+    return [r for r in out if r.place_id and r.name], data.get("nextPageToken") or None

@@ -12,6 +12,8 @@ call sites. Until Phase 8 exists:
   applied to every Organization.
 """
 
+from typing import Optional
+
 from fastapi import HTTPException, status
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -184,11 +186,25 @@ def _month_count(db: Session, model, organization_id: str) -> int:
 
 
 def lead_finder_usage(db: Session, org: Organization) -> dict:
-    """Self-service "X of Y used" for Lead Finder searches this month."""
+    """Self-service "X of Y used" for Lead Finder searches this month.
+
+    Google bills every pagination page as its own Text Search request, so
+    "used" sums pages_fetched rather than counting ledger rows — a 60-result
+    search honestly consumes 3 of the monthly quota."""
+    import datetime as dt
+
     from ..models.lead_finder import LeadFinderSearch
 
+    now = dt.datetime.now(dt.timezone.utc)
+    month_start = dt.datetime(now.year, now.month, 1, tzinfo=dt.timezone.utc)
+    used = db.execute(
+        select(func.coalesce(func.sum(LeadFinderSearch.pages_fetched), 0)).where(
+            LeadFinderSearch.organization_id == org.id,
+            LeadFinderSearch.created_at >= month_start,
+        )
+    ).scalar_one()
     return {
-        "used": _month_count(db, LeadFinderSearch, org.id),
+        "used": int(used),
         "limit": _limits(org)["lead_finder_searches"],
     }
 
@@ -203,6 +219,16 @@ def enforce_can_search_leads(db: Session, org: Organization) -> None:
             f"Your {org.plan} plan allows {cap} Lead Finder searches per "
             "month. Upgrade for more.",
         )
+
+
+def lead_finder_pages_remaining(db: Session, org: Organization) -> Optional[int]:
+    """How many more billed Places pages this org may fetch this month
+    (None = unlimited). The search endpoint clamps multi-page requests to
+    this instead of 402-ing a search that could still return one page."""
+    usage = lead_finder_usage(db, org)
+    if usage["limit"] is None:
+        return None
+    return max(0, usage["limit"] - usage["used"])
 
 
 def email_verification_usage(db: Session, org: Organization) -> dict:

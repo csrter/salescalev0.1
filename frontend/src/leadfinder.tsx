@@ -206,13 +206,22 @@ export function LeadFinderView({ isAdmin = false }: { isAdmin?: boolean }) {
   const toast = useToast();
   const [query, setQuery] = useState("");
   const [location, setLocation] = useState("");
+  const [maxResults, setMaxResults] = useState(20);
+  const [minRating, setMinRating] = useState(0); // 0 = any (Places-side)
   const [searching, setSearching] = useState(false);
   const [searchErr, setSearchErr] = useState<string | null>(null);
+  const [searchNote, setSearchNote] = useState<string | null>(null);
   const [searchId, setSearchId] = useState<string | null>(null);
   const [results, setResults] = useState<LeadFinderPlace[] | null>(null);
   const [checked, setChecked] = useState<Set<string>>(new Set());
   const [importing, setImporting] = useState(false);
   const [usage, setUsage] = useState<LeadFinderUsage | null>(null);
+  // Result filters — Lead Finder's own, applied client-side to this search.
+  const [fltCategory, setFltCategory] = useState("");
+  const [fltHasPhone, setFltHasPhone] = useState(false);
+  const [fltHasWebsite, setFltHasWebsite] = useState(false);
+  const [fltHideInCrm, setFltHideInCrm] = useState(false);
+  const [fltMinRating, setFltMinRating] = useState(0);
 
   useEffect(() => {
     let alive = true;
@@ -224,21 +233,59 @@ export function LeadFinderView({ isAdmin = false }: { isAdmin?: boolean }) {
     };
   }, []);
 
+  // Client-side filters over the current search's results.
+  const filtered = useMemo(() => {
+    let rows = results ?? [];
+    if (fltCategory) rows = rows.filter((r) => r.types.includes(fltCategory));
+    if (fltHasPhone) rows = rows.filter((r) => !!r.phone);
+    if (fltHasWebsite) rows = rows.filter((r) => !!r.website);
+    if (fltHideInCrm) rows = rows.filter((r) => !r.in_crm);
+    if (fltMinRating > 0)
+      rows = rows.filter((r) => (r.rating ?? 0) >= fltMinRating);
+    return rows;
+  }, [results, fltCategory, fltHasPhone, fltHasWebsite, fltHideInCrm, fltMinRating]);
+
+  const categories = useMemo(() => {
+    const seen = new Set<string>();
+    for (const r of results ?? []) for (const t of r.types) seen.add(t);
+    return [...seen].sort();
+  }, [results]);
+
+  const filtersActive =
+    !!fltCategory || fltHasPhone || fltHasWebsite || fltHideInCrm || fltMinRating > 0;
+
+  const clearFilters = () => {
+    setFltCategory("");
+    setFltHasPhone(false);
+    setFltHasWebsite(false);
+    setFltHideInCrm(false);
+    setFltMinRating(0);
+  };
+
   const importable = useMemo(
-    () => (results ?? []).filter((r) => !r.in_crm),
-    [results]
+    () => filtered.filter((r) => !r.in_crm),
+    [filtered]
   );
 
   const runSearch = async () => {
     if (query.trim().length < 2 || searching) return;
     setSearching(true);
     setSearchErr(null);
+    setSearchNote(null);
     try {
-      const r = await searchLeads(query.trim(), location.trim() || undefined);
+      const r = await searchLeads(query.trim(), location.trim() || undefined, {
+        maxResults,
+        minRating: minRating > 0 ? minRating : undefined,
+      });
       setSearchId(r.search_id);
       setResults(r.results);
+      clearFilters();
       setChecked(new Set(r.results.filter((p) => !p.in_crm).map((p) => p.place_id)));
       setUsage((u) => (u ? { ...u, searches: r.usage } : u));
+      if (r.quota_clamped)
+        setSearchNote(
+          "Your monthly search quota didn't cover the full request — showing what it allowed."
+        );
     } catch (e) {
       setSearchErr((e as Error).message);
     } finally {
@@ -407,6 +454,26 @@ export function LeadFinderView({ isAdmin = false }: { isAdmin?: boolean }) {
           placeholder="City / area — e.g. Scottsdale AZ"
           aria-label="Location"
         />
+        <select
+          value={maxResults}
+          onChange={(e) => setMaxResults(Number(e.target.value))}
+          aria-label="Results per search"
+          title="Each page of 20 results is one search against your monthly quota"
+        >
+          <option value={20}>20 results · 1 search</option>
+          <option value={40}>40 results · 2 searches</option>
+          <option value={60}>60 results · 3 searches</option>
+        </select>
+        <select
+          value={minRating}
+          onChange={(e) => setMinRating(Number(e.target.value))}
+          aria-label="Minimum Google rating"
+        >
+          <option value={0}>Any rating</option>
+          <option value={3.5}>3.5+ stars</option>
+          <option value={4}>4.0+ stars</option>
+          <option value={4.5}>4.5+ stars</option>
+        </select>
         <Button type="submit" busy={searching} disabled={query.trim().length < 2}>
           <Search size={16} aria-hidden="true" /> Search
         </Button>
@@ -417,12 +484,71 @@ export function LeadFinderView({ isAdmin = false }: { isAdmin?: boolean }) {
           {searchErr}
         </Alert>
       )}
+      {searchNote && (
+        <Alert tone="warn" title="Partial results">
+          {searchNote}
+        </Alert>
+      )}
 
       {results !== null && (
         <>
+          <div className="lf-filterbar" role="group" aria-label="Filter results">
+            <select
+              value={fltCategory}
+              onChange={(e) => setFltCategory(e.target.value)}
+              aria-label="Filter by category"
+            >
+              <option value="">All categories</option>
+              {categories.map((t) => (
+                <option key={t} value={t}>
+                  {t.replace(/_/g, " ")}
+                </option>
+              ))}
+            </select>
+            <select
+              value={fltMinRating}
+              onChange={(e) => setFltMinRating(Number(e.target.value))}
+              aria-label="Filter by rating"
+            >
+              <option value={0}>Any rating</option>
+              <option value={3.5}>3.5+ stars</option>
+              <option value={4}>4.0+ stars</option>
+              <option value={4.5}>4.5+ stars</option>
+            </select>
+            <label className="lf-flt-check">
+              <input
+                type="checkbox"
+                checked={fltHasPhone}
+                onChange={(e) => setFltHasPhone(e.target.checked)}
+              />
+              Has phone
+            </label>
+            <label className="lf-flt-check">
+              <input
+                type="checkbox"
+                checked={fltHasWebsite}
+                onChange={(e) => setFltHasWebsite(e.target.checked)}
+              />
+              Has website
+            </label>
+            <label className="lf-flt-check">
+              <input
+                type="checkbox"
+                checked={fltHideInCrm}
+                onChange={(e) => setFltHideInCrm(e.target.checked)}
+              />
+              Hide already in CRM
+            </label>
+            {filtersActive && (
+              <Button variant="ghost" size="sm" onClick={clearFilters}>
+                Clear filters
+              </Button>
+            )}
+          </div>
           <div className="lf-actions">
             <span className="lf-count">
-              {results.length} result{results.length === 1 ? "" : "s"}
+              {filtered.length} result{filtered.length === 1 ? "" : "s"}
+              {filtersActive && ` (of ${results.length})`}
               {checked.size > 0 && ` · ${checked.size} selected`}
             </span>
             <Button
@@ -435,10 +561,14 @@ export function LeadFinderView({ isAdmin = false }: { isAdmin?: boolean }) {
           </div>
           <DataTable<LeadFinderPlace>
             columns={columns}
-            rows={results}
+            rows={filtered}
             rowKey={(p) => p.place_id}
             caption="Lead Finder search results"
-            emptyMessage="No businesses matched that search."
+            emptyMessage={
+              filtersActive
+                ? "No results match the current filters."
+                : "No businesses matched that search."
+            }
           />
         </>
       )}

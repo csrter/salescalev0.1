@@ -43,6 +43,12 @@ class LeadFinderSearch(Base):
     query: Mapped[str] = mapped_column(String(300), nullable=False)
     location: Mapped[Optional[str]] = mapped_column(String(300))
     results_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    # Google bills each pagination page as a separate Text Search request, so
+    # the monthly quota counts pages, not user-visible searches (a 60-result
+    # search = 3). Kept on the one ledger row per user action.
+    pages_fetched: Mapped[int] = mapped_column(
+        Integer, default=1, server_default="1", nullable=False
+    )
     created_at: Mapped[dt.datetime] = created_at_column()
 
 
