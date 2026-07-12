@@ -166,14 +166,17 @@ def import_places(
 
 
 def enrich_and_verify(organization_id: str, contact_ids: List[str]) -> None:
-    """Background pipeline (task 11): website email discovery → optional
-    licensed-provider enrichment → verification. Runs post-response with its
-    own session; every step is best-effort and quota-respecting — a failure
-    or exhausted quota leaves contacts unverified, never half-written."""
+    """Background pipeline (task 11): website email + description discovery →
+    optional licensed-provider enrichment (emails via Hunter; owner contact +
+    firmographics via the org's profile provider) → verification. Runs
+    post-response with its own session; every step is best-effort and
+    quota-respecting — a failure or exhausted quota leaves contacts
+    unverified, never half-written."""
     from fastapi import HTTPException
 
     from ..db import SessionLocal
     from . import email_verification, integration_creds
+    from . import enrichment as enrichment_mod
     from .enrichment import discover_site_emails, provider_for
 
     db = SessionLocal()
@@ -193,28 +196,84 @@ def enrich_and_verify(organization_id: str, contact_ids: List[str]) -> None:
         )
         hunter_key = integration_creds.resolve_key(db, organization_id, "hunter")
         provider = provider_for("hunter", hunter_key)
+        apollo_key = integration_creds.resolve_key(db, organization_id, "apollo")
+        profile_provider = enrichment_mod.profile_provider_for("apollo", apollo_key)
         now = dt.datetime.now(dt.timezone.utc).isoformat()
         for c in contacts:
             website = (c.source_detail or {}).get("website")
+            domain = normalize_domain(website)
+            company = db.get(Company, c.company_id) if c.company_id else None
+
+            # -- company profile: own-site description first (free, every
+            # org), then the licensed profile provider for firmographics.
+            # Enrichment only ever fills blanks — a human edit wins.
+            if company is not None and website and not company.description:
+                desc = enrichment_mod.discover_site_description(website)
+                if desc:
+                    company.description = desc
+            if profile_provider is not None and domain and company is not None:
+                profile = profile_provider.company_profile(domain)
+                if profile is not None:
+                    if profile.description and not company.description:
+                        company.description = profile.description
+                    if profile.estimated_revenue and not company.estimated_revenue:
+                        company.estimated_revenue = profile.estimated_revenue
+                    if profile.employee_count and not company.employee_count:
+                        company.employee_count = profile.employee_count
+
+            # -- owner identity + direct line from the profile provider.
+            owner_email: str | None = None
+            if profile_provider is not None and domain:
+                owner = profile_provider.find_owner(domain)
+                if owner is not None:
+                    # Lead Finder imports park the business name in
+                    # first_name; a real owner name replaces that
+                    # placeholder but never a name someone typed in.
+                    is_placeholder = (
+                        company is not None
+                        and c.first_name == company.name
+                        and not c.last_name
+                    )
+                    if owner.first_name and (not c.first_name or is_placeholder):
+                        c.first_name = owner.first_name
+                        c.last_name = owner.last_name
+                    if owner.mobile_phone and not c.mobile_phone:
+                        c.mobile_phone = owner.mobile_phone
+                    if owner.title:
+                        c.source_detail = {
+                            **(c.source_detail or {}),
+                            "owner_title": owner.title,
+                        }
+                    owner_email = owner.email
+
             if c.email or not website:
                 continue
             candidates = [
                 {"email": e, "source": "website", "found_at": now}
                 for e in discover_site_emails(website)
             ]
-            if provider is not None:
-                domain = normalize_domain(website)
-                if domain:
-                    seen = {row["email"] for row in candidates}
-                    for cand in provider.find_contacts(domain, c.first_name):
-                        if cand.email not in seen:
-                            candidates.append(
-                                {
-                                    "email": cand.email,
-                                    "source": "provider:hunter",
-                                    "found_at": now,
-                                }
-                            )
+            if owner_email and owner_email not in {r["email"] for r in candidates}:
+                # The owner's own address is the best outreach target —
+                # ahead of generic info@ found on the site.
+                candidates.insert(
+                    0,
+                    {
+                        "email": owner_email,
+                        "source": f"provider:{profile_provider.id}",
+                        "found_at": now,
+                    },
+                )
+            if provider is not None and domain:
+                seen = {row["email"] for row in candidates}
+                for cand in provider.find_contacts(domain, c.first_name):
+                    if cand.email not in seen:
+                        candidates.append(
+                            {
+                                "email": cand.email,
+                                "source": "provider:hunter",
+                                "found_at": now,
+                            }
+                        )
             if candidates:
                 c.candidate_emails = candidates
                 # Promote the best candidate to the contact email — still

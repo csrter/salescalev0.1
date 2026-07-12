@@ -532,6 +532,37 @@ live activation + the entitlement flip, the Outreach module build
       panel (right IP/UA/expiry), then did a NORMAL sign-out + fresh
       email+password login and watched it go straight into the app with
       zero 2FA prompt. Not deployed yet.
+- [x] Lead Finder profile enrichment (post-2FA session): the in-house
+      lead pipeline now fills owner name/title, owner direct/mobile line,
+      work email, company description, estimated annual revenue and
+      headcount — WITHOUT scraping (guardrail 6 holds). Two sources:
+      (1) the business's own site's meta/og description
+      (enrichment.discover_site_description, same polite single-page
+      crawler posture), and (2) a new ProfileProvider adapter tier in
+      services/enrichment.py — ApolloProvider reference impl (org
+      enrichment + owner-title people search + match), BYO org key ONLY
+      ("apollo" in KEY_PROVIDERS, no operator fallback — people-data
+      ToS). Mobile/revenue physically cannot come from crawling; a
+      licensed provider is the only compliant source, so without a key
+      those fields simply stay empty. Schema (migration b6d1f3a8c5e2):
+      contacts.mobile_phone + companies.description/estimated_revenue/
+      employee_count; RESERVED_CONTACT_FIELD_KEYS extended.
+      enrich_and_verify applies profiles fill-blanks-only (a typed-in
+      name/number is never overwritten; the business-name placeholder in
+      first_name IS replaced by the real owner), owner email lands as
+      the TOP candidate (source provider:apollo) and still goes through
+      the verification gate. Serialization: mobile + company_* fields
+      are ContactOutTeam-only (never client-portal); _company_names
+      batches the firmographics. PATCH/POST contacts accept
+      mobile_phone. Frontend: Lead Finder gained the previously-missing
+      BYO provider-keys card (admin-only, google_places/apollo/hunter/
+      zerobounce — the endpoints existed since Phase 12, no UI did);
+      drawer shows mobile/firmographics/description + Edit info gained
+      Mobile; lead list gained Mobile + Est. revenue optional columns.
+      Tests 338 → 342. Verified live on alt2 (key save flow, drawer
+      render, mobile PATCH round-trip); NOTE: backend-alt2 launch config
+      now sets a dev TOKEN_ENCRYPTION_KEY (encrypted-secret paths 500'd
+      without it). Not deployed yet.
 - [ ] Stripe live activation + entitlement flip (after 12–14, so real
       limits land everywhere in one pass)
 - [ ] Outreach module build (dev-mode) — go-live gated on Meta App

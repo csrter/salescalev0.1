@@ -91,9 +91,15 @@ interface ContactRow {
   last_name: string | null;
   email: string | null;
   phone: string | null;
+  mobile_phone?: string | null;
   city: string | null;
   state: string | null;
   company_name: string | null;
+  // Enrichment firmographics (team payloads only) — from the business's own
+  // site / the org's connected data provider.
+  company_description?: string | null;
+  company_estimated_revenue?: string | null;
+  company_employee_count?: number | null;
   source: string | null;
   qualified_at: string | null;
   created_at: string;
@@ -777,6 +783,12 @@ const SYS_COLUMNS: { key: string; label: string; get: (c: ContactRow) => string 
   { key: "city", label: "City", get: (c) => c.city },
   { key: "state", label: "State", get: (c) => c.state },
   { key: "company_name", label: "Business name", get: (c) => c.company_name },
+  { key: "mobile_phone", label: "Mobile", get: (c) => c.mobile_phone ?? null },
+  {
+    key: "company_estimated_revenue",
+    label: "Est. revenue",
+    get: (c) => c.company_estimated_revenue ?? null,
+  },
 ];
 
 function LeadList({
@@ -1747,6 +1759,7 @@ function IdentityBlock({
     last_name: "",
     email: "",
     phone: "",
+    mobile_phone: "",
     city: "",
     state: "",
     company_name: "",
@@ -1758,6 +1771,7 @@ function IdentityBlock({
       last_name: detail.last_name ?? "",
       email: detail.email ?? "",
       phone: detail.phone ?? "",
+      mobile_phone: detail.mobile_phone ?? "",
       city: detail.city ?? "",
       state: detail.state ?? "",
       company_name: detail.company_name ?? "",
@@ -1777,6 +1791,7 @@ function IdentityBlock({
       last_name: form.last_name.trim() || null,
       email: form.email.trim() || null,
       phone: form.phone.trim() || null,
+      mobile_phone: form.mobile_phone.trim() || null,
       city: form.city.trim() || null,
       state: form.state.trim() || null,
       company_name: form.company_name.trim() || null,
@@ -1814,6 +1829,12 @@ function IdentityBlock({
         </Field>
         <Field label="Phone">
           <input value={form.phone} onChange={(e) => set({ phone: e.target.value })} />
+        </Field>
+        <Field label="Mobile (direct)">
+          <input
+            value={form.mobile_phone}
+            onChange={(e) => set({ mobile_phone: e.target.value })}
+          />
         </Field>
         <Field label="City">
           <input value={form.city} onChange={(e) => set({ city: e.target.value })} />
@@ -1854,14 +1875,34 @@ function IdentityBlock({
 
   const location = [detail.city, detail.state].filter(Boolean).join(", ");
   const orgLine = [detail.company_name, location].filter(Boolean).join(" · ");
+  const firmoLine = [
+    detail.company_estimated_revenue
+      ? `Est. revenue ${detail.company_estimated_revenue}/yr`
+      : null,
+    detail.company_employee_count
+      ? `${detail.company_employee_count} employees`
+      : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
 
   return (
     <div className="crm-identity">
       <p className="crm-muted">
-        {[detail.email, detail.phone].filter(Boolean).join(" · ") || "No contact info"}
+        {[
+          detail.email,
+          detail.phone,
+          detail.mobile_phone ? `${detail.mobile_phone} (mobile)` : null,
+        ]
+          .filter(Boolean)
+          .join(" · ") || "No contact info"}
         {detail.source ? ` · via ${detail.source.replace(/_/g, " ")}` : ""}
       </p>
       {orgLine && <p className="crm-muted">{orgLine}</p>}
+      {firmoLine && <p className="crm-muted">{firmoLine}</p>}
+      {detail.company_description && (
+        <p className="crm-note">{detail.company_description}</p>
+      )}
       <AttributionChips contact={detail} />
       {canEdit && (
         <div className="crm-identity-actions">

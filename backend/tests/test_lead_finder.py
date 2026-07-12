@@ -620,3 +620,205 @@ def test_null_provider_marks_unknown(api, lf_org):
     assert results[c.id] == "unknown"
     db.rollback()
     db.close()
+
+
+# --- profile enrichment (owner contact + firmographics) ---
+
+
+class _FakeApollo:
+    """Stands in for enrichment.ApolloProvider — constructed by
+    profile_provider_for with the org's resolved key."""
+
+    id = "apollo"
+
+    def __init__(self, api_key):
+        self.api_key = api_key
+
+    def company_profile(self, domain):
+        from app.services.enrichment import CompanyProfile
+
+        return CompanyProfile(
+            description="Family-owned HVAC contractor serving the East Valley.",
+            estimated_revenue="$2.5M",
+            employee_count=12,
+        )
+
+    def find_owner(self, domain):
+        from app.services.enrichment import OwnerCandidate
+
+        return OwnerCandidate(
+            first_name="Dana",
+            last_name="Ruiz",
+            title="Owner",
+            email="dana@profiletarget.com",
+            mobile_phone="+14805559999",
+        )
+
+
+def test_profile_enrichment_pipeline(api, lf_org, monkeypatch):
+    """With an org Apollo key connected, the pipeline fills owner identity
+    (replacing the business-name placeholder), the owner's mobile, the owner
+    email as the top candidate, and company firmographics — and everything
+    lands in the team contact payload."""
+    from app.models.crm import Company
+
+    db = SessionLocal()
+    company = Company(
+        organization_id=lf_org["org"],
+        client_id=lf_org["client"],
+        name="Profile Target Co",
+        domain="profiletarget.com",
+    )
+    db.add(company)
+    db.flush()
+    contact = Contact(
+        organization_id=lf_org["org"],
+        client_id=lf_org["client"],
+        company_id=company.id,
+        first_name="Profile Target Co",  # Lead Finder placeholder
+        source="lead_finder",
+        source_external_id="pl_profile_1",
+        source_detail={"website": "https://profiletarget.com"},
+    )
+    db.add(contact)
+    db.commit()
+    cid = contact.id
+    db.close()
+
+    r = api.put(
+        "/api/lead-finder/providers/apollo",
+        json={"api_key": "org-own-apollo-key"},
+        headers=lf_org["headers"],
+    )
+    assert r.status_code == 200, r.text
+    monkeypatch.setattr("app.services.enrichment.ApolloProvider", _FakeApollo)
+    monkeypatch.setattr(
+        "app.services.enrichment.discover_site_emails",
+        lambda website: ["info@profiletarget.com"],
+    )
+    monkeypatch.setattr(
+        "app.services.enrichment.discover_site_description", lambda website: None
+    )
+    fake = _FakeVerifier(verdicts={"dana@profiletarget.com": "valid"})
+    monkeypatch.setattr(
+        "app.services.email_verification.resolve_provider", lambda db, org_id: fake
+    )
+
+    lead_finder_svc.enrich_and_verify(lf_org["org"], [cid])
+
+    db = SessionLocal()
+    c = db.get(Contact, cid)
+    assert (c.first_name, c.last_name) == ("Dana", "Ruiz")
+    assert c.mobile_phone == "+14805559999"
+    assert c.source_detail["owner_title"] == "Owner"
+    # Owner's own address outranks the generic site address…
+    assert c.email == "dana@profiletarget.com"
+    assert [row["email"] for row in c.candidate_emails] == [
+        "dana@profiletarget.com",
+        "info@profiletarget.com",
+    ]
+    assert c.candidate_emails[0]["source"] == "provider:apollo"
+    assert c.verification_status == "valid"
+    co = db.get(Company, c.company_id)
+    assert co.description.startswith("Family-owned")
+    assert co.estimated_revenue == "$2.5M"
+    assert co.employee_count == 12
+    db.close()
+
+    # …and the team payload carries all of it.
+    detail = api.get(f"/api/crm/contacts/{cid}", headers=lf_org["headers"]).json()
+    assert detail["mobile_phone"] == "+14805559999"
+    assert detail["company_estimated_revenue"] == "$2.5M"
+    assert detail["company_employee_count"] == 12
+    assert detail["company_description"].startswith("Family-owned")
+
+    # A typed-in name is never overwritten by a later enrichment pass.
+    r = api.patch(
+        f"/api/crm/contacts/{cid}",
+        json={"first_name": "Dana-Marie", "mobile_phone": "+14805550000"},
+        headers=lf_org["headers"],
+    )
+    assert r.status_code == 200, r.text
+    lead_finder_svc.enrich_and_verify(lf_org["org"], [cid])
+    db = SessionLocal()
+    c = db.get(Contact, cid)
+    assert c.first_name == "Dana-Marie"
+    assert c.mobile_phone == "+14805550000"
+    db.close()
+
+    api.delete("/api/lead-finder/providers/apollo", headers=lf_org["headers"])
+
+
+def test_site_description_without_provider(api, lf_org, monkeypatch):
+    """No profile provider connected: the company description still fills
+    from the business's own site meta description; names stay untouched."""
+    from app.models.crm import Company
+
+    db = SessionLocal()
+    company = Company(
+        organization_id=lf_org["org"],
+        client_id=lf_org["client"],
+        name="Site Desc Co",
+        domain="sitedesc.com",
+    )
+    db.add(company)
+    db.flush()
+    contact = Contact(
+        organization_id=lf_org["org"],
+        client_id=lf_org["client"],
+        company_id=company.id,
+        first_name="Site Desc Co",
+        source="lead_finder",
+        source_external_id="pl_sitedesc_1",
+        source_detail={"website": "https://sitedesc.com"},
+    )
+    db.add(contact)
+    db.commit()
+    cid = contact.id
+    db.close()
+
+    monkeypatch.setattr(
+        "app.services.enrichment.discover_site_description",
+        lambda website: "Plumbing done right since 1998.",
+    )
+    monkeypatch.setattr(
+        "app.services.enrichment.discover_site_emails", lambda website: []
+    )
+    lead_finder_svc.enrich_and_verify(lf_org["org"], [cid])
+
+    db = SessionLocal()
+    c = db.get(Contact, cid)
+    assert c.first_name == "Site Desc Co"  # no provider → no owner rewrite
+    assert c.mobile_phone is None
+    co = db.get(Company, c.company_id)
+    assert co.description == "Plumbing done right since 1998."
+    assert co.estimated_revenue is None
+    db.close()
+
+
+def test_meta_description_extraction():
+    from app.services.enrichment import _extract_description
+
+    html = (
+        "<html><head>"
+        '<meta property="og:description" content="Award-winning &amp; local HVAC pros." />'
+        "</head><body>hi</body></html>"
+    )
+    assert _extract_description(html) == "Award-winning & local HVAC pros."
+    html_rev = (
+        '<head><meta content="Reversed attribute order works too, promise."'
+        ' name="description"></head>'
+    )
+    assert (
+        _extract_description(html_rev)
+        == "Reversed attribute order works too, promise."
+    )
+    assert _extract_description("<html><head></head></html>") is None
+
+
+def test_apollo_listed_as_provider(api, team_headers):
+    listing = {
+        p["provider"]
+        for p in api.get("/api/lead-finder/providers", headers=team_headers).json()
+    }
+    assert "apollo" in listing

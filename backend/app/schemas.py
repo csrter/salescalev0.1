@@ -753,6 +753,13 @@ class ContactOutPublic(BaseModel):
 
 
 class ContactOutTeam(ContactOutPublic):
+    # Enrichment fields are agency workflow data (owner's direct line,
+    # firmographics from the org's own data provider) — never in the
+    # client-portal payload.
+    mobile_phone: Optional[str] = None
+    company_description: Optional[str] = None
+    company_estimated_revenue: Optional[str] = None
+    company_employee_count: Optional[int] = None
     source_external_id: Optional[str] = None
     source_detail: Optional[Dict[str, Any]] = None
     qualification: Optional[Dict[str, bool]] = None
@@ -770,6 +777,7 @@ class ContactCreateIn(BaseModel):
     last_name: Optional[str] = None
     email: Optional[EmailStr] = None
     phone: Optional[str] = None
+    mobile_phone: Optional[str] = None
     city: Optional[str] = None
     state: Optional[str] = None
     # Non-empty resolves to a get-or-created org-scoped Company; the contact's
@@ -785,6 +793,7 @@ class ContactUpdateIn(BaseModel):
     last_name: Optional[str] = None
     email: Optional[EmailStr] = None
     phone: Optional[str] = None
+    mobile_phone: Optional[str] = None
     city: Optional[str] = None
     state: Optional[str] = None
     # Present + non-empty get-or-creates and links a Company; present + empty

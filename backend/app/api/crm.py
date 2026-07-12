@@ -92,18 +92,30 @@ def _client_for(db: Session, scope: TenantScope, client_id: str) -> Client:
     return client
 
 
-def _company_names(
-    db: Session, contacts: List[Contact]
-) -> Dict[str, Optional[str]]:
-    """Batch-resolve company_id -> company name for a set of contacts, so list
-    views don't fire one query per row."""
+def _company_names(db: Session, contacts: List[Contact]) -> Dict[str, dict]:
+    """Batch-resolve company_id -> {name + enrichment firmographics} for a set
+    of contacts, so list views don't fire one query per row."""
     ids = {c.company_id for c in contacts if c.company_id}
     if not ids:
         return {}
     rows = db.execute(
-        select(Company.id, Company.name).where(Company.id.in_(ids))
+        select(
+            Company.id,
+            Company.name,
+            Company.description,
+            Company.estimated_revenue,
+            Company.employee_count,
+        ).where(Company.id.in_(ids))
     ).all()
-    return {cid: name for cid, name in rows}
+    return {
+        cid: {
+            "name": name,
+            "description": description,
+            "estimated_revenue": revenue,
+            "employee_count": employees,
+        }
+        for cid, name, description, revenue, employees in rows
+    }
 
 
 def _serialize_contact(
@@ -120,11 +132,24 @@ def _serialize_contact(
     out["custom_fields"] = custom_fields_svc.visible_values(
         db, scope.organization_id, contact, is_team=scope.is_team
     )
+    info: Optional[dict] = None
     if company_names is not None:
-        out["company_name"] = company_names.get(contact.company_id)
+        info = company_names.get(contact.company_id)
     elif contact.company_id:
         company = db.get(Company, contact.company_id)
-        out["company_name"] = company.name if company else None
+        if company is not None:
+            info = {
+                "name": company.name,
+                "description": company.description,
+                "estimated_revenue": company.estimated_revenue,
+                "employee_count": company.employee_count,
+            }
+    out["company_name"] = info["name"] if info else None
+    if scope.is_team:
+        # Firmographics are agency workflow data (ContactOutTeam-only keys).
+        out["company_description"] = info["description"] if info else None
+        out["company_estimated_revenue"] = info["estimated_revenue"] if info else None
+        out["company_employee_count"] = info["employee_count"] if info else None
     return out
 
 
@@ -391,6 +416,7 @@ def create_contact(
         last_name=body.last_name,
         email=body.email.lower() if body.email else None,
         phone=body.phone,
+        mobile_phone=body.mobile_phone,
         city=body.city,
         state=body.state,
         source="manual",
@@ -440,6 +466,8 @@ def update_contact(
         contact.email = new_email
     if body.phone is not None:
         contact.phone = body.phone
+    if body.mobile_phone is not None:
+        contact.mobile_phone = body.mobile_phone or None
     if body.city is not None:
         contact.city = body.city
     if body.state is not None:

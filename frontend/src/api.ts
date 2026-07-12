@@ -1242,6 +1242,7 @@ export interface ContactEditBody {
   last_name?: string | null;
   email?: string | null;
   phone?: string | null;
+  mobile_phone?: string | null;
   city?: string | null;
   state?: string | null;
   company_name?: string | null;

@@ -508,7 +508,7 @@ export default function App() {
                       </div>
                     </section>
                   ))}
-                {tab === "leads" && isTeam && <LeadFinderView />}
+                {tab === "leads" && isTeam && <LeadFinderView isAdmin={isAdmin} />}
                 {tab === "outreach" && isTeam && <OutreachView isAdmin={isAdmin} />}
                 {tab === "email" && isTeam && <EmailOutreachView isAdmin={isAdmin} />}
                 {tab === "changes" && <PendingChangesPanel />}

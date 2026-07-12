@@ -68,3 +68,75 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* ---- data providers (admin BYO keys) ------------------------------------- */
+
+.lf-providers {
+  margin-top: var(--space-8);
+  padding-top: var(--space-5);
+  border-top: 1px solid var(--border);
+}
+
+.lf-providers-title {
+  margin: 0 0 var(--space-1);
+  font-size: var(--text-lg);
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.lf-provider-list {
+  list-style: none;
+  margin: var(--space-4) 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.lf-provider-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+  padding: var(--space-3) var(--space-4);
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+
+.lf-provider-info {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+  flex: 1 1 320px;
+}
+
+.lf-provider-name {
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.lf-provider-blurb {
+  font-size: var(--text-xs);
+  color: var(--ink-soft);
+}
+
+.lf-provider-actions {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.lf-provider-edit {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.lf-provider-edit input {
+  min-width: 260px;
+}

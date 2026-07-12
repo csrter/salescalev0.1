@@ -8,12 +8,16 @@
  */
 import { useEffect, useMemo, useState } from "react";
 import {
+  deleteLeadProviderKey,
   getHouseClient,
   getLeadFinderUsage,
   importLeads,
+  listLeadProviders,
   searchLeads,
+  setLeadProviderKey,
   type LeadFinderPlace,
   type LeadFinderUsage,
+  type LeadProviderStatus,
 } from "./api";
 import { DataTable, type Column } from "./components/DataTable";
 import { useToast } from "./components/Toast";
@@ -33,7 +37,172 @@ function fmtLimit(n: number | null | undefined): string {
   return n == null ? "∞" : String(n);
 }
 
-export function LeadFinderView() {
+// Lead-data providers an org can key up (the AI-provider keys stored through
+// the same endpoint are managed from their own surfaces, not here).
+const DATA_PROVIDERS: { id: string; label: string; blurb: string }[] = [
+  {
+    id: "google_places",
+    label: "Google Places",
+    blurb: "Business search — used for the Lead Finder search itself.",
+  },
+  {
+    id: "apollo",
+    label: "Apollo.io",
+    blurb:
+      "Owner name & direct/mobile line, work email, company description, estimated revenue and headcount. Your own Apollo API key; lookups spend your Apollo credits.",
+  },
+  {
+    id: "hunter",
+    label: "Hunter",
+    blurb: "Extra work-email candidates found for the business's domain.",
+  },
+  {
+    id: "zerobounce",
+    label: "ZeroBounce",
+    blurb: "Email verification verdicts (valid / risky / invalid).",
+  },
+];
+
+function ProviderKeysCard() {
+  const toast = useToast();
+  const [statuses, setStatuses] = useState<LeadProviderStatus[] | null>(null);
+  const [editing, setEditing] = useState<string | null>(null);
+  const [key, setKey] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const refresh = () =>
+    listLeadProviders()
+      .then(setStatuses)
+      .catch(() => setStatuses(null));
+
+  useEffect(() => {
+    void refresh();
+  }, []);
+
+  if (statuses === null) return null;
+  const statusFor = (id: string) => statuses.find((s) => s.provider === id);
+
+  const save = async () => {
+    if (!editing || key.trim().length < 8 || busy) return;
+    setBusy(true);
+    try {
+      await setLeadProviderKey(editing, key.trim());
+      toast("Provider key saved", "ok");
+      setEditing(null);
+      setKey("");
+      await refresh();
+    } catch (e) {
+      toast((e as Error).message, "error");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const clear = async (id: string) => {
+    setBusy(true);
+    try {
+      await deleteLeadProviderKey(id);
+      toast("Provider key removed", "ok");
+      await refresh();
+    } catch (e) {
+      toast((e as Error).message, "error");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <section className="lf-providers">
+      <h2 className="lf-providers-title">Data providers</h2>
+      <p className="lf-sub">
+        Enrichment beyond the business's own website — owner contact info,
+        revenue and headcount — comes from providers you connect with your
+        organization's own API keys. Keys are stored encrypted and never shown
+        again.
+      </p>
+      <ul className="lf-provider-list">
+        {DATA_PROVIDERS.map((p) => {
+          const s = statusFor(p.id);
+          return (
+            <li key={p.id} className="lf-provider-row">
+              <div className="lf-provider-info">
+                <span className="lf-provider-name">
+                  {p.label}{" "}
+                  {s?.configured ? (
+                    <Badge tone="ok">
+                      {s.source === "organization" ? "connected" : "platform key"}
+                    </Badge>
+                  ) : (
+                    <Badge tone="neutral">not connected</Badge>
+                  )}
+                </span>
+                <span className="lf-provider-blurb">{p.blurb}</span>
+              </div>
+              {editing === p.id ? (
+                <form
+                  className="lf-provider-edit"
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    void save();
+                  }}
+                >
+                  <input
+                    type="password"
+                    value={key}
+                    onChange={(e) => setKey(e.target.value)}
+                    placeholder={`${p.label} API key`}
+                    aria-label={`${p.label} API key`}
+                    autoFocus
+                  />
+                  <Button type="submit" size="sm" busy={busy} disabled={key.trim().length < 8}>
+                    Save
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    disabled={busy}
+                    onClick={() => {
+                      setEditing(null);
+                      setKey("");
+                    }}
+                  >
+                    Cancel
+                  </Button>
+                </form>
+              ) : (
+                <div className="lf-provider-actions">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => {
+                      setEditing(p.id);
+                      setKey("");
+                    }}
+                  >
+                    {s?.source === "organization" ? "Replace key" : "Add key"}
+                  </Button>
+                  {s?.source === "organization" && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      disabled={busy}
+                      onClick={() => void clear(p.id)}
+                    >
+                      Remove
+                    </Button>
+                  )}
+                </div>
+              )}
+            </li>
+          );
+        })}
+      </ul>
+    </section>
+  );
+}
+
+export function LeadFinderView({ isAdmin = false }: { isAdmin?: boolean }) {
   const toast = useToast();
   const [query, setQuery] = useState("");
   const [location, setLocation] = useState("");
@@ -285,6 +454,8 @@ export function LeadFinderView() {
           don't import them twice.
         </EmptyState>
       )}
+
+      {isAdmin && <ProviderKeysCard />}
     </section>
   );
 }

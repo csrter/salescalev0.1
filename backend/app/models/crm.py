@@ -43,6 +43,15 @@ class Company(Base):
     domain: Mapped[Optional[str]] = mapped_column(String(300))
     phone: Mapped[Optional[str]] = mapped_column(String(50))
     notes: Mapped[Optional[str]] = mapped_column(Text)
+    # Lead-Finder enrichment firmographics. `description` comes from the
+    # business's OWN site (meta/og description) or the org's connected data
+    # provider; `estimated_revenue` / `employee_count` come ONLY from a
+    # licensed provider (never guessed — guardrail 7). All best-effort and
+    # nullable; a human edit always wins (enrichment never overwrites a
+    # non-empty value).
+    description: Mapped[Optional[str]] = mapped_column(Text)
+    estimated_revenue: Mapped[Optional[str]] = mapped_column(String(60))
+    employee_count: Mapped[Optional[int]] = mapped_column(Integer)
     created_at: Mapped[dt.datetime] = created_at_column()
 
 
@@ -68,6 +77,11 @@ class Contact(Base):
     last_name: Mapped[Optional[str]] = mapped_column(String(150))
     email: Mapped[Optional[str]] = mapped_column(String(320), index=True)
     phone: Mapped[Optional[str]] = mapped_column(String(50))
+    # Direct/mobile line for the person (vs `phone`, which for imported
+    # businesses is usually the main office number). Filled by licensed
+    # provider enrichment only — never scraped (guardrail 6). Team-only in
+    # API payloads.
+    mobile_phone: Mapped[Optional[str]] = mapped_column(String(50))
     city: Mapped[Optional[str]] = mapped_column(String(120))
     state: Mapped[Optional[str]] = mapped_column(String(64))
     # Where the lead came from: meta_instant_form | google_lead_form |
@@ -128,6 +142,7 @@ RESERVED_CONTACT_FIELD_KEYS: frozenset[str] = frozenset(
         "name",
         "email",
         "phone",
+        "mobile_phone",
         "city",
         "state",
         "source",
@@ -144,6 +159,10 @@ RESERVED_CONTACT_FIELD_KEYS: frozenset[str] = frozenset(
         "created_at",
         "tags",
         "attribution",
+        # Company firmographics injected into contact payloads (enrichment).
+        "company_description",
+        "company_estimated_revenue",
+        "company_employee_count",
     }
 )
 

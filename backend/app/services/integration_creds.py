@@ -92,6 +92,9 @@ KEY_PROVIDERS: dict[str, str] = {
     "google_places": "google_places_api_key",
     "zerobounce": "zerobounce_api_key",
     "hunter": "",
+    # People-data / firmographics profile provider (owner contact + revenue).
+    # BYO only, like Hunter — people-data ToS prohibit a shared operator key.
+    "apollo": "",
     # AI providers (grounded insights + cold-email personalization). The active
     # one is chosen operator-side (settings.ai_provider); these let an org bring
     # its own key for whichever provider is active, resolved BYO-first with the
