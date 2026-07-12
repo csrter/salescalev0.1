@@ -94,7 +94,8 @@ def _account_out(db: Session, a: EmailAccount) -> dict:
         "imap_host": a.imap_host,
         "imap_port": a.imap_port,
         "imap_security": a.imap_security,
-        "username": a.username,
+        "smtp_username": a.smtp_username,
+        "imap_username": a.imap_username,
         "status": a.status,
         "error_detail": a.error_detail,
         "daily_send_cap": a.daily_send_cap,
@@ -222,8 +223,10 @@ def create_account(
         imap_host=body.imap_host,
         imap_port=body.imap_port,
         imap_security=body.imap_security,
-        username=body.username,
-        password_encrypted=encrypt_secret(body.password),
+        smtp_username=body.smtp_username,
+        smtp_password_encrypted=encrypt_secret(body.smtp_password),
+        imap_username=body.imap_username,
+        imap_password_encrypted=encrypt_secret(body.imap_password),
         daily_send_cap=body.daily_send_cap,
         signature=body.signature,
         status=ACCOUNT_ACTIVE,
@@ -249,9 +252,8 @@ def update_account(
 
     # Fields that change the connection re-probe before persisting.
     connection_fields = {
-        "smtp_host", "smtp_port", "smtp_security",
-        "imap_host", "imap_port", "imap_security",
-        "username", "password",
+        "smtp_host", "smtp_port", "smtp_security", "smtp_username", "smtp_password",
+        "imap_host", "imap_port", "imap_security", "imap_username", "imap_password",
     }
     reprobe = any(f in data for f in connection_fields)
 
@@ -262,21 +264,29 @@ def update_account(
             smtp_host=data.get("smtp_host", account.smtp_host),
             smtp_port=data.get("smtp_port", account.smtp_port),
             smtp_security=data.get("smtp_security", account.smtp_security),
+            smtp_username=data.get("smtp_username", account.smtp_username),
+            smtp_password_encrypted=(
+                encrypt_secret(data["smtp_password"])
+                if "smtp_password" in data
+                else account.smtp_password_encrypted
+            ),
             imap_host=data.get("imap_host", account.imap_host),
             imap_port=data.get("imap_port", account.imap_port),
             imap_security=data.get("imap_security", account.imap_security),
-            username=data.get("username", account.username),
-            password_encrypted=(
-                encrypt_secret(data["password"])
-                if "password" in data
-                else account.password_encrypted
+            imap_username=data.get("imap_username", account.imap_username),
+            imap_password_encrypted=(
+                encrypt_secret(data["imap_password"])
+                if "imap_password" in data
+                else account.imap_password_encrypted
             ),
         )
         _probe_or_400(probe_account)
 
     for field, value in data.items():
-        if field == "password":
-            account.password_encrypted = encrypt_secret(value)
+        if field == "smtp_password":
+            account.smtp_password_encrypted = encrypt_secret(value)
+        elif field == "imap_password":
+            account.imap_password_encrypted = encrypt_secret(value)
         else:
             setattr(account, field, value)
     if reprobe:

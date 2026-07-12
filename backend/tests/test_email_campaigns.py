@@ -113,8 +113,10 @@ def _mk_account(cc_org, api, **over):
         "imap_host": "imap.campaignco.com",
         "imap_port": 993,
         "imap_security": "ssl",
-        "username": "casey@campaignco.com",
-        "password": "mbx-secret",
+        "smtp_username": "casey@campaignco.com",
+        "smtp_password": "mbx-secret",
+        "imap_username": "casey@campaignco.com",
+        "imap_password": "mbx-secret",
         "daily_send_cap": 100,
     }
     base.update(over)
@@ -606,7 +608,8 @@ def test_effective_daily_cap_ramp():
         smtp_port=1,
         imap_host="h",
         imap_port=1,
-        username="u",
+        smtp_username="u",
+        imap_username="u",
         daily_send_cap=100,
         warmup_enabled=True,
         warmup_target_daily=100,

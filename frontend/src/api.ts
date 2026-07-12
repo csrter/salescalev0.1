@@ -1230,7 +1230,8 @@ export interface EmailAccount {
   imap_host: string;
   imap_port: number;
   imap_security: EmailSmtpSecurity;
-  username: string;
+  smtp_username: string;
+  imap_username: string;
   status: EmailAccountStatus;
   error_detail: string | null;
   daily_send_cap: number;
@@ -1253,9 +1254,12 @@ export interface EmailAccountBody {
   imap_host?: string;
   imap_port?: number;
   imap_security?: EmailSmtpSecurity;
-  username?: string;
-  /** Only sent to rotate the password (write-only, never returned). */
-  password?: string;
+  smtp_username?: string;
+  /** Only sent to rotate the SMTP password (write-only, never returned). */
+  smtp_password?: string;
+  imap_username?: string;
+  /** Only sent to rotate the IMAP password (write-only, never returned). */
+  imap_password?: string;
   daily_send_cap?: number;
   warmup_enabled?: boolean;
   warmup_target_daily?: number;
@@ -1427,8 +1431,9 @@ const EO = "/api/email-outreach";
 
 // --- accounts ---
 export const listEmailAccounts = () => api<EmailAccount[]>(`${EO}/accounts`);
-export const createEmailAccount = (body: EmailAccountBody & { password: string }) =>
-  api<EmailAccount>(`${EO}/accounts`, { method: "POST", body: JSON.stringify(body) });
+export const createEmailAccount = (
+  body: EmailAccountBody & { smtp_password: string; imap_password: string }
+) => api<EmailAccount>(`${EO}/accounts`, { method: "POST", body: JSON.stringify(body) });
 export const updateEmailAccount = (id: string, body: EmailAccountBody) =>
   api<EmailAccount>(`${EO}/accounts/${id}`, { method: "PATCH", body: JSON.stringify(body) });
 export const deleteEmailAccount = (id: string) =>

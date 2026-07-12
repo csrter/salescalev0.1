@@ -1110,8 +1110,11 @@ class AiSummaryIn(BaseModel):
 
 
 class EmailAccountIn(BaseModel):
-    """Connect a sending mailbox. The password is the SMTP/IMAP credential —
-    write-only, encrypted at rest, never serialized back."""
+    """Connect a sending mailbox. SMTP and IMAP each have their OWN username +
+    password — send and receive are frequently different providers (e.g.
+    Amazon SES SMTP credentials to send, a real IMAP mailbox to receive
+    replies). Both passwords are write-only, encrypted at rest, never
+    serialized back."""
 
     name: str = Field(min_length=1, max_length=200)
     from_name: str = Field(min_length=1, max_length=200)
@@ -1119,11 +1122,13 @@ class EmailAccountIn(BaseModel):
     smtp_host: str = Field(min_length=1, max_length=255)
     smtp_port: int = Field(ge=1, le=65535)
     smtp_security: str = Field(default="ssl")
+    smtp_username: str = Field(min_length=1, max_length=320)
+    smtp_password: str = Field(min_length=1, max_length=1000)
     imap_host: str = Field(min_length=1, max_length=255)
     imap_port: int = Field(ge=1, le=65535)
     imap_security: str = Field(default="ssl")
-    username: str = Field(min_length=1, max_length=320)
-    password: str = Field(min_length=1, max_length=1000)
+    imap_username: str = Field(min_length=1, max_length=320)
+    imap_password: str = Field(min_length=1, max_length=1000)
     daily_send_cap: int = Field(default=100, ge=1, le=10000)
     signature: Optional[str] = Field(default=None, max_length=5000)
 
@@ -1137,18 +1142,20 @@ class EmailAccountIn(BaseModel):
 
 class EmailAccountPatch(BaseModel):
     """Partial update. Any of host/port/username/password changing re-probes
-    the connection before persisting."""
+    that leg (SMTP and IMAP probe independently) before persisting."""
 
     name: Optional[str] = Field(default=None, min_length=1, max_length=200)
     from_name: Optional[str] = Field(default=None, min_length=1, max_length=200)
     smtp_host: Optional[str] = Field(default=None, min_length=1, max_length=255)
     smtp_port: Optional[int] = Field(default=None, ge=1, le=65535)
     smtp_security: Optional[str] = None
+    smtp_username: Optional[str] = Field(default=None, min_length=1, max_length=320)
+    smtp_password: Optional[str] = Field(default=None, min_length=1, max_length=1000)
     imap_host: Optional[str] = Field(default=None, min_length=1, max_length=255)
     imap_port: Optional[int] = Field(default=None, ge=1, le=65535)
     imap_security: Optional[str] = None
-    username: Optional[str] = Field(default=None, min_length=1, max_length=320)
-    password: Optional[str] = Field(default=None, min_length=1, max_length=1000)
+    imap_username: Optional[str] = Field(default=None, min_length=1, max_length=320)
+    imap_password: Optional[str] = Field(default=None, min_length=1, max_length=1000)
     daily_send_cap: Optional[int] = Field(default=None, ge=1, le=10000)
     signature: Optional[str] = Field(default=None, max_length=5000)
 

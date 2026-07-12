@@ -12,8 +12,11 @@ idioms, models/outreach.py):
   suppression/opt-out. EmailSuppression is the org-scoped opt-out ledger the
   gateway consults before every campaign/manual send, and every inbound
   unsubscribe / bounce writes a row here.
-- Mailbox credentials are per-account SMTP/IMAP passwords, Fernet-encrypted at
-  rest (password_encrypted), never returned to the client.
+- Mailbox credentials are per-account, per-leg: SMTP and IMAP each have their
+  own username + Fernet-encrypted password (smtp_password_encrypted /
+  imap_password_encrypted), since send and receive are frequently different
+  providers (e.g. Amazon SES SMTP credentials + a real IMAP mailbox). Neither
+  password is ever returned to the client.
 
 The campaign/sequence engine (enrollment scheduling, personalization, warmup)
 is Phase 2 and builds on these tables + the hook registry in
@@ -85,10 +88,13 @@ SUPPRESS_MANUAL = "manual"
 
 
 class EmailAccount(Base):
-    """One connected sending mailbox (per Organization). SMTP is the send
-    path, IMAP the reply/bounce sync path; both use the same username with the
-    Fernet-encrypted password. status flips to `error` when a probe or a live
-    send/sync hits an auth/transport failure, surfacing a reconnect banner."""
+    """One connected sending mailbox (per Organization). SMTP is the send path,
+    IMAP the reply/bounce sync path — each has its OWN username + Fernet-
+    encrypted password, since they're frequently different providers (e.g.
+    Amazon SES SMTP credentials for sending, a self-hosted or Workspace
+    mailbox login for IMAP receive), not just different hosts on the same
+    account. status flips to `error` when a probe or a live send/sync hits an
+    auth/transport failure, surfacing a reconnect banner."""
 
     __tablename__ = "email_accounts"
     __table_args__ = (
@@ -112,9 +118,12 @@ class EmailAccount(Base):
     imap_security: Mapped[str] = mapped_column(
         String(20), default=SEC_SSL, nullable=False
     )
-    username: Mapped[str] = mapped_column(String(320), nullable=False)
-    # SMTP/IMAP password (Fernet). Never serialized back to the client.
-    password_encrypted: Mapped[Optional[str]] = mapped_column(Text)
+    smtp_username: Mapped[str] = mapped_column(String(320), nullable=False)
+    # SMTP password (Fernet). Never serialized back to the client.
+    smtp_password_encrypted: Mapped[Optional[str]] = mapped_column(Text)
+    imap_username: Mapped[str] = mapped_column(String(320), nullable=False)
+    # IMAP password (Fernet). Never serialized back to the client.
+    imap_password_encrypted: Mapped[Optional[str]] = mapped_column(Text)
     status: Mapped[str] = mapped_column(
         String(20), default=ACCOUNT_ACTIVE, nullable=False
     )

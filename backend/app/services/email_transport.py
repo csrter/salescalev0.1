@@ -61,13 +61,22 @@ def _run_with_deadline(host: str, fn, *args, **kwargs):
         executor.shutdown(wait=False)
 
 
-def _account_password(account) -> str:
-    if not account.password_encrypted:
-        raise EmailTransportError("No stored password for this mailbox")
+def _smtp_password(account) -> str:
+    if not account.smtp_password_encrypted:
+        raise EmailTransportError("No stored SMTP password for this mailbox")
     try:
-        return decrypt_secret(account.password_encrypted)
+        return decrypt_secret(account.smtp_password_encrypted)
     except Exception as e:  # bad/rotated key — treat as a transport failure
-        raise EmailTransportError(f"Could not decrypt mailbox password: {e}") from e
+        raise EmailTransportError(f"Could not decrypt SMTP password: {e}") from e
+
+
+def _imap_password(account) -> str:
+    if not account.imap_password_encrypted:
+        raise EmailTransportError("No stored IMAP password for this mailbox")
+    try:
+        return decrypt_secret(account.imap_password_encrypted)
+    except Exception as e:  # bad/rotated key — treat as a transport failure
+        raise EmailTransportError(f"Could not decrypt IMAP password: {e}") from e
 
 
 def _smtp_connect(account) -> smtplib.SMTP:
@@ -88,7 +97,7 @@ def smtp_login(account) -> None:
     def _do():
         server = _smtp_connect(account)
         try:
-            server.login(account.username, _account_password(account))
+            server.login(account.smtp_username, _smtp_password(account))
         finally:
             try:
                 server.quit()
@@ -109,7 +118,7 @@ def smtp_send(account, msg: Message) -> str:
     def _do():
         server = _smtp_connect(account)
         try:
-            server.login(account.username, _account_password(account))
+            server.login(account.smtp_username, _smtp_password(account))
             refused = server.send_message(msg, account.from_email, recipients)
             if refused:
                 raise EmailTransportError(f"Recipients refused: {refused}")
@@ -140,7 +149,7 @@ def imap_connect(account) -> imaplib.IMAP4:
             conn = imaplib.IMAP4(account.imap_host, account.imap_port, timeout=_TIMEOUT)
             if account.imap_security == SEC_STARTTLS:
                 conn.starttls(ssl.create_default_context())
-        conn.login(account.username, _account_password(account))
+        conn.login(account.imap_username, _imap_password(account))
         return conn
 
     try:

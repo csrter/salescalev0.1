@@ -1980,8 +1980,17 @@ function AccountDialog({
   const [name, setName] = useState(existing?.name ?? "");
   const [fromName, setFromName] = useState(existing?.from_name ?? "");
   const [fromEmail, setFromEmail] = useState(existing?.from_email ?? "");
-  const [username, setUsername] = useState(existing?.username ?? "");
-  const [password, setPassword] = useState("");
+  const [smtpUsername, setSmtpUsername] = useState(existing?.smtp_username ?? "");
+  const [smtpPassword, setSmtpPassword] = useState("");
+  // Most orgs send and receive through the same mailbox login. Split
+  // credentials matter when sending goes through a separate provider (e.g.
+  // Amazon SES SMTP credentials) while replies still land in a real IMAP
+  // inbox — uncheck to enter a distinct IMAP login for that case.
+  const [sameImapLogin, setSameImapLogin] = useState(
+    !existing || existing.imap_username === existing.smtp_username,
+  );
+  const [imapUsername, setImapUsername] = useState(existing?.imap_username ?? "");
+  const [imapPassword, setImapPassword] = useState("");
   const [smtpHost, setSmtpHost] = useState(existing?.smtp_host ?? "");
   const [smtpPort, setSmtpPort] = useState(existing ? String(existing.smtp_port) : "465");
   const [smtpSecurity, setSmtpSecurity] = useState<EmailSmtpSecurity>(
@@ -2001,33 +2010,45 @@ function AccountDialog({
   const isEdit = Boolean(existing);
 
   const save = async () => {
-    if (!name.trim() || !fromEmail.trim() || !smtpHost.trim() || !imapHost.trim() || !username.trim()) {
-      toast("Name, from email, hosts and username are required", "error");
+    const effectiveImapUsername = sameImapLogin ? smtpUsername : imapUsername;
+    if (
+      !name.trim() || !fromEmail.trim() || !smtpHost.trim() || !imapHost.trim()
+      || !smtpUsername.trim() || !effectiveImapUsername.trim()
+    ) {
+      toast("Name, from email, hosts and usernames are required", "error");
       return;
     }
-    if (!isEdit && !password) {
-      toast("Password is required to connect", "error");
+    if (!isEdit && (!smtpPassword || (!sameImapLogin && !imapPassword))) {
+      toast("A password is required for both SMTP and IMAP to connect", "error");
       return;
     }
     const base: EmailAccountBody = {
       name: name.trim(),
       from_name: fromName.trim(),
       from_email: fromEmail.trim(),
-      username: username.trim(),
+      smtp_username: smtpUsername.trim(),
       smtp_host: smtpHost.trim(),
       smtp_port: Number(smtpPort),
       smtp_security: smtpSecurity,
+      imap_username: effectiveImapUsername.trim(),
       imap_host: imapHost.trim(),
       imap_port: Number(imapPort),
       imap_security: imapSecurity,
       daily_send_cap: Number(dailyCap),
       signature: signature.trim() || null,
     };
-    if (password) base.password = password;
+    if (smtpPassword) base.smtp_password = smtpPassword;
+    const effectiveImapPassword = sameImapLogin ? smtpPassword : imapPassword;
+    if (effectiveImapPassword) base.imap_password = effectiveImapPassword;
     setBusy(true);
     try {
       if (existing) await updateEmailAccount(existing.id, base);
-      else await createEmailAccount({ ...base, password } as EmailAccountBody & { password: string });
+      else
+        await createEmailAccount({
+          ...base,
+          smtp_password: smtpPassword,
+          imap_password: effectiveImapPassword,
+        } as EmailAccountBody & { smtp_password: string; imap_password: string });
       toast(isEdit ? "Mailbox updated" : "Mailbox connected", "ok");
       onSaved();
     } catch (e) {
@@ -2085,7 +2106,7 @@ function AccountDialog({
               <input
                 value={smtpHost}
                 onChange={(e) => setSmtpHost(e.target.value)}
-                placeholder="mail.atlasreach.io"
+                placeholder="mail.atlasreach.io, or email-smtp.us-east-1.amazonaws.com for SES"
               />
             </Field>
             <Field label="Port">
@@ -2104,6 +2125,26 @@ function AccountDialog({
               onChange={setSmtpSecurity}
               options={SECURITY_OPTS}
             />
+          </div>
+          <div className="eml-form-row">
+            <Field label="Username">
+              <input
+                value={smtpUsername}
+                onChange={(e) => setSmtpUsername(e.target.value)}
+                placeholder="carter@mail.atlasreach.io, or an SES SMTP username"
+              />
+            </Field>
+            <Field
+              label="Password"
+              description={isEdit ? "Leave blank to keep the current password." : undefined}
+            >
+              <input
+                type="password"
+                value={smtpPassword}
+                onChange={(e) => setSmtpPassword(e.target.value)}
+                autoComplete="new-password"
+              />
+            </Field>
           </div>
         </div>
 
@@ -2134,27 +2175,36 @@ function AccountDialog({
               options={SECURITY_OPTS}
             />
           </div>
-        </div>
-
-        <div className="eml-form-row">
-          <Field label="Username">
+          <label className="eml-check">
             <input
-              value={username}
-              onChange={(e) => setUsername(e.target.value)}
-              placeholder="carter@mail.atlasreach.io"
+              type="checkbox"
+              checked={sameImapLogin}
+              onChange={(e) => setSameImapLogin(e.target.checked)}
             />
-          </Field>
-          <Field
-            label="Password"
-            description={isEdit ? "Leave blank to keep the current password." : undefined}
-          >
-            <input
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              autoComplete="new-password"
-            />
-          </Field>
+            Same login as SMTP
+          </label>
+          {!sameImapLogin && (
+            <div className="eml-form-row">
+              <Field label="Username">
+                <input
+                  value={imapUsername}
+                  onChange={(e) => setImapUsername(e.target.value)}
+                  placeholder="carter@mail.atlasreach.io"
+                />
+              </Field>
+              <Field
+                label="Password"
+                description={isEdit ? "Leave blank to keep the current password." : undefined}
+              >
+                <input
+                  type="password"
+                  value={imapPassword}
+                  onChange={(e) => setImapPassword(e.target.value)}
+                  autoComplete="new-password"
+                />
+              </Field>
+            </div>
+          )}
         </div>
 
         <Field label="Daily send cap" optional>

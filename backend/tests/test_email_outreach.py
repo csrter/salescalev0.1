@@ -107,8 +107,10 @@ def _account_payload(**over):
         "imap_host": "imap.coldemailco.com",
         "imap_port": 993,
         "imap_security": "ssl",
-        "username": "sam@coldemailco.com",
-        "password": "mailbox-secret",
+        "smtp_username": "sam@coldemailco.com",
+        "smtp_password": "mailbox-secret",
+        "imap_username": "sam@coldemailco.com",
+        "imap_password": "mailbox-secret",
         "daily_send_cap": 100,
         "signature": "Sam Sales\nCold Email Co",
     }
@@ -155,22 +157,28 @@ def test_create_account_encrypts_password_and_never_serializes_it(
     ce_org, api, probe_ok
 ):
     acct = _create_account(ce_org, api, from_email="store@coldemailco.com")
-    # The serialization must not leak the password / encrypted blob.
-    assert "password" not in acct
-    assert "password_encrypted" not in acct
+    # The serialization must not leak either password / encrypted blob.
+    assert "smtp_password" not in acct and "smtp_password_encrypted" not in acct
+    assert "imap_password" not in acct and "imap_password_encrypted" not in acct
     assert acct["status"] == "active"
     assert acct["sends_today"] == 0
     assert acct["effective_daily_cap"] == acct["daily_send_cap"]
 
     row = _account_row(acct["id"])
-    assert row.password_encrypted and row.password_encrypted != "mailbox-secret"
+    assert row.smtp_password_encrypted and row.smtp_password_encrypted != "mailbox-secret"
+    assert row.imap_password_encrypted and row.imap_password_encrypted != "mailbox-secret"
     from app.security import decrypt_secret
 
-    assert decrypt_secret(row.password_encrypted) == "mailbox-secret"
+    assert decrypt_secret(row.smtp_password_encrypted) == "mailbox-secret"
+    assert decrypt_secret(row.imap_password_encrypted) == "mailbox-secret"
 
     # List response also omits secrets.
     listed = api.get("/api/email-outreach/accounts", headers=ce_org["headers"]).json()
-    assert all("password" not in a and "password_encrypted" not in a for a in listed)
+    assert all(
+        "smtp_password" not in a and "smtp_password_encrypted" not in a
+        and "imap_password" not in a and "imap_password_encrypted" not in a
+        for a in listed
+    )
 
 
 # --- gateway guards ---------------------------------------------------------

@@ -402,6 +402,23 @@ live activation + the entitlement flip, the Outreach module build
       in the frontend's saveSteps/previewEmailStep call sites; the
       Audience tab's enrollment list didn't re-fetch after a fresh enroll
       (its effect only keyed off campaign.id, not the enrolled count).
+      Follow-up fix (same session, before any deploy): EmailAccount
+      originally had ONE shared username/password for both SMTP and IMAP —
+      broken for the real intended setup (Amazon SES SMTP credentials to
+      send, a self-hosted mail.atlasreach.io IMAP mailbox to receive
+      replies, which are necessarily different logins). Split into
+      smtp_username/smtp_password_encrypted +
+      imap_username/imap_password_encrypted throughout (model, the
+      unreleased migration edited in place, email_transport.py,
+      schemas, the account router, tests). Frontend connect dialog now has
+      independent SMTP/IMAP credential fields behind a "Same login as
+      SMTP" checkbox (checked by default — most orgs use one mailbox for
+      both legs) plus an SES host hint. Re-verified live: the SMTP leg
+      actually reached the real email-smtp.us-east-1.amazonaws.com:587 and
+      got a proper 535 auth rejection on fake IAM creds, proving the SES
+      path end-to-end; the IMAP leg to a not-yet-provisioned host timed
+      out safely at 25s instead of hanging, and the backend stayed
+      responsive to other requests throughout. Tests still 334 passing.
       NOT deployed yet — build + verification done this session; the
       real VPS mail server (deploy/MAILSERVER.md) still needs setting up
       before a live campaign can actually send.
