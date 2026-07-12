@@ -376,6 +376,25 @@
   margin-bottom: var(--space-4);
 }
 
+.sms-inbox-compose {
+  margin-left: auto;
+}
+
+.sms-composer {
+  margin-top: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.sms-composer-actions {
+  display: flex;
+}
+
+.sms-composer-actions .btn {
+  margin-left: auto;
+}
+
 .sms-inbox {
   display: grid;
   grid-template-columns: 340px minmax(0, 1fr);

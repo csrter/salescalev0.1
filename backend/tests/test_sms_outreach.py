@@ -971,3 +971,73 @@ def test_compliance_footer_defaults_on_and_can_be_disabled_per_campaign(
     # STOP handling is unaffected by the toggle either way.
     e = _get_enrollment(camp_off["id"], contact_off)
     assert e.status in ("active", "completed")
+
+
+# --- one-off manual send (individual messenger) ------------------------------
+
+
+def test_compose_sends_one_off_with_no_compliance_footer(
+    sc_org, api, twilio_creds_ok, captured_sends
+):
+    acct = _mk_account(sc_org, api, from_number="+14805550401")
+    contact = _mk_contact(sc_org, api, mobile_phone="4805559201", first="Riley")
+    r = api.post(
+        "/api/sms/compose",
+        json={"account_id": acct["id"], "contact_id": contact, "body": "Hey, following up!"},
+        headers=sc_org["headers"],
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["status"] == "sent"
+    assert len(captured_sends) == 1
+    assert captured_sends[-1]["body"] == "Hey, following up!"
+    assert "stop" not in captured_sends[-1]["body"].lower()
+
+    # Shows up in the flat message log, kind=manual, with contact + sent_at
+    # attached — the Messages tab groups conversations by contact.id, so a
+    # missing contact here would silently merge every lead into one thread.
+    msgs = api.get(
+        f"/api/sms/messages?contact_id={contact}", headers=sc_org["headers"]
+    ).json()
+    assert msgs[0]["kind"] == "manual"
+    assert msgs[0]["contact"]["id"] == contact
+    assert msgs[0]["contact"]["first_name"] == "Riley"
+    assert msgs[0]["sent_at"] is not None
+    assert msgs[0]["received_at"] is None
+
+
+def test_compose_blocked_without_consent(sc_org, api, twilio_creds_ok, captured_sends):
+    acct = _mk_account(sc_org, api, from_number="+14805550402")
+    contact = _mk_contact(
+        sc_org, api, mobile_phone="4805559202", first="NoConsent", opt_in=False
+    )
+    r = api.post(
+        "/api/sms/compose",
+        json={"account_id": acct["id"], "contact_id": contact, "body": "Hi there"},
+        headers=sc_org["headers"],
+    )
+    assert r.status_code == 409
+    assert captured_sends == []
+
+
+def test_compose_rejects_over_segment_cap(sc_org, api, twilio_creds_ok, captured_sends):
+    acct = _mk_account(sc_org, api, from_number="+14805550403")
+    contact = _mk_contact(sc_org, api, mobile_phone="4805559203", first="Long")
+    r = api.post(
+        "/api/sms/compose",
+        json={"account_id": acct["id"], "contact_id": contact, "body": "A" * 500},
+        headers=sc_org["headers"],
+    )
+    assert r.status_code == 422
+    assert captured_sends == []
+
+
+def test_compose_cross_org_contact_404s(sc_org, api, twilio_creds_ok, team_headers):
+    # team_headers belongs to a different org (see test_campaign_tenant_isolation).
+    acct = _mk_account(sc_org, api, from_number="+14805550404")
+    contact = _mk_contact(sc_org, api, mobile_phone="4805559204")
+    r = api.post(
+        "/api/sms/compose",
+        json={"account_id": acct["id"], "contact_id": contact, "body": "Hi"},
+        headers=team_headers,
+    )
+    assert r.status_code == 404

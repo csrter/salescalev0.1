@@ -1819,6 +1819,7 @@ export interface SmsEnrollReceipt {
 
 export interface SmsMessage {
   id: string;
+  account_id: string;
   direction: EmailMessageDirection;
   status: string;
   kind: string;
@@ -1941,6 +1942,15 @@ export const previewSmsStep = (id: string, contactId: string, position: number) 
 // --- messages (conversation list — SMS has no threads) ---
 export const listSmsMessages = (contactId?: string) =>
   api<SmsMessage[]>(`${SO}/messages${q({ contact_id: contactId })}`);
+
+export const composeSms = (body: {
+  account_id: string;
+  contact_id: string;
+  body: string;
+}) => api<{ status: string; message_id: string | null }>(`${SO}/compose`, {
+  method: "POST",
+  body: JSON.stringify(body),
+});
 
 // --- suppression ---
 export const listSmsSuppression = () => api<SmsSuppression[]>(`${SO}/suppression`);

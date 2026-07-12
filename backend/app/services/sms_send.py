@@ -351,7 +351,10 @@ def send(
         body,
         org_name,
         first_step=(step is None or step.position == 1),
-        include_footer=(campaign is None or campaign.include_compliance_footer),
+        # Manual sends (a live 1:1 conversation) never carry the footer —
+        # it's a CTIA "first message of a program" convention, not something
+        # a human reply/one-off text should repeat every time.
+        include_footer=(campaign is not None and campaign.include_compliance_footer),
     )
 
     row = SmsMessage(

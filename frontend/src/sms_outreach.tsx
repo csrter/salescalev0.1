@@ -18,6 +18,7 @@ import {
   activateSmsCampaign,
   addSmsSuppression,
   archiveSmsCampaign,
+  composeSms,
   createSmsAccount,
   createSmsCampaign,
   deleteSmsAccount,
@@ -77,7 +78,7 @@ import {
   Switch,
   Tabs,
 } from "./components/ui";
-import { Plus } from "./components/icons";
+import { Plus, Send } from "./components/icons";
 import { useToast } from "./components/Toast";
 import "./styles/views/sms_outreach.css";
 
@@ -1667,8 +1668,12 @@ function EnrollDialog({
 // ==========================================================================
 
 function MessagesPanel({ accounts }: { accounts: SmsAccount[] }) {
+  const toast = useToast();
   const [messages, setMessages] = useState<SmsMessage[] | null>(null);
   const [selectedContactId, setSelectedContactId] = useState<string | null>(null);
+  const [draft, setDraft] = useState("");
+  const [sending, setSending] = useState(false);
+  const [composing, setComposing] = useState(false);
 
   const refresh = useCallback(() => {
     listSmsMessages().then(setMessages).catch(() => {});
@@ -1694,6 +1699,31 @@ function MessagesPanel({ accounts }: { accounts: SmsAccount[] }) {
 
   const selected = conversations.find((c) => c.id === selectedContactId) ?? conversations[0] ?? null;
 
+  // Reply from the same number the conversation has been using so far —
+  // falling back to the org's only/first connected number for a thread
+  // that's somehow empty of outbound messages yet.
+  const replyAccountId =
+    selected?.messages.find((m) => m.account_id)?.account_id ?? accounts[0]?.id ?? "";
+
+  const send = async () => {
+    if (!selected || !draft.trim() || !replyAccountId) return;
+    setSending(true);
+    try {
+      await composeSms({
+        account_id: replyAccountId,
+        contact_id: selected.id,
+        body: draft.trim(),
+      });
+      setDraft("");
+      refresh();
+      toast("Sent", "ok");
+    } catch (e) {
+      toast(e instanceof Error ? e.message : "Send failed", "error");
+    } finally {
+      setSending(false);
+    }
+  };
+
   return (
     <div>
       <div className="sms-inbox-bar">
@@ -1701,6 +1731,15 @@ function MessagesPanel({ accounts }: { accounts: SmsAccount[] }) {
           Sent and received texts, grouped by contact — SMS has no threads or
           subjects, just a running log per person.
         </p>
+        <Button
+          variant="primary"
+          className="sms-inbox-compose"
+          disabled={accounts.length === 0}
+          onClick={() => setComposing(true)}
+        >
+          <Plus size={16} />
+          New message
+        </Button>
       </div>
 
       <div className="sms-inbox">
@@ -1765,11 +1804,32 @@ function MessagesPanel({ accounts }: { accounts: SmsAccount[] }) {
                 </div>
               ))}
             </div>
+            <div className="sms-composer">
+              <Field label="Message">
+                <textarea
+                  rows={3}
+                  value={draft}
+                  onChange={(e) => setDraft(e.target.value)}
+                  placeholder="Type a message…"
+                />
+              </Field>
+              <div className="sms-composer-actions">
+                <Button
+                  variant="primary"
+                  busy={sending}
+                  disabled={!draft.trim() || !replyAccountId}
+                  onClick={send}
+                >
+                  <Send size={16} />
+                  Send
+                </Button>
+              </div>
+            </div>
           </GlassCard>
         ) : (
           <GlassCard className="sms-thread-pane">
             <EmptyState title="Select a conversation">
-              Pick a contact to read the message history.
+              Pick a contact to read the message history, or start a new one.
             </EmptyState>
           </GlassCard>
         )}
@@ -1782,7 +1842,104 @@ function MessagesPanel({ accounts }: { accounts: SmsAccount[] }) {
           </Alert>
         </div>
       )}
+
+      {composing && (
+        <ComposeSmsDialog
+          accounts={accounts}
+          onClose={() => setComposing(false)}
+          onSent={(contactId) => {
+            setComposing(false);
+            setSelectedContactId(contactId);
+            refresh();
+          }}
+        />
+      )}
     </div>
+  );
+}
+
+function ComposeSmsDialog({
+  accounts,
+  onClose,
+  onSent,
+}: {
+  accounts: SmsAccount[];
+  onClose: () => void;
+  onSent: (contactId: string) => void;
+}) {
+  const toast = useToast();
+  const contacts = useHouseContacts(true);
+  const [accountId, setAccountId] = useState(accounts[0]?.id ?? "");
+  const [contactId, setContactId] = useState("");
+  const [body, setBody] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const send = async () => {
+    if (!accountId || !contactId || !body.trim()) {
+      toast("Number, contact and message are required", "error");
+      return;
+    }
+    setBusy(true);
+    try {
+      await composeSms({ account_id: accountId, contact_id: contactId, body: body.trim() });
+      toast("Sent", "ok");
+      onSent(contactId);
+    } catch (e) {
+      toast(e instanceof Error ? e.message : "Send failed", "error");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Dialog
+      open
+      onClose={onClose}
+      closeOnScrim={false}
+      title="New message"
+      footer={
+        <>
+          <Button variant="ghost" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button variant="primary" busy={busy} onClick={send}>
+            <Send size={16} />
+            Send
+          </Button>
+        </>
+      }
+    >
+      <div className="sms-form">
+        <Field label="Send from number">
+          <select value={accountId} onChange={(e) => setAccountId(e.target.value)}>
+            {accounts.map((a) => (
+              <option key={a.id} value={a.id}>
+                {a.name} — {a.from_number || a.messaging_service_sid}
+              </option>
+            ))}
+          </select>
+        </Field>
+        <Field label="To (house-CRM contact)">
+          <select value={contactId} onChange={(e) => setContactId(e.target.value)}>
+            <option value="">Choose a contact…</option>
+            {(contacts ?? []).map((c) => (
+              <option key={c.id} value={c.id} disabled={!c.phone}>
+                {contactLabel(c)}
+                {c.phone ? ` · ${c.phone}` : " · no number"}
+              </option>
+            ))}
+          </select>
+        </Field>
+        <Field label="Message">
+          <textarea rows={5} value={body} onChange={(e) => setBody(e.target.value)} />
+        </Field>
+        <p className="sms-hint">
+          Sends immediately, as a one-off text — no compliance footer, no
+          quiet-hours window (same as replying in a live conversation). The
+          consent and suppression gates still apply.
+        </p>
+      </div>
+    </Dialog>
   );
 }
 

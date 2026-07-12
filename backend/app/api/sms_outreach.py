@@ -33,6 +33,7 @@ from ..models.sms_outreach import (
     SMS_CAMPAIGN_PAUSED,
     SMS_DIR_OUT,
     SMS_ENROLL_ACTIVE,
+    SMS_KIND_MANUAL,
     SMS_MSG_DELIVERED,
     SMS_MSG_FAILED,
     SMS_MSG_SENT,
@@ -47,6 +48,7 @@ from ..models.sms_outreach import (
 from ..schemas import (
     SmsCampaignIn,
     SmsCampaignPatch,
+    SmsComposeIn,
     SmsEnrollIn,
     SmsPreviewIn,
     SmsStepsIn,
@@ -767,7 +769,9 @@ def preview_campaign(
 # keyed message list) --------------------------------------------------------
 
 
-def _message_out(m: SmsMessage) -> dict:
+def _message_out(m: SmsMessage, contact: Optional[Contact] = None) -> dict:
+    sent_at = m.created_at.isoformat() if m.direction == SMS_DIR_OUT else None
+    received_at = m.created_at.isoformat() if m.direction != SMS_DIR_OUT else None
     return {
         "id": m.id,
         "account_id": m.account_id,
@@ -775,6 +779,7 @@ def _message_out(m: SmsMessage) -> dict:
         "step_id": m.step_id,
         "enrollment_id": m.enrollment_id,
         "contact_id": m.contact_id,
+        "contact": _contact_stub(contact),
         "direction": m.direction,
         "kind": m.kind,
         "to_number": m.to_number,
@@ -783,8 +788,57 @@ def _message_out(m: SmsMessage) -> dict:
         "status": m.status,
         "error_code": m.error_code,
         "error_detail": m.error_detail,
+        "sent_at": sent_at,
+        "received_at": received_at,
         "created_at": m.created_at.isoformat(),
     }
+
+
+def _raise_for_sms_code(code: str) -> None:
+    if code == sms_send.SENT:
+        return
+    if code == sms_send.SUPPRESSED:
+        raise HTTPException(409, "This number is on the suppression list")
+    if code == sms_send.BLOCKED:
+        raise HTTPException(409, "No recorded SMS consent for this contact")
+    if code == sms_send.CAP_REACHED:
+        raise HTTPException(429, "Daily send cap reached for this number")
+    # FAILED
+    raise HTTPException(502, "Send failed — check the number's connection")
+
+
+@router.post("/compose")
+def compose(
+    body: SmsComposeIn,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_team),
+    scope: TenantScope = Depends(get_scope),
+):
+    """One-off manual text to a single contact — a live 1:1 conversation, not
+    a campaign. Goes through the same consent/suppression/cap guards as every
+    other send; skips only the campaign-specific send window (mirrors how a
+    human reply behaves in the email module) and never carries the CTIA
+    sender-id/opt-out footer (see sms_send.send)."""
+    account = _scoped_get(db, scope, SmsAccount, body.account_id)
+    contact = scope.get_or_404(db, Contact, body.contact_id)
+    if sms_campaigns.segment_count(body.body) > sms_campaigns.MAX_RENDERED_SEGMENTS:
+        raise HTTPException(
+            422,
+            f"Message is too long ({sms_campaigns.segment_count(body.body)} "
+            f"segments, max {sms_campaigns.MAX_RENDERED_SEGMENTS}).",
+        )
+    org = _org(db, user)
+    code, msg = sms_send.send(
+        db,
+        account,
+        contact,
+        body.body,
+        kind=SMS_KIND_MANUAL,
+        org_name=org.name if org else "",
+    )
+    db.commit()
+    _raise_for_sms_code(code)
+    return {"status": code, "message_id": msg.id if msg else None}
 
 
 @router.get("/messages")
@@ -805,7 +859,16 @@ def list_messages(
     if contact_id:
         stmt = stmt.where(SmsMessage.contact_id == contact_id)
     stmt = stmt.order_by(SmsMessage.created_at.desc()).limit(min(limit, 1000))
-    return [_message_out(m) for m in db.execute(stmt).scalars().all()]
+    rows = db.execute(stmt).scalars().all()
+    contacts = {
+        c.id: c
+        for c in db.execute(
+            select(Contact).where(
+                Contact.id.in_([r.contact_id for r in rows if r.contact_id] or [""])
+            )
+        ).scalars()
+    }
+    return [_message_out(m, contacts.get(m.contact_id)) for m in rows]
 
 
 @router.get("/conversations")
@@ -840,7 +903,7 @@ def list_conversations(
         {
             "phone_number": number,
             "contact": _contact_stub(contacts.get(m.contact_id)),
-            "last_message": _message_out(m),
+            "last_message": _message_out(m, contacts.get(m.contact_id)),
         }
         for number, m in by_number.items()
     ]

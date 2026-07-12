@@ -936,6 +936,45 @@ live activation + the entitlement flip, the Outreach module build
       full "OrgName: ... Reply STOP to opt out" text, toggled-off preview on
       a second campaign showed the bare personalized body, PATCH round-trip
       confirmed via network inspection. NOT deployed yet.
+- [x] SMS individual messenger (same-day follow-up): one-off, single-contact
+      texting — a live 1:1 conversation, not a campaign. New
+      POST /api/sms/compose {account_id, contact_id, body} (require_team)
+      routes through the SAME sms_send.send() gateway as campaigns (full
+      consent/suppression/cap guards apply), kind=SMS_KIND_MANUAL (the
+      constant existed, unused, since the SMS framework's first cut).
+      Manual sends never carry the CTIA compliance footer regardless of the
+      per-campaign toggle above — repeating "OrgName: ... Reply STOP" on
+      every text in an ongoing conversation isn't the "first message of a
+      program" the convention is for (send()'s include_footer is now
+      `campaign is not None and campaign.include_compliance_footer`, was
+      previously true-by-default for campaign=None, an untested/unused path
+      before this feature); STOP handling is unaffected either way. Also
+      skips the campaign send-window (mirrors how the email module's manual
+      replies already behave) but keeps the per-account daily cap and the
+      same MAX_RENDERED_SEGMENTS=3 guard as campaign sends (422 over cap).
+      Frontend: SMS → Messages gained "New message" (pick number + house-CRM
+      contact + body) and a reply composer at the bottom of the open
+      conversation (infers the send-from number from that conversation's
+      own message history). Tests: test_compose_sends_one_off_with_no_
+      compliance_footer, _blocked_without_consent, _rejects_over_segment_cap,
+      _cross_org_contact_404s. Tests 433 → 437.
+      REAL BUG CAUGHT DURING LIVE VERIFICATION (not new, pre-existed the
+      whole Messages tab): api/sms_outreach.py's _message_out() never
+      serialized `contact` or `sent_at`/`received_at` even though the
+      frontend's SmsMessage type and MessagesPanel always expected them —
+      every conversation silently collapsed into one "Unknown contact"
+      bucket (the grouping key was `m.contact?.id ?? "unknown"`, always
+      "unknown"). Fixed by having _message_out accept an optional contact
+      (reusing the existing _contact_stub) and deriving sent_at/received_at
+      from created_at by direction; list_messages/list_conversations now
+      batch-resolve contacts. Regression-tested (asserts contact.id/
+      first_name and sent_at on the compose response). Verified live on
+      alt2: sent two manual messages to the same contact (flipped a fake
+      Twilio account to "active" in dev-alt2.db to get past the account
+      gate — actual delivery correctly failed with Twilio auth error 20003,
+      proving the guard order, not a real send), both appeared in the right
+      order under the contact's real name/number, not "Unknown contact".
+      NOT deployed yet.
 - [ ] Stripe live activation + entitlement flip (after 12–14, so real
       limits land everywhere in one pass)
 - [ ] Outreach module build (dev-mode) — go-live gated on Meta App

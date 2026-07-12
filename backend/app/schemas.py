@@ -1424,3 +1424,9 @@ class SmsEnrollIn(BaseModel):
 class SmsPreviewIn(BaseModel):
     contact_id: str
     position: int = Field(ge=1)
+
+
+class SmsComposeIn(BaseModel):
+    account_id: str
+    contact_id: str
+    body: str = Field(min_length=1, max_length=1600)
