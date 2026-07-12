@@ -42,8 +42,22 @@ from .email_outreach import (
     EmailSuppression,
     EmailThread,
 )
+from .sms_outreach import (
+    SmsAccount,
+    SmsCampaign,
+    SmsEnrollment,
+    SmsMessage,
+    SmsStep,
+    SmsSuppression,
+)
 
 __all__ = [
+    "SmsAccount",
+    "SmsCampaign",
+    "SmsEnrollment",
+    "SmsMessage",
+    "SmsStep",
+    "SmsSuppression",
     "EmailAccount",
     "EmailCampaign",
     "EmailEnrollment",

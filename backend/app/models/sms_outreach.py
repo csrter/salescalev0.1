@@ -1,0 +1,265 @@
+"""SMS outreach module — framework (accounts, campaigns, sequences, the
+message ledger, suppression) for texting numbers that OPTED IN on the
+Organization's own website and arrive via CSV import.
+
+Design constraints (mirror the cold-email module, models/email_outreach.py):
+- Every send routes through ONE gateway (services/sms_send.py). SmsMessage is
+  the append-only audit log: kind + campaign/step/enrollment linkage, the
+  rendered body, the provider SID/status, timestamps. Rows are never deleted.
+- SMS is MORE compliance-critical than email (TCPA: statutory damages per
+  text). No send path may bypass (a) the consent gate — contacts must carry
+  a recorded opt-in (sms_opt_in/at/source on Contact) — or (b) SmsSuppression,
+  the org-scoped STOP ledger. Quiet hours (TCPA 8am–9pm recipient-local,
+  enforced via the campaign send window) are checked in the gateway too.
+- Provider is BYO ONLY: each Organization connects its OWN Twilio account
+  (account SID + Fernet-encrypted auth token + from number / messaging
+  service). Salescale never operates a shared sending number, and A2P 10DLC
+  brand/campaign registration is the tenant's responsibility inside their
+  Twilio console — surfaced in the UI, not automated.
+- STOP/HELP handling: Twilio Advanced Opt-Out already blocks sends to
+  opted-out numbers at the carrier level (error 21610); we ALSO record every
+  STOP in SmsSuppression and exit all of the contact's active SMS campaigns
+  org-wide, so our own ledger never depends on the provider's.
+
+The campaign/enrollment engine (services/sms_campaigns.py) builds on these
+tables — this file defines the schema it drives.
+"""
+
+import datetime as dt
+from typing import Optional
+
+from sqlalchemy import (
+    JSON,
+    Boolean,
+    DateTime,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
+from sqlalchemy.orm import Mapped, mapped_column
+
+from ..db import Base
+from .base import created_at_column, id_column
+
+# --- Account lifecycle (mirrors email ACCOUNT_*) ---
+SMS_ACCOUNT_ACTIVE = "active"
+SMS_ACCOUNT_ERROR = "error"  # auth/transport failure — reconnect banner
+
+# --- Campaign lifecycle (identical state machine to EmailCampaign) ---
+SMS_CAMPAIGN_DRAFT = "draft"
+SMS_CAMPAIGN_ACTIVE = "active"
+SMS_CAMPAIGN_PAUSED = "paused"
+SMS_CAMPAIGN_ARCHIVED = "archived"
+
+SMS_ENROLL_ACTIVE = "active"
+SMS_ENROLL_COMPLETED = "completed"
+SMS_ENROLL_EXITED = "exited"  # exit_reason: replied | opted_out | manual | failed
+SMS_ENROLL_ERROR = "error"
+
+SMS_DIR_IN = "in"
+SMS_DIR_OUT = "out"
+SMS_MSG_QUEUED = "queued"
+SMS_MSG_SENT = "sent"
+SMS_MSG_DELIVERED = "delivered"  # via Twilio status callback
+SMS_MSG_FAILED = "failed"
+SMS_MSG_RECEIVED = "received"  # inbound
+
+SMS_KIND_CAMPAIGN = "campaign"
+SMS_KIND_MANUAL = "manual"
+
+SMS_SUPPRESS_STOP = "stop"  # inbound STOP/UNSUBSCRIBE/etc.
+SMS_SUPPRESS_CARRIER = "carrier"  # Twilio 21610 — opted out at the provider
+SMS_SUPPRESS_MANUAL = "manual"
+
+# FCC (2025): any reasonable revocation must be honored. These are the
+# standard keywords checked case-insensitively as the full trimmed body.
+STOP_KEYWORDS = ("stop", "stopall", "stop all", "unsubscribe", "cancel", "end", "quit", "revoke", "optout", "opt out")
+HELP_KEYWORDS = ("help", "info")
+
+
+class SmsAccount(Base):
+    """One connected Twilio sender (per Organization): the org's own account
+    SID + auth token (Fernet — never serialized back) and either a from
+    number (E.164) or a Messaging Service SID."""
+
+    __tablename__ = "sms_accounts"
+    __table_args__ = (
+        UniqueConstraint("organization_id", "from_number", name="uq_sms_account_from"),
+    )
+
+    id: Mapped[str] = id_column()
+    organization_id: Mapped[str] = mapped_column(
+        ForeignKey("organizations.id"), nullable=False, index=True
+    )
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    provider: Mapped[str] = mapped_column(String(20), default="twilio", nullable=False)
+    account_sid: Mapped[str] = mapped_column(String(64), nullable=False)
+    auth_token_encrypted: Mapped[Optional[str]] = mapped_column(Text)
+    # E.164 sending number ("+14805550100"). Optional when messaging_service_sid
+    # is set (Twilio picks the number from the service's pool).
+    from_number: Mapped[Optional[str]] = mapped_column(String(20))
+    messaging_service_sid: Mapped[Optional[str]] = mapped_column(String(64))
+    status: Mapped[str] = mapped_column(
+        String(20), default=SMS_ACCOUNT_ACTIVE, nullable=False
+    )
+    error_detail: Mapped[Optional[str]] = mapped_column(Text)
+    # Tenant guardrail, enforced server-side in the gateway. Long codes are
+    # carrier-limited under A2P 10DLC anyway; 200 is a sane default.
+    daily_send_cap: Mapped[int] = mapped_column(Integer, default=200, nullable=False)
+    created_at: Mapped[dt.datetime] = created_at_column()
+
+
+class SmsCampaign(Base):
+    """An SMS sequence campaign. The send window doubles as the TCPA
+    quiet-hours guard: defaults 11–20 in America/New_York keep every
+    continental-US recipient inside 8am–9pm local even when the list spans
+    time zones — orgs narrowing to one region may widen it."""
+
+    __tablename__ = "sms_campaigns"
+
+    id: Mapped[str] = id_column()
+    organization_id: Mapped[str] = mapped_column(
+        ForeignKey("organizations.id"), nullable=False, index=True
+    )
+    client_id: Mapped[Optional[str]] = mapped_column(ForeignKey("clients.id"))
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(20), default=SMS_CAMPAIGN_DRAFT, nullable=False
+    )
+    account_id: Mapped[str] = mapped_column(
+        ForeignKey("sms_accounts.id"), nullable=False, index=True
+    )
+    timezone: Mapped[str] = mapped_column(
+        String(64), default="America/New_York", nullable=False
+    )
+    send_window_start: Mapped[int] = mapped_column(Integer, default=11, nullable=False)
+    send_window_end: Mapped[int] = mapped_column(Integer, default=20, nullable=False)
+    # Weekdays sending is allowed on, 0=Mon … 6=Sun (Python weekday()).
+    send_days: Mapped[Optional[list]] = mapped_column(
+        JSON, default=lambda: [0, 1, 2, 3, 4]
+    )
+    daily_cap: Mapped[int] = mapped_column(Integer, default=100, nullable=False)
+    exit_on_reply: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    settings: Mapped[Optional[dict]] = mapped_column(JSON)
+    activated_at: Mapped[Optional[dt.datetime]] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[dt.datetime] = created_at_column()
+
+
+class SmsStep(Base):
+    """One step in an SMS sequence. body_template supports the same
+    {{token|fallback}} personalization as email (minus ai_snippet /
+    unsubscribe_url). wait_days is the delay after the previous step."""
+
+    __tablename__ = "sms_steps"
+    __table_args__ = (
+        UniqueConstraint("campaign_id", "position", name="uq_sms_step_position"),
+    )
+
+    id: Mapped[str] = id_column()
+    organization_id: Mapped[str] = mapped_column(
+        ForeignKey("organizations.id"), nullable=False, index=True
+    )
+    campaign_id: Mapped[str] = mapped_column(
+        ForeignKey("sms_campaigns.id"), nullable=False, index=True
+    )
+    position: Mapped[int] = mapped_column(Integer, nullable=False)
+    wait_days: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    body_template: Mapped[Optional[str]] = mapped_column(Text)
+
+
+class SmsEnrollment(Base):
+    """One contact enrolled in one SMS campaign. current_position (1-indexed,
+    matching EmailEnrollment's convention) + next_run_at drive the engine."""
+
+    __tablename__ = "sms_enrollments"
+    __table_args__ = (
+        UniqueConstraint(
+            "campaign_id", "contact_id", name="uq_sms_enroll_campaign_contact"
+        ),
+    )
+
+    id: Mapped[str] = id_column()
+    organization_id: Mapped[str] = mapped_column(
+        ForeignKey("organizations.id"), nullable=False, index=True
+    )
+    campaign_id: Mapped[str] = mapped_column(
+        ForeignKey("sms_campaigns.id"), nullable=False, index=True
+    )
+    contact_id: Mapped[str] = mapped_column(
+        ForeignKey("contacts.id"), nullable=False, index=True
+    )
+    status: Mapped[str] = mapped_column(
+        String(20), default=SMS_ENROLL_ACTIVE, nullable=False
+    )
+    exit_reason: Mapped[Optional[str]] = mapped_column(String(30))
+    current_position: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    next_run_at: Mapped[Optional[dt.datetime]] = mapped_column(
+        DateTime(timezone=True), index=True
+    )
+    replied_at: Mapped[Optional[dt.datetime]] = mapped_column(DateTime(timezone=True))
+    enrolled_by: Mapped[Optional[str]] = mapped_column(String(36))
+    ended_at: Mapped[Optional[dt.datetime]] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[dt.datetime] = created_at_column()
+
+
+class SmsMessage(Base):
+    """Append-only send/receive ledger — the audit trail (guardrail #8) and
+    the monthly entitlement meter (direction=out rows). provider_sid is
+    Twilio's Message SID; status moves queued→sent→delivered/failed via the
+    status callback."""
+
+    __tablename__ = "sms_messages"
+
+    id: Mapped[str] = id_column()
+    organization_id: Mapped[str] = mapped_column(
+        ForeignKey("organizations.id"), nullable=False, index=True
+    )
+    account_id: Mapped[str] = mapped_column(
+        ForeignKey("sms_accounts.id"), nullable=False, index=True
+    )
+    campaign_id: Mapped[Optional[str]] = mapped_column(ForeignKey("sms_campaigns.id"))
+    step_id: Mapped[Optional[str]] = mapped_column(ForeignKey("sms_steps.id"))
+    enrollment_id: Mapped[Optional[str]] = mapped_column(
+        ForeignKey("sms_enrollments.id")
+    )
+    contact_id: Mapped[Optional[str]] = mapped_column(
+        ForeignKey("contacts.id"), index=True
+    )
+    direction: Mapped[str] = mapped_column(String(5), nullable=False)
+    kind: Mapped[str] = mapped_column(
+        String(20), default=SMS_KIND_CAMPAIGN, nullable=False
+    )
+    to_number: Mapped[str] = mapped_column(String(20), nullable=False)
+    from_number: Mapped[Optional[str]] = mapped_column(String(20))
+    body: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(20), default=SMS_MSG_QUEUED, nullable=False
+    )
+    provider_sid: Mapped[Optional[str]] = mapped_column(String(64), index=True)
+    error_code: Mapped[Optional[str]] = mapped_column(String(20))
+    error_detail: Mapped[Optional[str]] = mapped_column(Text)
+    created_at: Mapped[dt.datetime] = created_at_column()
+
+
+class SmsSuppression(Base):
+    """Org-scoped opt-out ledger, keyed on normalized E.164. The gateway
+    consults it before EVERY campaign/manual send; inbound STOP and Twilio
+    21610 errors both write here. Never bypassed, never auto-expired."""
+
+    __tablename__ = "sms_suppressions"
+    __table_args__ = (
+        UniqueConstraint("organization_id", "phone_e164", name="uq_sms_suppress"),
+    )
+
+    id: Mapped[str] = id_column()
+    organization_id: Mapped[str] = mapped_column(
+        ForeignKey("organizations.id"), nullable=False, index=True
+    )
+    phone_e164: Mapped[str] = mapped_column(String(20), nullable=False)
+    reason: Mapped[str] = mapped_column(
+        String(20), default=SMS_SUPPRESS_STOP, nullable=False
+    )
+    detail: Mapped[Optional[str]] = mapped_column(Text)
+    created_at: Mapped[dt.datetime] = created_at_column()

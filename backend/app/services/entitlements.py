@@ -42,6 +42,7 @@ TIER_LIMITS: dict[str, dict[str, int | None]] = {
         "lead_finder_searches": 40,
         "email_verifications": 250,
         "email_sends": 1000,
+        "sms_sends": 500,
     },
     "pro": {
         "clients": 25,
@@ -50,6 +51,7 @@ TIER_LIMITS: dict[str, dict[str, int | None]] = {
         "lead_finder_searches": 200,
         "email_verifications": 2000,
         "email_sends": 10000,
+        "sms_sends": 5000,
     },
     "agency": {
         "clients": None,
@@ -58,6 +60,7 @@ TIER_LIMITS: dict[str, dict[str, int | None]] = {
         "lead_finder_searches": 1000,
         "email_verifications": 10000,
         "email_sends": 100000,
+        "sms_sends": 50000,
     },
 }
 
@@ -289,6 +292,41 @@ def enforce_can_send_email(db: Session, org: Organization) -> None:
         raise HTTPException(
             status.HTTP_402_PAYMENT_REQUIRED,
             f"Your {org.plan} plan allows {cap} cold-email sends per month. "
+            "Upgrade for more.",
+        )
+
+
+def sms_outreach_usage(db: Session, org: Organization) -> dict:
+    """Monthly outbound-SMS meter — counts sent rows in the SmsMessage
+    ledger (same calendar-month rule as every other meter)."""
+    import datetime as dt
+
+    from ..models.sms_outreach import SMS_DIR_OUT, SMS_MSG_SENT, SmsMessage
+
+    now = dt.datetime.now(dt.timezone.utc)
+    month_start = dt.datetime(now.year, now.month, 1, tzinfo=dt.timezone.utc)
+    used = db.execute(
+        select(func.count())
+        .select_from(SmsMessage)
+        .where(
+            SmsMessage.organization_id == org.id,
+            SmsMessage.direction == SMS_DIR_OUT,
+            SmsMessage.status == SMS_MSG_SENT,
+            SmsMessage.created_at >= month_start,
+        )
+    ).scalar_one()
+    return {"used": used, "limit": _limits(org)["sms_sends"]}
+
+
+def enforce_can_send_sms(db: Session, org: Organization) -> None:
+    """402 when the org has exhausted its monthly SMS quota. Gates enrolling
+    as well as direct sends, same rule as email."""
+    usage = sms_outreach_usage(db, org)
+    cap = usage["limit"]
+    if cap is not None and usage["used"] >= cap:
+        raise HTTPException(
+            status.HTTP_402_PAYMENT_REQUIRED,
+            f"Your {org.plan} plan allows {cap} SMS sends per month. "
             "Upgrade for more.",
         )
 

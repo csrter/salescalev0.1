@@ -127,6 +127,20 @@ class Contact(Base):
     # verification — [{"email", "source", "found_at"}]. Never treated as a
     # verified address; promotion into `email` happens explicitly.
     candidate_emails: Mapped[Optional[list]] = mapped_column(JSON)
+    # SMS consent (TCPA prior-express-written-consent record). The consent
+    # GATE for every SMS send is services/sms_consent.assert_can_sms — it
+    # requires sms_opt_in AND checks suppression; these three fields are the
+    # compliance record of WHERE/WHEN consent was captured (website form,
+    # attested CSV import, manual). Changing the contact's phone does NOT
+    # reset consent (consent attaches to the person, not the number), but a
+    # STOP suppression on the number always wins over sms_opt_in.
+    sms_opt_in: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="0", nullable=False
+    )
+    sms_opt_in_at: Mapped[Optional[dt.datetime]] = mapped_column(
+        DateTime(timezone=True)
+    )
+    sms_opt_in_source: Mapped[Optional[str]] = mapped_column(String(100))
     created_at: Mapped[dt.datetime] = created_at_column()
 
 
@@ -153,6 +167,9 @@ RESERVED_CONTACT_FIELD_KEYS: frozenset[str] = frozenset(
         "source",
         "source_external_id",
         "source_detail",
+        "sms_opt_in",
+        "sms_opt_in_at",
+        "sms_opt_in_source",
         "qualification",
         "qualified",
         "qualified_at",

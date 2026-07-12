@@ -770,6 +770,11 @@ class ContactOutTeam(ContactOutPublic):
     verification_status: str = "unverified"
     verified_at: Optional[dt.datetime] = None
     candidate_emails: Optional[List[Dict[str, Any]]] = None
+    # SMS consent record (TCPA) — team-only; the gate reads the model, this
+    # is display/filter surface.
+    sms_opt_in: bool = False
+    sms_opt_in_at: Optional[dt.datetime] = None
+    sms_opt_in_source: Optional[str] = None
 
 
 class ContactCreateIn(BaseModel):
@@ -785,6 +790,9 @@ class ContactCreateIn(BaseModel):
     # Non-empty resolves to a get-or-created org-scoped Company; the contact's
     # company_id is set to it.
     company_name: Optional[str] = None
+    # True records a manual SMS opt-in (source="manual", stamped now) — the
+    # team member asserts the person consented on the org's own surface.
+    sms_opt_in: Optional[bool] = None
     # Phase 14: custom field values keyed by definition key. Validated/coerced
     # at the data-access layer (services/custom_fields), not trusted as sent.
     custom_fields: Optional[Dict[str, Any]] = None
@@ -802,6 +810,9 @@ class ContactUpdateIn(BaseModel):
     # Present + non-empty get-or-creates and links a Company; present + empty
     # clears company_id (detected via model_fields_set in the router).
     company_name: Optional[str] = None
+    # True records a manual opt-in; False revokes it (opt_in cleared, the
+    # at/source record kept for audit).
+    sms_opt_in: Optional[bool] = None
     # Only the keys present are changed; a key set to null clears that value.
     custom_fields: Optional[Dict[str, Any]] = None
 
@@ -913,6 +924,11 @@ class CsvImportIn(BaseModel):
     # Phase 12: queue email verification for the imported rows (background,
     # quota-checked in the pipeline).
     verify: bool = False
+    # SMS module: the importer attests EVERY row in this file opted in to SMS
+    # on the Organization's own website — each created contact gets the TCPA
+    # consent record (source="csv_import:website_attested"). A per-column
+    # "sms_opt_in" mapping (truthy values) handles mixed files instead.
+    sms_opt_in_all: bool = False
 
 
 class VerifyContactsIn(BaseModel):

@@ -39,6 +39,8 @@ from .api import (
     outreach,
     outreach_webhooks,
     platforms,
+    sms_outreach,
+    sms_webhooks,
     social_auth,
 )
 from .config import get_settings
@@ -126,6 +128,7 @@ app.include_router(leads.router)
 app.include_router(lead_webhooks.router)
 app.include_router(outreach_webhooks.router)
 app.include_router(email_outreach_public.router)
+app.include_router(sms_webhooks.router)
 app.include_router(branding.router)
 
 # App-data routers — hard-gated by the org 2FA policy (mfa_gate is a no-op for
@@ -148,6 +151,7 @@ app.include_router(custom_fields.router, dependencies=_MFA)
 app.include_router(ai.router, dependencies=_MFA)
 app.include_router(outreach.router, dependencies=_MFA)
 app.include_router(email_outreach.router, dependencies=_MFA)
+app.include_router(sms_outreach.router, dependencies=_MFA)
 
 
 # Platform-API failures that escape a router (live refresh paths catch only

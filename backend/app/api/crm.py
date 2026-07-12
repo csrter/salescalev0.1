@@ -74,6 +74,7 @@ from ..services import custom_fields as custom_fields_svc
 from ..services import email_verification
 from ..services import entitlements, external_sync, metrics
 from ..services import lead_finder as lead_finder_svc
+from ..services import sms_consent
 from ..models.base import utcnow
 
 router = APIRouter(prefix="/api/crm", tags=["crm"])
@@ -426,6 +427,8 @@ def create_contact(
         contact.company_id = crm_svc.get_or_create_company(
             db, client.organization_id, client.id, body.company_name
         )
+    if body.sms_opt_in:
+        sms_consent.record_opt_in(contact, "manual")
     try:
         custom_fields_svc.validate_and_merge(
             db,
@@ -484,6 +487,13 @@ def update_contact(
             if name
             else None
         )
+    if body.sms_opt_in is not None:
+        if body.sms_opt_in and not contact.sms_opt_in:
+            sms_consent.record_opt_in(contact, "manual")
+        elif not body.sms_opt_in:
+            # Revoke: opt_in cleared; at/source kept as the audit trail of
+            # the original consent event.
+            contact.sms_opt_in = False
     if body.custom_fields is not None:
         try:
             custom_fields_svc.validate_and_merge(
@@ -587,12 +597,17 @@ _CSV_SYSTEM_TARGETS = {
     "last_name",
     "email",
     "phone",
+    "mobile_phone",
     "job_title",
     "city",
     "state",
     "company",
     "full_name",
+    "sms_opt_in",
 }
+
+# Cell values that count as an opt-in when a column maps to sms_opt_in.
+_CSV_TRUTHY = {"1", "true", "yes", "y", "x", "opted in", "opt-in", "opt in"}
 # The subset that makes a row a real contact — a row mapping only a company or
 # a city isn't one.
 _CSV_IDENTITY_TARGETS = ("first_name", "last_name", "email", "phone")
@@ -687,6 +702,10 @@ def import_contacts(
             if len(parts) > 1:
                 identity.setdefault("last_name", parts[1])
         company_name = identity.pop("company", None)
+        opt_in_cell = identity.pop("sms_opt_in", None)
+        row_opted_in = body.sms_opt_in_all or (
+            opt_in_cell is not None and opt_in_cell.strip().lower() in _CSV_TRUTHY
+        )
         if not any(identity.get(k) for k in _CSV_IDENTITY_TARGETS):
             failed.append(
                 {"row": idx, "error": "no identity field (name/email/phone) mapped"}
@@ -699,11 +718,14 @@ def import_contacts(
             last_name=identity.get("last_name"),
             email=(identity["email"].lower() if identity.get("email") else None),
             phone=identity.get("phone"),
+            mobile_phone=identity.get("mobile_phone"),
             job_title=identity.get("job_title"),
             city=identity.get("city"),
             state=identity.get("state"),
             source="csv_import",
         )
+        if row_opted_in:
+            sms_consent.record_opt_in(contact, "csv_import:website_attested")
         if company_name:
             cache_key = company_name.lower()
             if cache_key not in company_cache:
