@@ -654,6 +654,20 @@ live activation + the entitlement flip, the Outreach module build
       backend/ + frontend/.dockerignore so tree junk can never enter an
       image again. Never use plain macOS `tar czf` for anything that lands
       on the VPS — git archive only (or COPYFILE_DISABLE=1).
+      SECOND casualty of the same 11:22 UTC extraction, surfaced as "login
+      NetworkError": ~/salescale/backend/.env was OVERWRITTEN by the local
+      dev copy (birth 11:22:19, then hand-edited 11:38), losing the
+      prod-only lines FRONTEND_ORIGIN/API_BASE_URL. The next container
+      recreate picked it up → CORSMiddleware no longer allowed
+      app.salescale.lol → every response blocked by the browser (classic
+      allow-credentials-without-allow-origin signature; diagnosis: 401
+      probes with an Origin header, comparing endpoints). Restored both
+      lines (backup kept as backend/.env.bak-<hhmm>) and recreated the
+      backend; verified TOKEN_ENCRYPTION_KEY still decrypts stored
+      IntegrationCredential rows (the clobbering file shared the same key,
+      so no re-connects needed). Reminder: extraction of anything over
+      ~/salescale MUST come from `git archive` (which contains no .env) —
+      the deploy flow never touches .env by design.
 - [ ] Stripe live activation + entitlement flip (after 12–14, so real
       limits land everywhere in one pass)
 - [ ] Outreach module build (dev-mode) — go-live gated on Meta App
