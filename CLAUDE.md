@@ -935,7 +935,7 @@ live activation + the entitlement flip, the Outreach module build
       Tests 432 → 433. Verified live on alt2: default-on preview showed the
       full "OrgName: ... Reply STOP to opt out" text, toggled-off preview on
       a second campaign showed the bare personalized body, PATCH round-trip
-      confirmed via network inspection. NOT deployed yet.
+      confirmed via network inspection. DEPLOYED to production 2026-07-12.
 - [x] SMS individual messenger (same-day follow-up): one-off, single-contact
       texting — a live 1:1 conversation, not a campaign. New
       POST /api/sms/compose {account_id, contact_id, body} (require_team)
@@ -974,7 +974,7 @@ live activation + the entitlement flip, the Outreach module build
       gate — actual delivery correctly failed with Twilio auth error 20003,
       proving the guard order, not a real send), both appeared in the right
       order under the contact's real name/number, not "Unknown contact".
-      NOT deployed yet.
+      DEPLOYED to production 2026-07-12.
 - [x] SMS read tracking, both directions (same-day follow-up, researched via
       Sendblue's public docs — confirmed their status webhook reports a
       "READ" value for iMessage read receipts, keyed by message_handle,
@@ -1008,7 +1008,7 @@ live activation + the entitlement flip, the Outreach module build
       Sendblue-shaped status webhook (message bubble showed "read · Read
       just now"), simulated a signed Twilio inbound reply (unread), then
       confirmed opening the Messages tab auto-called mark-read and
-      persisted read_at server-side. NOT deployed yet.
+      persisted read_at server-side. DEPLOYED to production 2026-07-12.
 - [ ] Stripe live activation + entitlement flip (after 12–14, so real
       limits land everywhere in one pass)
 - [ ] Outreach module build (dev-mode) — go-live gated on Meta App
