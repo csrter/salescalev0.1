@@ -11,3 +11,11 @@ dist/
 *.sqlite3
 .env
 .env.*
+
+# macOS junk (AppleDouble resource forks + Finder metadata) — a Mac-made
+# tarball extracted onto the server once scattered ._* files that alembic
+# then tried to parse as migrations. Never let them into an image.
+._*
+**/._*
+.DS_Store
+**/.DS_Store

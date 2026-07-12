@@ -2,3 +2,9 @@ node_modules/
 dist/
 .env
 .env.*
+
+# macOS junk — see backend/.dockerignore
+._*
+**/._*
+.DS_Store
+**/.DS_Store
