@@ -1877,6 +1877,7 @@ function AccountDialog({
         {!isEdit && (
           <Field label="Provider">
             <Segmented
+              ariaLabel="SMS provider"
               options={[
                 { value: "twilio", label: "Twilio (SMS)" },
                 { value: "sendblue", label: "Sendblue (iMessage/SMS)" },
