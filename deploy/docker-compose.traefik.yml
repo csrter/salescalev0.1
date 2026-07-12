@@ -52,3 +52,18 @@ services:
       - traefik.http.routers.salescale-app.entrypoints=websecure
       - traefik.http.routers.salescale-app.tls.certresolver=letsencrypt
       - traefik.http.services.salescale-app.loadbalancer.server.port=80
+
+  # Exists ONLY so Traefik obtains + renews a Let's Encrypt cert for the mail
+  # host — docker-mailserver (deploy/docker-compose.mailserver.yml, its own
+  # compose project) reads that cert out of Traefik's acme.json for IMAPS.
+  # Serves nothing sensitive; HTTPS requests to the mail hostname just get a
+  # whoami echo. See MAILSERVER.md "TLS certificate".
+  mail-cert-helper:
+    image: traefik/whoami
+    restart: unless-stopped
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.mailcert.rule=Host(`${MAIL_DOMAIN:-mail.atlasreach.io}`)
+      - traefik.http.routers.mailcert.entrypoints=websecure
+      - traefik.http.routers.mailcert.tls.certresolver=letsencrypt
+      - traefik.http.services.mailcert.loadbalancer.server.port=80

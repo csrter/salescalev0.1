@@ -1,10 +1,15 @@
 # Self-hosted mail server for cold outreach (Salescale)
 
-Runbook for standing up a **self-hosted IMAP + SMTP mail server** on the
-existing Salescale VPS (`2.25.75.95`, Hostinger KVM, Ubuntu, 7.8GB RAM) so the
-new **cold-email outreach module** can send from and receive replies on an
-**agency's own domain**. The Salescale backend container talks to it over IMAP
-(read inbox) and SMTP submission (send).
+Runbook for standing up a **self-hosted IMAP mail server** on the existing
+Salescale VPS (`2.25.75.95`, Hostinger KVM, Ubuntu, 7.8GB RAM) so the new
+**cold-email outreach module** can receive replies on an **agency's own
+domain**. The chosen architecture (§0) is a hybrid: **Elastic Email sends**,
+this box **only receives** — the Salescale backend container talks to it over
+IMAP (read inbox) only; SMTP submission goes to Elastic Email, not here.
+docker-mailserver still runs Postfix + Dovecot under the hood (Postfix
+handles inbound MX delivery into the mailboxes Dovecot serves over IMAP), so
+the compose file and image are unchanged from an all-in-one setup — only the
+outbound-sending pieces of the configuration are skipped.
 
 Companion to `DEPLOYMENT.md` (the app-stack runbook) — read that first for the
 box's layout: a **pre-existing Traefik** (host network) owns 80/443 and serves
@@ -25,30 +30,37 @@ production and the neighbours.
 
 ---
 
-## 0. Why self-hosting cold email is hard mode (read before you invest a day)
+## 0. What this box does now (read before you touch anything)
 
-> **Honesty box.** Self-hosting outbound cold email on a commodity VPS is the
-> hardest possible deliverability setup. Shared VPS IP ranges (Hostinger,
-> DigitalOcean, OVH, Hetzner) frequently sit on blocklists because *someone
-> else* on the range spammed — you inherit that reputation on day one and can't
-> fully control it. Gmail/Microsoft weight IP + domain reputation heavily for
-> unsolicited mail, and a fresh IP with no history starts at zero.
+> **Honesty box.** After weighing self-hosted outbound deliverability against
+> a managed provider, the agency has **decided** on a hybrid architecture:
+> **Elastic Email (a transactional/bulk ESP) handles SENDING**, and **this
+> self-hosted box handles RECEIVING ONLY** — it exists purely as the IMAP
+> inbox replies land in. This is the chosen, primary setup this runbook
+> documents — not a fallback to consider later.
 >
-> **The pragmatic split most teams land on:**
-> - Use this self-hosted box for **RECEIVING** (inbound MX for replies) and
->   **low-volume, high-intent** sends where you control the list quality.
-> - If inboxing suffers at volume, **relay OUTBOUND through a transactional
->   provider** (Amazon SES, Postmark, Mailgun, SendGrid) that maintains warm,
->   monitored IP pools — while still signing as the agency's domain (SPF/DKIM
->   aligned). Salescale's email-account connect form takes **any** SMTP host,
->   so this is a **config change, not a code change**: point SMTP at the
->   provider, keep IMAP pointed at this box for replies. See
->   "Escape hatch" at the end.
+> Why: self-hosting outbound cold email on a commodity VPS is the hardest
+> possible deliverability setup. Shared VPS IP ranges (Hostinger, DigitalOcean,
+> OVH, Hetzner) frequently sit on blocklists because *someone else* on the
+> range spammed — you inherit that reputation on day one and can't fully
+> control it. Gmail/Microsoft weight IP + domain reputation heavily for
+> unsolicited mail, and a fresh IP with no history starts at zero. Elastic
+> Email maintains warm, monitored sending infrastructure so the agency isn't
+> fighting IP reputation from scratch on outbound, while this box still keeps
+> the reply inbox self-hosted (full control, no vendor lock-in on receiving —
+> replies land exactly where Salescale's IMAP sync already expects them).
 >
-> Decide honestly: if the agency needs 500+/day inboxing from cold lists on
-> week one, start with a provider and treat this box as the reply inbox. If
-> volume is modest and ramping, self-hosting is workable — this runbook gets
-> you a clean 9-10/10 mail-tester score, which is the price of entry.
+> **What this means concretely, and why several sections below got shorter:**
+> - Salescale's email-account connect form points **SMTP at Elastic Email**
+>   and **IMAP at this box** (`mail.atlasreach.io:993`) — see §11.
+> - This box's Postfix **never sends outbound mail as the agency's domain**.
+>   Everything that used to exist here to make THIS SERVER a trusted
+>   *sender* — its own SPF inclusion, its own DKIM keys, outbound port-25
+>   unblock, IP-level warmup — is **no longer required**, and the affected
+>   sections (§2.3, §2.4, §2.6, §5, §7, §9) have been trimmed accordingly.
+> - If the agency ever wants to drop Elastic Email and send directly from
+>   this box instead, that reverses back to the old all-in-one design — see
+>   §12, which now documents that as the secondary/alternative path.
 
 ---
 
@@ -60,10 +72,25 @@ sends from its OWN domain** — never anything Salescale-branded. The worked
 example throughout is tenant #1, **Atlas Reach**, whose primary domain is
 `atlasreach.io`.
 
-The real decision is: does Atlas Reach send cold mail on `atlasreach.io`
-directly, or on a **separate/subdomain** to insulate the primary domain's
-reputation (the domain their existing clients and Google Workspace email
-depend on)?
+**With the Elastic-Email-sends / self-host-receives split, this decision
+splits into two separate questions:**
+
+1. **What From: domain does Elastic Email send as?** This is whatever domain
+   the agency verifies in Elastic Email's dashboard — `atlasreach.io` or a
+   subdomain of it. Elastic Email's own SPF/DKIM records (§2.3, §2.4) get
+   published for *that* domain.
+2. **Where do replies to that From: address route?** That's this box —
+   `mail.atlasreach.io` — regardless of which domain Elastic Email sends as,
+   as long as the MX for the From:-domain (or a Reply-To override) points
+   here (§2.2). The subdomain recommendation below is now primarily about
+   this **receiving hostname/inbox address**, not the SMTP-envelope sending
+   identity — the two no longer have to be the same domain, though keeping
+   them aligned (e.g. From: `carter@mail.atlasreach.io`, replies also to
+   `mail.atlasreach.io`) is simplest and still recommended.
+
+The remaining question below — primary domain vs. subdomain vs. cousin
+domain — still matters for picking that From:/receiving domain and its
+reputation blast radius:
 
 | Option | Example | Pro | Con |
 |--------|---------|-----|-----|
@@ -71,14 +98,16 @@ depend on)?
 | **Subdomain** (recommended) | `carter@mail.atlasreach.io` or `@go.atlasreach.io` | Inherits *some* of the parent's trust; isolates cold-send reputation so a problem doesn't sink primary-domain mail; still visibly "Atlas Reach" | Subdomain reputation is somewhat linked to the parent (not a hermetic firewall); needs its own warmup. |
 | **Cousin domain** | `atlasreach-hq.com`, `getatlasreach.com`, `atlasreachmail.com` | Fully isolates reputation; if it burns, the primary is untouched — buy another and move on | A brand-new domain with zero history; longest warmup; must stand up a real website (even a redirect to `atlasreach.io`) or it looks like phishing. |
 
-**Recommendation for this setup: a dedicated subdomain the mail server is
-authoritative for — `mail.atlasreach.io`** — which is also the server's
-hostname (`mail.atlasreach.io`), reverse-DNS name, and TLS cert name. From:
-addresses can still be `@atlasreach.io` OR `@mail.atlasreach.io` depending on
-how much isolation the agency wants; SPF/DKIM/DMARC must align to whichever
-**From: domain** is chosen (see §3). If the agency wants maximum insulation,
-register a cousin domain and substitute it everywhere `atlasreach.io` appears
-below.
+**Recommendation for this setup: a dedicated subdomain this box is
+authoritative for RECEIVING — `mail.atlasreach.io`** — which is also the
+server's hostname, reverse-DNS name, and TLS cert name. From: addresses sent
+via Elastic Email can be `@atlasreach.io` OR `@mail.atlasreach.io` depending
+on what's verified in Elastic Email's dashboard and how much isolation the
+agency wants; Elastic Email's SPF/DKIM must align to whichever **From: domain**
+is chosen there (see §3), and the MX for that same domain (or its Reply-To)
+must point at this box so replies actually arrive. If the agency wants maximum
+insulation, register a cousin domain and substitute it everywhere
+`atlasreach.io` appears below.
 
 **Rules for the sending domain (from the deliverability guide):**
 - Stand up a **real website** on it (even a 301 redirect to the main site) —
@@ -95,13 +124,17 @@ organizations' domains at once — each agency brings its **own** domain and its
 
 ```bash
 docker exec -it mailserver setup email add jane@otheragency.com
-docker exec -it mailserver setup config dkim domain otheragency.com
 ```
 
-then publish **that domain's** SPF/DKIM/DMARC on **that agency's** DNS (§3),
-and the org connects it in Salescale with its own mailbox credentials. Each
-domain's From:-alignment is independent. The rest of this runbook walks
-`atlasreach.io`; repeat per domain.
+then verify **that domain** in Elastic Email (their SPF include + DKIM go on
+**that agency's** DNS, same as §2.3/§2.4) and publish DMARC (§2.5) on that
+agency's DNS; the org connects it in Salescale with its own mailbox
+credentials for the IMAP leg and its own Elastic Email credentials for the
+SMTP leg. Each domain's From:-alignment is independent. The
+`setup config dkim domain otheragency.com` step only applies if that org
+specifically activates the direct-send escape hatch (§12) instead of using
+Elastic Email. The rest of this runbook walks `atlasreach.io`; repeat per
+domain.
 
 ---
 
@@ -125,56 +158,79 @@ A     mail                 2.25.75.95   600
 i.e. `mail.atlasreach.io → 2.25.75.95`. This is the server's hostname; the PTR
 (§2.6) and TLS cert (§4) must match it exactly.
 
-### 2.2 MX record — where replies are delivered
+### 2.2 MX record — reply routing (still needed)
+
+This box no longer sends, but it still needs to be where **replies to the
+From: address route**. The MX record needed is entirely about **reply
+routing**, not "where this server sends from":
 
 ```
 Type  Host / Name          Priority  Value                 TTL
 MX    @   (atlasreach.io)  10        mail.atlasreach.io    3600
 ```
 
-If you chose the subdomain-as-From strategy (From: `@mail.atlasreach.io`), add
-the MX on `mail` instead of `@`. Keep it simple: one MX, priority 10, pointing
-at the A record above (never at an IP — MX must point at a hostname).
+The MX goes on **whichever domain/subdomain the Elastic Email From: address
+actually uses**. If From: is `carter@atlasreach.io`, the MX for `@`
+(`atlasreach.io` itself) needs to point here. If From: is
+`carter@mail.atlasreach.io`, put the MX on `mail` instead of `@`. Keep it
+simple either way: one MX, priority 10, pointing at the A record above (never
+at an IP — MX must point at a hostname).
 
 **Careful:** if `atlasreach.io` already receives mail on Google Workspace /
 Microsoft 365, it already has MX records. Pointing `@`'s MX at this box
 **redirects ALL of the domain's inbound mail here** and breaks their existing
 email. That is exactly why the **subdomain** strategy is safer — put the MX on
-`mail.atlasreach.io` so only the cold-outreach subdomain's mail comes here and
-the primary domain's Workspace mail is untouched.
+`mail.atlasreach.io` so only the cold-outreach subdomain's replies come here
+and the primary domain's Workspace mail is untouched. This caveat doesn't
+change with the Elastic Email split — it's about which domain's inbound mail
+you're redirecting, independent of who sends the outbound leg.
 
-### 2.3 SPF — authorize this server to send
+### 2.3 SPF — authorize Elastic Email to send (this box is NOT in it)
 
-One TXT record on the sending domain. **Only one SPF record per domain — a
-second one silently breaks authentication.**
+This box **does not need to be in SPF at all** — it never sends as this
+domain anymore, only Postfix's inbound/reply-handling role touches mail here.
+SPF instead needs to authorize **Elastic Email** as the sender for whichever
+domain the From: address uses.
 
-```
-Type  Host / Name          Value                          TTL
-TXT   @   (atlasreach.io)  v=spf1 mx -all                 3600
-```
-
-`v=spf1 mx -all` means "the hosts in my MX (i.e. `mail.atlasreach.io`) may send
-for me; reject everything else." `-all` (hard fail) is correct for a dedicated
-sending setup you fully control. If `atlasreach.io` *also* sends through Google
-Workspace, you must include both and NOT publish two records — merge:
-`v=spf1 include:_spf.google.com mx -all`. (Again, the subdomain strategy avoids
-this: `mail.atlasreach.io` gets its own clean `v=spf1 mx -all` and the primary
-SPF is left alone.)
-
-### 2.4 DKIM — cryptographic signature
-
-The key is **generated by the mail server** in §5, not hand-written. After
-`setup config dkim` you print the public key and paste it here. It looks like:
+Elastic Email's own domain-verification page in their dashboard gives you the
+exact `include:` mechanism to add — it's commonly documented as something
+shaped like:
 
 ```
-Type  Host / Name                       Value                              TTL
-TXT   mail._domainkey  (atlasreach.io)  v=DKIM1; h=sha256; k=rsa; p=MIIBI...  3600
+Type  Host / Name          Value                                  TTL
+TXT   @   (atlasreach.io)  v=spf1 include:elasticemail.com ~all   3600
 ```
 
-`mail` is the **selector** docker-mailserver uses by default. The `p=` blob is
-long; some panels require it as a single unbroken string, others auto-split —
-paste exactly what §5 prints. Verify after propagation with
-`dig +short TXT mail._domainkey.atlasreach.io`.
+**Do not copy that value verbatim** — get the exact current `include:` string
+from Elastic Email's own domain-verification/dashboard page for this domain
+and use that, since providers occasionally change the mechanism. **Only one
+SPF record per domain — a second one silently breaks authentication.** If
+`atlasreach.io` *also* sends through Google Workspace, you must merge **all**
+sources into that ONE record rather than publishing two, e.g.:
+`v=spf1 include:elasticemail.com include:_spf.google.com ~all` (again, using
+Elastic Email's exact include value, not the illustrative one above). The
+subdomain strategy still helps here: verifying/sending as
+`mail.atlasreach.io` in Elastic Email lets that subdomain get its own clean
+SPF record while the primary domain's existing SPF (Workspace, etc.) is left
+alone.
+
+### 2.4 DKIM — Elastic Email's responsibility now, not this box's
+
+DKIM signing for the From:/sending domain is now **Elastic Email's job**, not
+this server's. In Elastic Email's dashboard, verify the sending domain and
+they'll give you their own CNAME or TXT record(s) to add to this same DNS
+zone (exact record names/values come from their dashboard — don't hand-copy
+from an old setup or guess).
+
+This self-hosted box's **own** DKIM (docker-mailserver's built-in
+OpenDKIM/`setup config dkim`) is **not needed at all** for the primary
+send-via-Elastic-Email / receive-here flow, since this box never sends as the
+domain. Skip the DKIM keygen step in §5 for the normal setup.
+
+If the agency ever wants a **direct-send fallback** from this box instead of
+Elastic Email, DKIM could be configured here later — that path (keygen,
+DNS record shape, selector) is preserved in §12 (now the secondary/alternative
+path), not here.
 
 ### 2.5 DMARC — tie it together, start in monitor mode
 
@@ -189,13 +245,22 @@ that land at `dmarc@atlasreach.io` for 1-2 weeks. Once the reports confirm SPF
 `p=quarantine` and later `p=reject`. Don't start at reject — a
 misconfiguration would silently bin your own mail.
 
-### 2.6 PTR / reverse DNS — set on Hostinger, not in the domain's DNS
+DMARC is domain-level and **provider-agnostic** — this record's requirements
+don't change with the Elastic Email split, and no rework is needed here. If
+the agency already worked through an AWS SES setup wizard earlier, this may
+already be done; just double-check there is only **ONE** `_dmarc` TXT record
+for the domain (a second one silently breaks DMARC the same way a duplicate
+SPF record does).
+
+### 2.6 PTR / reverse DNS — now a nice-to-have, not a requirement
 
 This is the one record that is **NOT** in the domain's DNS zone — it's set by
-whoever owns the **IP**, i.e. **Hostinger**. The PTR for `2.25.75.95` must
-resolve back to `mail.atlasreach.io`. Mismatched or generic PTR (e.g.
-`srv-2-25-75-95.hostinger.host`) is an instant spam signal and many receivers
-reject on it outright.
+whoever owns the **IP**, i.e. **Hostinger**. PTR matters far more for
+**outbound sending** reputation than for a receive-only box, so with Elastic
+Email doing the sending, this is now a **nice-to-have** rather than a hard
+requirement. It's still cheap to set correctly, so do it if convenient — the
+PTR for `2.25.75.95` resolving to `mail.atlasreach.io` (instead of a generic
+host name) is a small hygiene win with no downside.
 
 - **Where:** Hostinger hPanel → VPS → your server → **Network / rDNS** (naming
   varies), set the PTR for `2.25.75.95` to `mail.atlasreach.io`. If hPanel has
@@ -203,13 +268,13 @@ reject on it outright.
   DNS for `2.25.75.95` → `mail.atlasreach.io`.
 - Verify: `dig +short -x 2.25.75.95` must return `mail.atlasreach.io.`
 
-**Port 25 unblock (Hostinger):** many Hostinger VPS plans **block outbound
-port 25 by default** to fight spam. Without it you can receive but **cannot
-send to other servers**. Request an unblock via a **support ticket** ("please
-unblock outbound SMTP / port 25 on VPS `2.25.75.95` for a legitimate,
-authenticated mail server with SPF/DKIM/DMARC/rDNS configured"). They usually
-ask you to confirm the anti-abuse setup — which this runbook gives you. Until
-25 is open outbound, use the provider-relay escape hatch for sending.
+**Port 25 outbound: no longer needed.** The old requirement to file a
+Hostinger support ticket unblocking **outbound** port 25 no longer applies —
+this box never originates SMTP connections to other mail servers now that
+Elastic Email sends. Inbound port 25 (for receiving MX traffic) still needs
+to be reachable — that's a `ufw`/firewall matter (§7), not a Hostinger
+outbound-block matter. Only revisit the outbound-25 ticket if the agency
+activates the direct-send escape hatch in §12.
 
 ### 2.7 Optional niceties
 
@@ -224,27 +289,36 @@ ask you to confirm the anti-abuse setup — which this runbook gives you. Until
 ## 3. From-address alignment (why all three records matter)
 
 Deliverability turns on **alignment**: the domain in the visible `From:` header
-must match the domain that SPF authorizes and the domain DKIM signs with.
+must match the domain that SPF authorizes and the domain DKIM signs with. With
+the Elastic Email split, all of that alignment now happens on **Elastic
+Email's side**, added to the **same DNS zone** — this self-hosted box's only
+remaining DNS involvement is the A/MX pair used for receiving (§2.1, §2.2).
 
-- Salescale sends as `carter@atlasreach.io` (or `@mail.atlasreach.io`).
-- SPF passes because the mail leaves `mail.atlasreach.io`, which is in
-  `atlasreach.io`'s MX / SPF (§2.3).
-- DKIM passes because this server signs with the `atlasreach.io` key (§2.4,
-  §5).
-- DMARC passes because both align to the From: domain (§2.5).
+- Salescale sends as `carter@atlasreach.io` (or `@mail.atlasreach.io`) —
+  Elastic Email is the actual outbound mail transfer agent.
+- SPF passes because Elastic Email's `include:` mechanism is published on the
+  From: domain (§2.3) — not because of anything this box does.
+- DKIM passes because **Elastic Email** signs with the key/CNAME they provide
+  for that domain (§2.4) — this server's own OpenDKIM is not part of the
+  picture.
+- DMARC passes because both align to the From: domain (§2.5), same as before —
+  DMARC's requirements don't change with who sends.
 
-Get the From: domain, the SPF domain, and the DKIM `d=` domain to be the **same
-registrable domain** and you pass DMARC. This is why the mailbox you create in
-§6 and the DKIM key you generate in §5 must be for the **same domain** the
-outreach module puts in From:.
+Get the From: domain, the Elastic-Email-authorized SPF domain, and the
+Elastic-Email DKIM `d=` domain to be the **same registrable domain** and you
+pass DMARC. This is why the domain you verify in Elastic Email must be the
+**same domain** the outreach module puts in From: — this box's only job is
+making sure the MX for that domain (§2.2) routes replies to the mailbox
+created in §6.
 
 ---
 
 ## 4. TLS certificate for `mail.atlasreach.io`
 
 The mail server needs a valid cert whose name matches its hostname, or
-Salescale's IMAP/SMTP TLS connections (and other mail servers' STARTTLS) will
-fail verification. The compose file is wired to read **Traefik's existing
+Salescale's IMAP TLS connection (and other mail servers' opportunistic
+STARTTLS when delivering inbound mail on port 25) will fail verification. The
+compose file is wired to read **Traefik's existing
 Let's Encrypt store** (`/docker/traefik/acme.json`, mounted read-only) via
 `SSL_TYPE=letsencrypt` + `SSL_DOMAIN=mail.atlasreach.io`.
 
@@ -319,9 +393,11 @@ DMS the files directly:
 
 ---
 
-## 5. Initial bring-up + DKIM
+## 5. Initial bring-up
 
-Create the state directories, start the container, add the DKIM key.
+Create the state directories and start the container. **DKIM keygen is
+skipped in the primary flow** — this box doesn't sign or send outbound mail
+as the domain, so docker-mailserver's own DKIM isn't needed here (see §2.4).
 
 ```bash
 # On the VPS. Create the /docker/mailserver tree (matches the box convention).
@@ -334,27 +410,13 @@ docker compose -f docker-compose.mailserver.yml up -d
 docker compose -f docker-compose.mailserver.yml logs -f mailserver   # watch it boot
 ```
 
-Generate the DKIM keypair for the sending domain (do this AFTER at least one
-mailbox exists, or pass the domain explicitly):
+That's it for bring-up — proceed to §6 to create the mailbox that receives
+replies.
 
-```bash
-# Generates a 2048-bit key with selector "mail" for atlasreach.io.
-docker exec -it mailserver setup config dkim domain atlasreach.io
-
-# The public key to paste into DNS (§2.4) is printed here:
-sudo cat /docker/mailserver/config/opendkim/keys/atlasreach.io/mail.txt
-```
-
-That file contains the exact `mail._domainkey ... v=DKIM1; ... p=...` TXT
-record. Paste the `p=` contents into the DNS record from §2.4. **The private
-half sits in `/docker/mailserver/config/opendkim/keys/` — losing it means
-re-keying DKIM and re-publishing DNS, so it's the #1 thing to back up (§9).**
-
-Restart to load signing:
-
-```bash
-docker compose -f docker-compose.mailserver.yml restart mailserver
-```
+> DKIM keypair generation (`docker exec -it mailserver setup config dkim
+> domain atlasreach.io`) is only relevant to the **direct-send escape hatch**
+> in §12, for if the agency ever wants this box to sign and send outbound
+> mail itself instead of Elastic Email. Skip it for the normal setup.
 
 ---
 
@@ -386,15 +448,20 @@ For a second org later, repeat with their domain (see §1 multi-tenant note).
 
 ## 7. ufw — open the mail ports
 
-Only these, in addition to the existing 22/80/443 (`DEPLOYMENT.md`):
+With Elastic Email sending, this box only needs **two** ports open, in
+addition to the existing 22/80/443 (`DEPLOYMENT.md`):
 
 ```bash
-sudo ufw allow 25/tcp     # SMTP: inbound MX (replies) + outbound relay
-sudo ufw allow 587/tcp    # Submission (STARTTLS) — Salescale sends here
+sudo ufw allow 25/tcp     # SMTP: inbound MX only — replies route in here
 sudo ufw allow 993/tcp    # IMAPS — Salescale reads the inbox here
-sudo ufw allow 465/tcp    # Submission (implicit TLS) — only if you kept 465
 sudo ufw status numbered
 ```
+
+**587/465 (submission) are NOT needed** in the primary setup — Salescale
+sends via Elastic Email's SMTP, not this box's, so nothing ever needs to
+connect to this server's submission ports. They're only relevant if the
+agency activates the **direct-send escape hatch** in §12; leave them closed
+until/unless that happens.
 
 Leave 143/110/995 closed — this setup exposes IMAPS (993) only. Recall the
 Docker-vs-ufw gotcha from `DEPLOYMENT.md`: docker-mailserver **does** publish
@@ -402,7 +469,8 @@ these ports to the host, so they're internet-reachable by design — that's
 correct here (a mail server must be), and the ufw rules above document intent.
 
 **Also check Hostinger's hPanel VPS firewall** (separate from ufw) allows
-25/587/993/465 inbound, and that outbound 25 is unblocked (§2.6).
+25/993 inbound. The outbound-port-25 check from the old setup is gone — this
+box doesn't originate outbound SMTP connections anymore (§2.6).
 
 ---
 
@@ -410,72 +478,82 @@ correct here (a mail server must be), and the ufw rules above document intent.
 
 Work top-down: transport → auth → reputation.
 
-**a) Ports reachable + TLS cert correct:**
+**a) IMAPS port reachable + TLS cert correct** (this box only serves IMAP now,
+so this is the relevant port to check here):
 ```bash
 # From your Mac. Should show the cert CN = mail.atlasreach.io, valid chain.
 openssl s_client -connect mail.atlasreach.io:993 -servername mail.atlasreach.io </dev/null 2>/dev/null | openssl x509 -noout -subject -dates
-openssl s_client -starttls smtp -connect mail.atlasreach.io:587 -servername mail.atlasreach.io </dev/null 2>/dev/null | openssl x509 -noout -subject
 ```
 
-**b) Authenticated test send** with [`swaks`](https://github.com/jetmore/swaks)
-(`brew install swaks`):
-```bash
-swaks --server mail.atlasreach.io --port 587 -tls \
-  --auth LOGIN --auth-user carter@atlasreach.io \
-  --to <your-personal-gmail>@gmail.com \
-  --from carter@atlasreach.io \
-  --header "Subject: Atlas Reach mail test"
-```
-It should authenticate, hand off, and arrive in Gmail. Open the Gmail message →
-"Show original" → confirm **SPF: PASS, DKIM: PASS, DMARC: PASS**.
+**b) Reply-receiving test** — send a plain email (from any personal address)
+**to** the outreach mailbox's address (e.g. `carter@atlasreach.io`), then
+confirm it lands in the mailbox created in §6 (via IMAP client or
+`docker exec -it mailserver setup email list` + checking `mail-data/`). This
+proves MX + inbound routing work end-to-end.
 
-**c) mail-tester.com** — the headline check. Get an address from
-[mail-tester.com](https://www.mail-tester.com), send to it from the mailbox
-(swaks or the Salescale UI once connected), then load the score. **Target ≥
-9/10.** Below 7 means something above is broken — it itemizes SPF/DKIM/DMARC,
-PTR, blocklists, and content.
+The old authenticated-send test via `swaks` against this box's port 587 no
+longer applies to the primary flow — 587 isn't open here (§7). To verify the
+**sending** leg, send a test message through **Elastic Email** (their
+dashboard/API, or the Salescale UI once connected) and confirm it arrives
+with SPF/DKIM/DMARC passing — see (c). The swaks-against-this-box test is
+still useful if the agency activates the direct-send escape hatch (§12).
 
-**d) Reverse DNS:** `dig +short -x 2.25.75.95` → must be `mail.atlasreach.io.`
-(§2.6).
+**c) mail-tester.com** — the headline check for the **sending** leg. Get an
+address from [mail-tester.com](https://www.mail-tester.com) and send to it
+via **Elastic Email** (their send API, or the Salescale UI once connected),
+then load the score. **Target ≥ 9/10.** Below 7 means something in Elastic
+Email's domain verification (SPF/DKIM/DMARC) is broken — check their
+dashboard's domain-verification status first.
+
+**d) Reverse DNS (nice-to-have, not required):** `dig +short -x 2.25.75.95` →
+ideally `mail.atlasreach.io.` (§2.6). Less critical now that this box only
+receives, but still cheap to get right.
 
 **e) Blocklists:** [MXToolbox Blacklist Check](https://mxtoolbox.com/blacklists.aspx)
-on both `2.25.75.95` and `atlasreach.io`. Also run MXToolbox's SPF/DKIM/DMARC
-lookups. A fresh VPS IP may already be on a list or two — see §9 delisting.
+on `atlasreach.io` and on Elastic Email's sending IPs/domain-auth status
+(their dashboard surfaces this). Checking `2.25.75.95` itself matters less
+now — a receive-only IP being blocklisted doesn't block outbound sends since
+Elastic Email's IPs, not this box's, carry that reputation.
 
 ---
 
 ## 9. Warmup & volume policy
 
-A brand-new domain/IP has zero sending reputation. Ramp slowly and let positive
-engagement build trust. Salescale's **email-verification gate**
-(`email_verification.sendable()` — see `CLAUDE.md` Phase 12) already keeps
-invalid/risky addresses out of every audience, which is the single biggest
-lever on bounce rate; lean on it.
+**IP-level warmup is now largely Elastic Email's problem, not this VPS's** —
+outbound mail leaves from their warm, monitored IP pool, not a fresh VPS
+address, so the old week-by-week IP-ramp schedule tied to this box no longer
+applies here. (That schedule is preserved in §12 for the direct-send escape
+hatch, where it would matter again.)
 
-| Week | Emails/day (per domain) | Focus |
-|------|--------------------------|-------|
-| 1 | 5–10 | Real conversations only — send to colleagues/known contacts, get genuine **replies**. Not cold yet. |
-| 2 | 20–30 | Small, highly-targeted cold batches. Verified addresses only. Watch bounces. |
-| 3 | 40–60 | Expand slightly. Keep open rate > 30%, bounce < 3%. |
-| 4 | 80–100 | Approaching normal volume. Watch spam-complaint rate (< 0.1%). |
-| 5+ | up to 150–200 (cap) | Full volume. **Stay under 100–200/day/domain** — beyond that, add another sending domain/mailbox rather than pushing one harder. |
+What still matters regardless of provider: **domain-level** reputation (as
+opposed to IP reputation) is still earned gradually, and ramping send volume
+up over the first few weeks is still wise practice even on a provider with a
+warm IP pool — a brand-new sending domain with a sudden volume spike still
+reads as suspicious to receiving mailbox providers. Follow Elastic Email's own
+ramp-up guidance for the account/domain if they provide one; where they
+don't, a conservative multi-week ramp (low volume → gradually increasing) is
+still sound practice.
 
-**Hard rules (deliverability guide):**
-- **Bounce rate < 5%** (target < 2%). Above 5% is dangerous — pause and reclean
-  the list. Salescale's verifier is your first line here.
-- **Spread sends across the day** (not a single burst) — burst sending from a
-  cold IP looks like spam. Configure the outreach module to drip.
+**Hard rules (deliverability guide — provider-agnostic, still fully apply):**
+- **Bounce rate < 5%** (target < 2%). Above 5% is dangerous — pause and
+  reclean the list. Salescale's **email-verification gate**
+  (`email_verification.sendable()` — see `CLAUDE.md` Phase 12) already keeps
+  invalid/risky addresses out of every audience, which is the single biggest
+  lever on bounce rate; lean on it regardless of who's sending.
+- **Spread sends across the day** (not a single burst) — burst sending still
+  looks like spam even from a warm provider IP. Configure the outreach module
+  to drip.
 - **Spam complaints < 0.1%.** One-click unsubscribe / honest reply-to-opt-out
   and honoring it immediately keeps this down.
 - **Plain-text, one link max, consistent From: name, physical address +
   unsubscribe** in every mail (CAN-SPAM / GDPR — see the deliverability &
-  legal guidance). The mail server doesn't enforce this; the outreach copy
-  must.
-- Consider a **warmup tool** (Lemwarm, Mailreach, Warmup Inbox) for weeks 1–4
-  to build reputation faster on the new domain.
+  legal guidance). Neither this mail server nor Elastic Email enforces this
+  automatically; the outreach copy must.
 
 **Warmup is failing if:** open rate < 20%, bounce > 3%, or mail lands in
-Gmail's Promotions/Spam. Slow down a step when you see these.
+Gmail's Promotions/Spam. Slow down a step when you see these, regardless of
+which side (Elastic Email's ramp or the agency's own pacing) needs the
+adjustment.
 
 ---
 
@@ -507,13 +585,17 @@ inbound path for this use case — a mis-scored prospect reply vanishing is wors
 than a Junk-folder false positive.
 
 **Backups — the important part.** Back up **`/docker/mailserver/`** on a
-schedule off the box. Priorities:
-1. **`config/opendkim/keys/`** — the DKIM **private keys**. Lose these and you
-   must re-key + re-publish DNS and eat a reputation hit. Also copy the printed
-   public record into the agency's password manager.
+schedule off the box. Priorities (reordered from the old all-in-one setup —
+this box no longer holds DKIM keys by default, since it doesn't sign or
+send):
+1. **`mail-data/`** — the actual mailboxes (received replies). This is the
+   entire reason the box exists now; losing this loses the reply history.
 2. **`config/`** — accounts, passwords (`postfix-accounts.cf`), aliases,
    overrides.
-3. **`mail-data/`** — the actual mailboxes (received replies).
+3. **`config/opendkim/keys/`** — only present/relevant if the direct-send
+   escape hatch (§12) has been activated on this box. If so, treat these DKIM
+   **private keys** as top priority again: losing them means re-keying +
+   re-publishing DNS and eating a reputation hit.
 ```bash
 # Simple nightly tarball to off-box storage (adapt destination):
 sudo tar czf /root/mailserver-$(date +%F).tgz -C /docker mailserver
@@ -539,30 +621,47 @@ a mail server.
 
 ## 11. Connecting Salescale to this mail server
 
-The Salescale backend runs in the **`deploy` compose project**; this mail
-server is the **`mailserver` project** — **different Docker networks**. Two ways
-for the app container to reach it; pick one.
-
-### Recommended: reach it by its public hostname
-
-Enter the mail server's **public FQDN** in Salescale's email-account connect
-form. The container's DNS resolves `mail.atlasreach.io → 2.25.75.95` and the
-connection hairpins back to the box. **This is the clean choice because the TLS
-cert is issued for `mail.atlasreach.io`** (§4) — connecting by that exact name
-means certificate validation passes with no exceptions.
+Salescale's connect form now points **two different providers** at the two
+different legs — Elastic Email for SMTP (sending), this box for IMAP
+(receiving replies). This directly matches the real product UI: the connect
+dialog has a **"Same login as SMTP"** checkbox (checked by default, for the
+common case of one mailbox doing both legs) — for this hybrid setup,
+**uncheck it**, since Elastic Email and this mailbox are different providers
+with different credentials.
 
 **Values to enter in the Salescale connect form:**
 
-| Field | IMAP (read inbox) | SMTP (send) |
-|-------|-------------------|-------------|
-| Host | `mail.atlasreach.io` | `mail.atlasreach.io` |
-| Port | `993` | `587` |
-| Security | **SSL/TLS** (implicit) | **STARTTLS** |
-| Username | `carter@atlasreach.io` | `carter@atlasreach.io` |
-| Password | the mailbox password from §6 | same |
+| Field | SMTP (send — Elastic Email) | IMAP (read inbox — this box) |
+|-------|------------------------------|-------------------------------|
+| Host | `smtp.elasticemail.com` (verify current value in the Elastic Email dashboard) | `mail.atlasreach.io` |
+| Port | `2525` or `587` (both commonly documented for Elastic Email — confirm the current recommended port in their dashboard) | `993` |
+| Security | **STARTTLS** | **SSL/TLS** (implicit) |
+| Username | the Elastic Email account email (get from their dashboard) | `carter@atlasreach.io` |
+| Password | the Elastic Email **API key** (not the account password — get from their dashboard) | the mailbox password from §6 |
 
-(If you standardized on implicit-TLS submission, use SMTP port `465` +
-SSL/TLS instead of 587/STARTTLS.)
+**Do not hardcode the Elastic Email host/port beyond what's noted above as
+"commonly documented"** — confirm the exact current values (hostname, port,
+and whether they recommend STARTTLS on that port) on Elastic Email's own SMTP
+integration/dashboard page before entering them, since providers do change
+these over time.
+
+The mail server this box runs (§4–§10) still needs its TLS cert issued for
+`mail.atlasreach.io` and reachable on 993 for the IMAP leg to work — that part
+of the setup is unchanged from the all-in-one design, just narrower in scope
+(IMAP only, no SMTP submission ports needed — see §7).
+
+The Salescale backend runs in the **`deploy` compose project**; this mail
+server is the **`mailserver` project** — **different Docker networks**. Two ways
+for the app container to reach the IMAP side; pick one.
+
+### Recommended: reach it by its public hostname
+
+Enter the mail server's **public FQDN** in the IMAP fields of Salescale's
+email-account connect form. The container's DNS resolves
+`mail.atlasreach.io → 2.25.75.95` and the connection hairpins back to the
+box. **This is the clean choice because the TLS cert is issued for
+`mail.atlasreach.io`** (§4) — connecting by that exact name means certificate
+validation passes with no exceptions.
 
 **Hairpin-NAT caveat:** a few VPS networks don't route a container's connection
 to the box's own public IP back to itself. If Salescale can't reach
@@ -594,29 +693,81 @@ verify-name of `mail.atlasreach.io` while dialing the container.
 
 ---
 
-## 12. Escape hatch — relay outbound through a provider later
+## 12. Alternative: direct-send from this box instead of a provider
 
-If self-hosted outbound inboxing disappoints at volume (see §0), keep this box
-as the **reply inbox** and switch **sending** to a transactional provider —
-**no code change**, because Salescale's connect form takes any SMTP host:
+This section used to describe switching **away** from self-hosted sending
+**to** a provider. That pivot has already happened (§0) — Elastic Email sends,
+this box only receives. This section now documents the **opposite** fallback:
+how to reactivate direct sending **from this box** if the agency ever wants
+to drop Elastic Email, for example if provider costs, deliverability, or
+control become a problem. The technical pieces are the same ones the old
+all-in-one setup used; they're preserved here rather than deleted, just
+relabeled as the secondary path.
 
-1. Sign up for Amazon SES / Postmark / Mailgun; verify `atlasreach.io`
-   (add **their** SPF include + **their** DKIM CNAME/TXT to the agency DNS,
-   alongside or instead of §2.3/§2.4 — keep From: aligned to `atlasreach.io`).
-2. In Salescale's connect form, change **only the SMTP** side to the provider's
-   host/port/credentials (e.g. `email-smtp.us-east-1.amazonaws.com:587`
-   STARTTLS). Leave **IMAP** pointed at `mail.atlasreach.io:993` so replies
-   still land in this self-hosted inbox.
-3. Warm the provider path per §9 anyway — a provider's shared pool is warmer
-   than a fresh VPS IP, but your *domain* still needs reputation.
+**To reactivate direct-send from this box:**
 
-This hybrid — **provider for send, self-host for receive** — is the most robust
-option and the one to reach for the moment blocklists or Postmaster data show
-the VPS IP dragging deliverability down.
+1. **Generate DKIM on this server** (skipped in §5 for the primary flow):
+   ```bash
+   # Generates a 2048-bit key with selector "mail" for atlasreach.io.
+   docker exec -it mailserver setup config dkim domain atlasreach.io
+
+   # The public key to paste into DNS is printed here:
+   sudo cat /docker/mailserver/config/opendkim/keys/atlasreach.io/mail.txt
+   ```
+   That file contains the exact `mail._domainkey ... v=DKIM1; ... p=...` TXT
+   record — paste the `p=` contents into DNS (shape shown in the old §2.4
+   pattern: `TXT mail._domainkey.atlasreach.io`). Restart to load signing:
+   `docker compose -f docker-compose.mailserver.yml restart mailserver`.
+   The private half sits in `/docker/mailserver/config/opendkim/keys/` —
+   back it up (§10) once this is active.
+
+2. **Publish SPF for this box directly** instead of (or alongside) Elastic
+   Email's include: `v=spf1 mx -all` on the sending domain — see the
+   reasoning in the old §2.3 pattern (only one SPF record per domain; merge
+   sources rather than publishing two).
+
+3. **Unblock outbound port 25.** Many Hostinger VPS plans block outbound port
+   25 by default. Request an unblock via a **support ticket** ("please
+   unblock outbound SMTP / port 25 on VPS `2.25.75.95` for a legitimate,
+   authenticated mail server with SPF/DKIM/DMARC/rDNS configured"). Until 25
+   is open outbound, this box cannot deliver to other mail servers.
+
+4. **Open the submission ports** in `ufw` (§7): `587/tcp` (STARTTLS) and,
+   if used, `465/tcp` (implicit TLS).
+
+5. **Set PTR/reverse DNS properly** (§2.6) — this matters much more once the
+   box sends outbound; get Hostinger to point the PTR for `2.25.75.95` at
+   `mail.atlasreach.io`.
+
+6. **Point Salescale's SMTP field back at this box** (`mail.atlasreach.io`,
+   port 587 STARTTLS or 465 implicit-TLS, mailbox credentials from §6) — no
+   code change needed, same as switching providers is a config-only change.
+
+7. **Re-run the IP/domain warmup schedule** — a fresh VPS IP sending directly
+   has zero reputation, unlike Elastic Email's warm pool:
+
+   | Week | Emails/day (per domain) | Focus |
+   |------|--------------------------|-------|
+   | 1 | 5–10 | Real conversations only — send to colleagues/known contacts, get genuine **replies**. Not cold yet. |
+   | 2 | 20–30 | Small, highly-targeted cold batches. Verified addresses only. Watch bounces. |
+   | 3 | 40–60 | Expand slightly. Keep open rate > 30%, bounce < 3%. |
+   | 4 | 80–100 | Approaching normal volume. Watch spam-complaint rate (< 0.1%). |
+   | 5+ | up to 150–200 (cap) | Full volume. **Stay under 100–200/day/domain** — beyond that, add another sending domain/mailbox rather than pushing one harder. |
+
+   Consider a warmup tool (Lemwarm, Mailreach, Warmup Inbox) for weeks 1-4.
+   The hard rules in §9 (bounce < 5%, spam complaints < 0.1%, plain-text +
+   unsubscribe) apply here exactly as they do under Elastic Email.
+
+If direct-send disappoints again after activating this, reverse steps 2-7 and
+fall back to Elastic Email (§0) — this really is a config change either
+direction, not a code change, since Salescale's connect form takes any SMTP
+host.
 
 ---
 
 ## Quick reference
+
+Primary architecture: **Elastic Email sends, this box only receives.**
 
 ```bash
 # Bring up / status / logs  (always -f the mailserver file; never bare compose)
@@ -628,14 +779,24 @@ docker compose -f docker-compose.mailserver.yml logs mailserver --tail 100
 # Management CLI
 docker exec -it mailserver setup email add user@atlasreach.io
 docker exec -it mailserver setup email list
-docker exec -it mailserver setup config dkim domain atlasreach.io
 docker exec -it mailserver setup fail2ban
 
-# DKIM public record to paste into DNS
-sudo cat /docker/mailserver/config/opendkim/keys/atlasreach.io/mail.txt
+# DKIM config/keygen is NOT part of the primary flow (§2.4, §5) — only
+# needed for the direct-send escape hatch (§12):
+# docker exec -it mailserver setup config dkim domain atlasreach.io
+# sudo cat /docker/mailserver/config/opendkim/keys/atlasreach.io/mail.txt
 ```
 
-Ports: **25** (MX in / relay out) · **587** (submission, Salescale sends) ·
-**993** (IMAPS, Salescale reads) · **465** (submission implicit-TLS, optional).
-Salescale connect: IMAP `mail.atlasreach.io:993` SSL · SMTP
-`mail.atlasreach.io:587` STARTTLS · user `carter@atlasreach.io`.
+Ports: **25** (MX in — replies route here) · **993** (IMAPS, Salescale reads
+replies here). 587/465 are **not** opened in the primary setup — Salescale
+sends via Elastic Email, not this box (only needed if the §12 escape hatch is
+activated).
+
+Salescale connect:
+- **SMTP (send):** Elastic Email — host `smtp.elasticemail.com`, port `2525`
+  or `587` (verify current values in the Elastic Email dashboard), STARTTLS,
+  username = Elastic Email account email, password = Elastic Email API key.
+- **IMAP (receive):** `mail.atlasreach.io:993` SSL/TLS, user
+  `carter@atlasreach.io`, password = the mailbox password from §6.
+- Uncheck **"Same login as SMTP"** in the connect form — these are two
+  different providers with two different credential sets.

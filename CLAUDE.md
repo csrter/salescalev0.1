@@ -422,6 +422,34 @@ live activation + the entitlement flip, the Outreach module build
       NOT deployed yet — build + verification done this session; the
       real VPS mail server (deploy/MAILSERVER.md) still needs setting up
       before a live campaign can actually send.
+- [x] VPS mail server bring-up (receive leg, LIVE): docker-mailserver
+      14.0.0 running on the VPS as the isolated "mailserver" compose
+      project, hosting carter@mail.atlasreach.io — receive-only; sending
+      goes through the org's ESP (Elastic Email for Atlas Reach).
+      Verified end-to-end: external SMTP→port 25→Rspamd→Dovecot INBOX,
+      then read back over external IMAPS 993 with the real LE cert.
+      Hard-won specifics (all in deploy/MAILSERVER.md + compose
+      comments): TLS comes from the pre-existing Traefik's acme.json —
+      a mail-cert-helper whoami router in docker-compose.traefik.yml
+      triggers issuance, and ONLY the acme.json FILE may be bind-mounted
+      :ro (DMS writes extracted certs to /etc/letsencrypt/live/);
+      hostname==mail domain puts the host in $mydestination and 550s
+      every virtual mailbox — config/user-patches.sh (the guaranteed
+      end-of-boot hook; a postfix-main.cf override alone did NOT apply)
+      pins mydestination to localhost only, verified persistent across
+      recreate; ENABLE_AMAVIS/SPAMASSASSIN must be 0 — the DMS default
+      runs them alongside Rspamd and Amavis quarantines-and-BOUNCES
+      inbound mail (observed live on a header check; bouncing prospect
+      replies is the one unacceptable failure mode), Rspamd tags-to-Junk
+      instead; POSTMASTER_ADDRESS points at the hosted mailbox, never
+      the bare domain (Porkbun forwarder bounces). Postfix rejects
+      null-MX sender domains — test with a real sender domain.
+      Bare-domain MX stays Porkbun forwarding forever; only the mail.*
+      subdomain is this box's. Remaining, user-side: Porkbun MX record
+      for the mail subdomain, Elastic Email domain verification (merge
+      SPF include into the EXISTING bare-domain TXT — a second SPF
+      record is a permerror), then connect the mailbox in Salescale
+      (needs the cold-email module deployed to prod first).
 - [ ] Stripe live activation + entitlement flip (after 12–14, so real
       limits land everywhere in one pass)
 - [ ] Outreach module build (dev-mode) — go-live gated on Meta App
