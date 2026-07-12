@@ -30,6 +30,21 @@ services:
     restart: unless-stopped
     expose:
       - "8000"
+    # Join the mailserver's compose network IN ADDITION to this project's
+    # default. The cold-email module's IMAP sync reads the org mailbox on
+    # mail.atlasreach.io:993 — that host resolves to the VPS's PUBLIC IP, and
+    # a container connecting back to its own host's public IP hits Docker's
+    # hairpin-NAT limitation and hangs until timeout (verified live: DNS
+    # resolves instantly, the TCP connect never completes). Being on the
+    # mailserver network lets Docker's embedded DNS resolve mail.atlasreach.io
+    # to the mailserver container's INTERNAL IP (172.18.x) instead, so the
+    # IMAP connection is a direct container-to-container hop. This does NOT
+    # expose the mailserver to anything new — only our own backend reaches it,
+    # the same auth still applies. The mailserver stack stays a separate
+    # compose project; we only attach to its already-existing network.
+    networks:
+      - default
+      - mailserver
     labels:
       - traefik.enable=true
       - traefik.http.routers.salescale-api.rule=Host(`${API_DOMAIN}`)
@@ -67,3 +82,13 @@ services:
       - traefik.http.routers.mailcert.entrypoints=websecure
       - traefik.http.routers.mailcert.tls.certresolver=letsencrypt
       - traefik.http.services.mailcert.loadbalancer.server.port=80
+
+# `default` is this project's own bridge (deploy_default), created implicitly.
+# `mailserver` is the docker-mailserver compose project's network, declared
+# external so we ATTACH to it rather than manage it — see the backend service's
+# `networks:` block above for why the IMAP path needs it.
+networks:
+  default:
+  mailserver:
+    external: true
+    name: mailserver_default
