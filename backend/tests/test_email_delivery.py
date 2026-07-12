@@ -64,3 +64,81 @@ def test_send_email_dev_mode_logs_not_delivered(seeded):
     assert entry.delivered is False
     db.rollback()
     db.close()
+
+
+def test_branded_sender_failure_falls_back_to_platform_default(monkeypatch, seeded):
+    """A misconfigured/unverified custom domain must not lock an org's own
+    account-lifecycle mail (2FA, reset, verification, invites) out entirely —
+    the second attempt with the platform default sender is what saves it."""
+    monkeypatch.setattr(get_settings(), "resend_api_key", "re_test")
+    db = SessionLocal()
+    org = db.query(Organization).first()
+    org.branding = {
+        **(org.branding or {}),
+        "email_from_name": "Custom Sender",
+        "email_from_address": "sales@unverified-domain.example",
+    }
+    db.commit()
+
+    attempts = []
+
+    def fake_send(api_key, from_name, from_address, to_address, subject, body, html=None):
+        attempts.append(from_address)
+        return from_address == get_settings().email_default_from_address
+
+    monkeypatch.setattr(email_mod, "_send_via_resend", fake_send)
+    entry = email_mod.send_email(db, org, "x@y.com", "Subject", "Body")
+
+    assert attempts == [
+        "sales@unverified-domain.example",
+        get_settings().email_default_from_address,
+    ]
+    assert entry.delivered is True
+    assert entry.from_address == get_settings().email_default_from_address
+    db.rollback()
+    db.close()
+
+
+def test_branded_sender_success_never_falls_back(monkeypatch, seeded):
+    monkeypatch.setattr(get_settings(), "resend_api_key", "re_test")
+    db = SessionLocal()
+    org = db.query(Organization).first()
+    org.branding = {
+        **(org.branding or {}),
+        "email_from_name": "Custom Sender",
+        "email_from_address": "sales@verified-domain.example",
+    }
+    db.commit()
+
+    attempts = []
+    monkeypatch.setattr(
+        email_mod,
+        "_send_via_resend",
+        lambda *a, **k: attempts.append(a) or True,
+    )
+    entry = email_mod.send_email(db, org, "x@y.com", "Subject", "Body")
+
+    assert len(attempts) == 1  # no retry when the branded sender works
+    assert entry.delivered is True
+    assert entry.from_address == "sales@verified-domain.example"
+    db.rollback()
+    db.close()
+
+
+def test_both_senders_failing_is_still_logged_undelivered(monkeypatch, seeded):
+    monkeypatch.setattr(get_settings(), "resend_api_key", "re_test")
+    db = SessionLocal()
+    org = db.query(Organization).first()
+    org.branding = {
+        **(org.branding or {}),
+        "email_from_name": "Custom Sender",
+        "email_from_address": "sales@unverified-domain.example",
+    }
+    db.commit()
+
+    monkeypatch.setattr(email_mod, "_send_via_resend", lambda *a, **k: False)
+    entry = email_mod.send_email(db, org, "x@y.com", "Subject", "Body")
+
+    assert entry.delivered is False
+    db.rollback()
+    db.close()

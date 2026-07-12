@@ -95,6 +95,21 @@ def resolve_sender(org: Organization) -> Tuple[str, str]:
     return (settings.email_default_from_name, settings.email_default_from_address)
 
 
+def _attempt_delivery(
+    settings, from_name: str, from_address: str, to_address: str,
+    subject: str, body: str, html: str | None,
+) -> bool:
+    if settings.resend_api_key:
+        return _send_via_resend(
+            settings.resend_api_key, from_name, from_address, to_address, subject, body, html
+        )
+    if settings.smtp_host:
+        return _send_via_smtp(
+            settings, from_name, from_address, to_address, subject, body, html
+        )
+    return False
+
+
 def send_email(
     db: Session,
     org: Organization,
@@ -106,21 +121,30 @@ def send_email(
     """Compose, (maybe) deliver, and always log. Never raises on transport
     failure — email is a side effect, not a request outcome; the log row
     records whether delivery happened. `body` is the plain-text part; `html`
-    (optional) is the rich version."""
+    (optional) is the rich version.
+
+    Every caller of this function is account-lifecycle mail (2FA codes,
+    password resets, email verification, team invites) — never a
+    client-facing branded surface, so there's no white-label reason to let a
+    misconfigured custom sender lock someone out. If the Organization's
+    resolved (branded) sender fails to deliver, retry ONCE with the platform
+    default sender rather than dropping mail the recipient needs to get into
+    their own account. The EmailLog records whichever sender actually
+    delivered, not just what was first attempted."""
     settings = get_settings()
     from_name, from_address = resolve_sender(org)
 
-    # Resend is preferred; SMTP is the fallback; neither configured = dev mode
-    # (composed and logged, not delivered).
-    delivered = False
-    if settings.resend_api_key:
-        delivered = _send_via_resend(
-            settings.resend_api_key, from_name, from_address, to_address, subject, body, html
+    delivered = _attempt_delivery(settings, from_name, from_address, to_address, subject, body, html)
+
+    if not delivered and from_address != settings.email_default_from_address:
+        log.warning(
+            "branded sender %s failed for org %s (%s) — retrying with the "
+            "platform default sender",
+            from_address, org.id, subject,
         )
-    elif settings.smtp_host:
-        delivered = _send_via_smtp(
-            settings, from_name, from_address, to_address, subject, body, html
-        )
+        from_name = settings.email_default_from_name
+        from_address = settings.email_default_from_address
+        delivered = _attempt_delivery(settings, from_name, from_address, to_address, subject, body, html)
 
     entry = EmailLog(
         organization_id=org.id,
