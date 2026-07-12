@@ -11,6 +11,7 @@ _scoped_get pattern (404-not-403).
 """
 
 import datetime as dt
+import secrets
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -82,6 +83,10 @@ def _account_out(db: Session, a: SmsAccount) -> dict:
         "error_detail": a.error_detail,
         "daily_send_cap": a.daily_send_cap,
         "sends_today": sms_send.sends_today(db, a),
+        # Webhook-URL secret for unsigned-webhook providers — the org admin
+        # pastes the tokened URL into the provider dashboard, so it must be
+        # readable here (admin/team-gated routes only).
+        "webhook_token": a.webhook_token,
         "created_at": a.created_at.isoformat(),
     }
 
@@ -91,7 +96,10 @@ def _account_out(db: Session, a: SmsAccount) -> dict:
 
 class AccountIn(BaseModel):
     name: str = Field(min_length=1, max_length=200)
-    account_sid: str = Field(min_length=10, max_length=64)
+    # twilio: account_sid = Account SID, auth_token = Auth Token.
+    # sendblue: account_sid = API Key ID, auth_token = API Secret Key.
+    provider: str = Field(default="twilio", pattern="^(twilio|sendblue)$")
+    account_sid: str = Field(min_length=8, max_length=64)
     auth_token: str = Field(min_length=8, max_length=200)
     from_number: Optional[str] = Field(default=None, max_length=20)
     messaging_service_sid: Optional[str] = Field(default=None, max_length=64)
@@ -127,18 +135,30 @@ def create_account(
     scope: TenantScope = Depends(get_scope),
     db: Session = Depends(get_db),
 ):
-    if not body.from_number and not body.messaging_service_sid:
+    if body.provider == "sendblue":
+        if not body.from_number:
+            raise HTTPException(422, "Provide your Sendblue sending number.")
+        if body.messaging_service_sid:
+            raise HTTPException(
+                422, "Messaging Service SID is a Twilio concept — not used "
+                "with Sendblue."
+            )
+    elif not body.from_number and not body.messaging_service_sid:
         raise HTTPException(
             422, "Provide a from number or a Messaging Service SID."
         )
     account = SmsAccount(
         organization_id=scope.organization_id,
         name=body.name.strip(),
+        provider=body.provider,
         account_sid=body.account_sid.strip(),
         auth_token_encrypted=encrypt_secret(body.auth_token.strip()),
         from_number=sms_consent.normalize_phone(body.from_number),
         messaging_service_sid=(body.messaging_service_sid or "").strip() or None,
         daily_send_cap=body.daily_send_cap,
+        # URL secret for unsigned-webhook providers (Sendblue); minted for
+        # every account so a later provider switch never leaves a gap.
+        webhook_token=secrets.token_urlsafe(24),
     )
     ok, detail = sms_send.verify_credentials(account)
     account.status = SMS_ACCOUNT_ACTIVE if ok else SMS_ACCOUNT_ERROR

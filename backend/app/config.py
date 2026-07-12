@@ -169,6 +169,10 @@ class Settings(BaseSettings):
     # must match what's registered with Google/Meta.
     api_base_url: str = "http://localhost:8000"
 
+    # Sendblue REST base (SMS provider). Their v1 docs use .co, v2 uses .com;
+    # override if an org's account lives on the other host.
+    sendblue_base_url: str = "https://api.sendblue.co"
+
     # Social login. Reuses the ad OAuth apps by default; override per-provider
     # if you register separate apps for sign-in.
     google_login_client_id: str = ""

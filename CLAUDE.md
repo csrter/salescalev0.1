@@ -806,6 +806,41 @@ live activation + the entitlement flip, the Outreach module build
       the org's Twilio account connected in SMS → Accounts, A2P 10DLC brand +
       campaign registration in the Twilio console, and the per-account inbound
       webhook URL pasted into the Twilio number config (required for STOP).
+- [x] SMS second provider — Sendblue (iMessage/SMS): the SMS module is now
+      multi-provider via an adapter seam. SmsAccount.provider
+      ("twilio"|"sendblue") selects the transport; sms_send._provider_send /
+      verify_credentials dispatch on it (_sendblue_send POSTs
+      api.sendblue.co/api/send-message with sb-api-key-id / sb-api-secret-key
+      headers — for Sendblue account_sid holds the API Key ID and the
+      encrypted token holds the API Secret Key; _verify_sendblue probes GET
+      /api/evaluate-service). Sendblue returns 2xx with the message object
+      even on some failures, so the message's own status/error_code is the
+      source of truth (ERROR/DECLINED or nonzero error_code → failed).
+      Sendblue's webhooks carry NO documented signature header, so
+      authenticity uses a per-account webhook_token (secrets.token_urlsafe,
+      new column, migration f3c7d9e2a1b5 edited in place — safe since SMS was
+      never deployed) in dedicated URL routes
+      (/api/sms/webhooks/sendblue/inbound|status/{account_id}/{token},
+      hmac.compare_digest); Twilio routes keep X-Twilio-Signature. Inbound/
+      status handling refactored into provider-agnostic helpers
+      (_process_inbound/_apply_status). Sendblue has no 21610 equivalent and
+      no auto-STOP, so our STOP-keyword parse + opted_out-flag handling honors
+      opt-outs; a status callback reporting opted_out also converges the
+      suppression ledger. sendblue_base_url is env-overridable (docs show both
+      .co and .com). Frontend: connect dialog gained a provider Segmented
+      selector (create-time) that relabels fields (API Key ID / API Secret
+      Key), hides Messaging Service SID, requires the Sendblue number, swaps
+      the A2P warning for a Sendblue consent note; account cards show a
+      provider badge + the correct tokened webhook URLs; smsWebhookUrls is
+      provider-aware. Tests 379 → 385 (5 Sendblue cases). Verified live on
+      alt2 (provider selector flips the dialog to "Connect Sendblue" with
+      relabeled fields). NOT deployed (ships with the SMS module).
+- [x] Bug fix (found by the SMS engine agent mirroring email_campaigns):
+      email_campaigns._next_valid_send_time returned the stale original
+      `after` in its in-window branch instead of the loop's advanced day —
+      invisible when send_window_start > 0 (default) but with start == 0 could
+      schedule a send on a disallowed day. Fixed + regression test. The SMS
+      copy shipped already-fixed.
 - [ ] Stripe live activation + entitlement flip (after 12–14, so real
       limits land everywhere in one pass)
 - [ ] Outreach module build (dev-mode) — go-live gated on Meta App

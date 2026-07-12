@@ -50,6 +50,7 @@ import {
   type SmsEnrollReceipt,
   type SmsMessage,
   type SmsPickContact,
+  type SmsProvider,
   type SmsStep,
   type SmsSuppression,
   type SmsUsage,
@@ -1616,32 +1617,36 @@ function AccountsPanel({
     <div>
       <div className="sms-head">
         <p className="sms-sub">
-          BYO Twilio numbers or Messaging Service. Every number that sends
-          real cold outreach needs A2P 10DLC brand + campaign registration
-          with Twilio — unregistered numbers get filtered or blocked by
-          carriers.
+          Connect your own Twilio (SMS) or Sendblue (iMessage/SMS) account.
+          Twilio long codes need A2P 10DLC brand + campaign registration —
+          unregistered numbers get filtered or blocked by carriers.
         </p>
         <Button variant="primary" onClick={() => setConnecting(true)}>
           <Plus size={16} />
-          Connect Twilio
+          Connect a number
         </Button>
       </div>
 
       {accounts.length === 0 ? (
         <GlassCard>
           <EmptyState title="No numbers connected">
-            Connect a Twilio account to start sending SMS outreach.
+            Connect a Twilio or Sendblue account to start sending SMS outreach.
           </EmptyState>
         </GlassCard>
       ) : (
         <div className="sms-account-grid">
           {accounts.map((a) => {
-            const webhooks = smsWebhookUrls(a.id);
+            const webhooks = smsWebhookUrls(a);
             return (
               <GlassCard key={a.id} className="sms-account">
                 <div className="sms-account-top">
                   <div>
-                    <div className="sms-account-name">{a.name}</div>
+                    <div className="sms-account-name">
+                      {a.name}{" "}
+                      <Badge tone="neutral">
+                        {a.provider === "sendblue" ? "Sendblue" : "Twilio"}
+                      </Badge>
+                    </div>
                     <div className="sms-account-number">
                       {a.from_number || a.messaging_service_sid || "—"}
                     </div>
@@ -1663,10 +1668,19 @@ function AccountsPanel({
 
                 <div className="sms-webhooks">
                   <p className="sms-hint">
-                    Paste these into this number's (or Messaging Service's)
-                    Twilio configuration. <strong>Inbound is required</strong>{" "}
-                    — without it, STOP/HELP replies never reach us and
-                    opt-outs can't be honored.
+                    {a.provider === "sendblue" ? (
+                      <>
+                        Add these as webhooks in your Sendblue dashboard (the
+                        URL already carries this account's secret token).
+                      </>
+                    ) : (
+                      <>
+                        Paste these into this number's (or Messaging Service's)
+                        Twilio configuration.
+                      </>
+                    )}{" "}
+                    <strong>Inbound is required</strong> — without it, STOP/HELP
+                    replies never reach us and opt-outs can't be honored.
                   </p>
                   <WebhookRow label="Inbound" url={webhooks.inbound} />
                   <WebhookRow label="Status" url={webhooks.status} />
@@ -1767,6 +1781,9 @@ function AccountDialog({
   onSaved: () => void;
 }) {
   const toast = useToast();
+  const [provider, setProvider] = useState<SmsProvider>(
+    existing?.provider ?? "twilio",
+  );
   const [name, setName] = useState(existing?.name ?? "");
   const [accountSid, setAccountSid] = useState(existing?.account_sid ?? "");
   const [authToken, setAuthToken] = useState("");
@@ -1780,25 +1797,36 @@ function AccountDialog({
   const [busy, setBusy] = useState(false);
 
   const isEdit = Boolean(existing);
+  const isSendblue = provider === "sendblue";
+  // Provider changes only at create time; editing keeps the stored provider.
+  const sidLabel = isSendblue ? "API Key ID" : "Account SID";
+  const secretLabel = isSendblue ? "API Secret Key" : "Auth token";
 
   const save = async () => {
     if (!name.trim() || !accountSid.trim()) {
-      toast("Name and Account SID are required", "error");
+      toast(`Name and ${sidLabel} are required`, "error");
       return;
     }
-    if (!fromNumber.trim() && !messagingServiceSid.trim()) {
+    if (isSendblue) {
+      if (!fromNumber.trim()) {
+        toast("A Sendblue sending number is required", "error");
+        return;
+      }
+    } else if (!fromNumber.trim() && !messagingServiceSid.trim()) {
       toast("Provide a from number or a Messaging Service SID", "error");
       return;
     }
     if (!isEdit && !authToken) {
-      toast("An auth token is required to connect", "error");
+      toast(`A ${secretLabel} is required to connect`, "error");
       return;
     }
     const base: SmsAccountBody = {
       name: name.trim(),
       account_sid: accountSid.trim(),
       from_number: fromNumber.trim() || null,
-      messaging_service_sid: messagingServiceSid.trim() || null,
+      messaging_service_sid: isSendblue
+        ? null
+        : messagingServiceSid.trim() || null,
       daily_send_cap: Number(dailyCap),
     };
     if (authToken) base.auth_token = authToken;
@@ -1808,6 +1836,7 @@ function AccountDialog({
       else
         await createSmsAccount({
           ...base,
+          provider,
           name: name.trim(),
           account_sid: accountSid.trim(),
           auth_token: authToken,
@@ -1815,7 +1844,7 @@ function AccountDialog({
       toast(isEdit ? "Number updated" : "Number connected", "ok");
       onSaved();
     } catch (e) {
-      // 400 detail on a failed Twilio auth probe — surface verbatim.
+      // 400 detail on a failed provider auth probe — surface verbatim.
       toast(e instanceof Error ? e.message : "Could not connect", "error");
     } finally {
       setBusy(false);
@@ -1828,7 +1857,11 @@ function AccountDialog({
       onClose={onClose}
       closeOnScrim={false}
       size="lg"
-      title={isEdit ? `Edit ${existing!.name}` : "Connect Twilio"}
+      title={
+        isEdit
+          ? `Edit ${existing!.name}`
+          : `Connect ${isSendblue ? "Sendblue" : "Twilio"}`
+      }
       footer={
         <>
           <Button variant="ghost" onClick={onClose}>
@@ -1841,19 +1874,31 @@ function AccountDialog({
       }
     >
       <div className="sms-form">
+        {!isEdit && (
+          <Field label="Provider">
+            <Segmented
+              options={[
+                { value: "twilio", label: "Twilio (SMS)" },
+                { value: "sendblue", label: "Sendblue (iMessage/SMS)" },
+              ]}
+              value={provider}
+              onChange={(v) => setProvider(v as SmsProvider)}
+            />
+          </Field>
+        )}
         <Field label="Label">
           <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Atlas primary" />
         </Field>
-        <Field label="Account SID">
+        <Field label={sidLabel}>
           <input
             value={accountSid}
             onChange={(e) => setAccountSid(e.target.value)}
-            placeholder="ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+            placeholder={isSendblue ? "your Sendblue API Key ID" : "ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"}
           />
         </Field>
         <Field
-          label="Auth token"
-          description={isEdit ? "Leave blank to keep the current token." : undefined}
+          label={secretLabel}
+          description={isEdit ? "Leave blank to keep the current secret." : undefined}
         >
           <input
             type="password"
@@ -1866,22 +1911,32 @@ function AccountDialog({
         <div className="sms-fieldset">
           <span className="field-label">Send from</span>
           <div className="sms-form-row">
-            <Field label="From number" description="A Twilio phone number in E.164 format." optional>
+            <Field
+              label={isSendblue ? "Sendblue number" : "From number"}
+              description="A sending number in E.164 format."
+              optional={!isSendblue}
+            >
               <input
                 value={fromNumber}
                 onChange={(e) => setFromNumber(e.target.value)}
                 placeholder="+15555550123"
               />
             </Field>
-            <Field label="Messaging Service SID" optional>
-              <input
-                value={messagingServiceSid}
-                onChange={(e) => setMessagingServiceSid(e.target.value)}
-                placeholder="MGxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
-              />
-            </Field>
+            {!isSendblue && (
+              <Field label="Messaging Service SID" optional>
+                <input
+                  value={messagingServiceSid}
+                  onChange={(e) => setMessagingServiceSid(e.target.value)}
+                  placeholder="MGxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+                />
+              </Field>
+            )}
           </div>
-          <p className="sms-hint">Provide either a from number or a Messaging Service SID.</p>
+          <p className="sms-hint">
+            {isSendblue
+              ? "Sendblue assigns you a dedicated number — enter it here."
+              : "Provide either a from number or a Messaging Service SID."}
+          </p>
         </div>
 
         <Field label="Daily send cap" optional>
@@ -1893,12 +1948,21 @@ function AccountDialog({
           />
         </Field>
 
-        <Alert tone="warn" title="A2P 10DLC registration required">
-          Carriers filter or block unregistered traffic on long-code numbers.
-          Register a Brand and Campaign for this number in the Twilio Console
-          (Messaging → Regulatory Compliance → A2P 10DLC) before sending real
-          outreach volume — this can take a few business days for approval.
-        </Alert>
+        {isSendblue ? (
+          <Alert tone="warn" title="Consent still required">
+            Sendblue sends over iMessage/SMS and does not auto-handle STOP —
+            Salescale records opt-outs from inbound replies, so the inbound
+            webhook below is mandatory. TCPA consent rules apply exactly as
+            they do for SMS: only opted-in contacts are ever messaged.
+          </Alert>
+        ) : (
+          <Alert tone="warn" title="A2P 10DLC registration required">
+            Carriers filter or block unregistered traffic on long-code numbers.
+            Register a Brand and Campaign for this number in the Twilio Console
+            (Messaging → Regulatory Compliance → A2P 10DLC) before sending real
+            outreach volume — this can take a few business days for approval.
+          </Alert>
+        )}
       </div>
     </Dialog>
   );

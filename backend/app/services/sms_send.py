@@ -64,6 +64,15 @@ OUTSIDE_WINDOW = "window"
 _TWILIO_OPTED_OUT_CODE = "21610"
 _STOP_FOOTER = "Reply STOP to opt out"
 
+# Sendblue REST base. Their v1 docs show api.sendblue.co and the v2 overview
+# shows api.sendblue.com; .co is the one the send-message reference documents,
+# so it's the default — overridable via env if an org's account is on the
+# other host. (Both accept the same sb-api-key-id / sb-api-secret-key auth.)
+_SENDBLUE_BASE = "https://api.sendblue.co"
+# Sendblue message.status values that mean the send did not succeed. Their
+# docs: "any error_code besides 0 or null is a failure."
+_SENDBLUE_FAIL_STATUSES = {"ERROR", "DECLINED"}
+
 
 class SmsProviderError(Exception):
     """Network/API failure talking to the SMS provider — never a bare 500."""
@@ -178,9 +187,101 @@ def _twilio_send(
     return "", code, detail
 
 
-def verify_credentials(account: SmsAccount) -> Tuple[bool, str]:
-    """Cheap credential probe: GET the Account resource. Returns (ok, detail).
-    Never raises — used by the connect/test endpoint."""
+# --- Sendblue transport (iMessage/SMS; thin httpx client, BYO credentials) ---
+
+
+def _sendblue_headers(account: SmsAccount) -> dict:
+    return {
+        "sb-api-key-id": account.account_sid,
+        "sb-api-secret-key": decrypt_secret(account.auth_token_encrypted or ""),
+        "Content-Type": "application/json",
+    }
+
+
+def _sendblue_send(
+    account: SmsAccount, to_number: str, body: str
+) -> Tuple[str, Optional[str], Optional[str]]:
+    """One POST /api/send-message. Returns (message_handle, error_code,
+    error_detail). Sendblue returns 2xx with the message object even for some
+    provider-side failures, so the message's own status/error_code is the
+    source of truth, not just the HTTP code. Raises SmsProviderError on a
+    network-level failure."""
+    base = (get_settings().sendblue_base_url or _SENDBLUE_BASE).rstrip("/")
+    data = {
+        "number": to_number,
+        "content": body,
+        "from_number": account.from_number or "",
+    }
+    api_base = (get_settings().api_base_url or "").rstrip("/")
+    if api_base and not api_base.startswith("http://localhost") and account.webhook_token:
+        # Sendblue's webhooks carry no documented signature header, so the
+        # per-account token in the URL path is the authenticity check.
+        data["status_callback"] = (
+            f"{api_base}/api/sms/webhooks/sendblue/status/"
+            f"{account.id}/{account.webhook_token}"
+        )
+    try:
+        resp = httpx.post(
+            f"{base}/api/send-message",
+            json=data,
+            headers=_sendblue_headers(account),
+            timeout=15,
+        )
+    except httpx.HTTPError as e:
+        raise SmsProviderError(f"Sendblue is unreachable: {e}")
+    payload = {}
+    try:
+        payload = resp.json()
+    except Exception:
+        pass
+    if resp.status_code // 100 != 2:
+        code = str(payload.get("error_code") or resp.status_code)
+        detail = payload.get("error_message") or f"Sendblue HTTP {resp.status_code}"
+        return "", code, detail
+    # 2xx: trust the message object's own status/error_code.
+    err_code = payload.get("error_code")
+    status = (payload.get("status") or "").upper()
+    if (err_code not in (0, None, "0")) or status in _SENDBLUE_FAIL_STATUSES:
+        return (
+            payload.get("message_handle", ""),
+            str(err_code or status or "error"),
+            payload.get("error_message") or f"Sendblue status {status}",
+        )
+    return payload.get("message_handle", ""), None, None
+
+
+def _verify_sendblue(account: SmsAccount) -> Tuple[bool, str]:
+    """Cheap authenticated probe — the iMessage service lookup against the
+    account's own sending number requires valid credentials and is rate-limit
+    cheap."""
+    base = (get_settings().sendblue_base_url or _SENDBLUE_BASE).rstrip("/")
+    number = account.from_number or "+15555550100"
+    try:
+        resp = httpx.get(
+            f"{base}/api/evaluate-service",
+            params={"number": number},
+            headers=_sendblue_headers(account),
+            timeout=15,
+        )
+    except httpx.HTTPError as e:
+        return False, f"Sendblue is unreachable: {e}"
+    if resp.status_code // 100 == 2:
+        return True, "ok"
+    if resp.status_code in (401, 403):
+        return False, "Sendblue rejected the API Key ID / Secret Key."
+    return False, f"Sendblue HTTP {resp.status_code}"
+
+
+def _provider_send(
+    account: SmsAccount, to_number: str, body: str
+) -> Tuple[str, Optional[str], Optional[str]]:
+    if account.provider == "sendblue":
+        return _sendblue_send(account, to_number, body)
+    return _twilio_send(account, to_number, body)
+
+
+def _verify_twilio(account: SmsAccount) -> Tuple[bool, str]:
+    """Cheap credential probe: GET the Account resource."""
     auth_token = decrypt_secret(account.auth_token_encrypted or "")
     try:
         resp = httpx.get(
@@ -195,6 +296,14 @@ def verify_credentials(account: SmsAccount) -> Tuple[bool, str]:
     if resp.status_code == 401:
         return False, "Twilio rejected the Account SID / Auth Token."
     return False, f"Twilio HTTP {resp.status_code}"
+
+
+def verify_credentials(account: SmsAccount) -> Tuple[bool, str]:
+    """Provider-dispatched credential probe. Returns (ok, detail). Never
+    raises — used by the connect/test endpoint."""
+    if account.provider == "sendblue":
+        return _verify_sendblue(account)
+    return _verify_twilio(account)
 
 
 # --- THE gateway ---
@@ -253,7 +362,7 @@ def send(
         body=final_body,
     )
     try:
-        sid, error_code, error_detail = _twilio_send(account, to_number, final_body)
+        sid, error_code, error_detail = _provider_send(account, to_number, final_body)
     except SmsProviderError as e:
         row.status = SMS_MSG_FAILED
         row.error_detail = str(e)
@@ -270,15 +379,30 @@ def send(
     row.error_code = error_code
     row.error_detail = error_detail
     db.add(row)
-    if error_code == _TWILIO_OPTED_OUT_CODE:
-        # Twilio knows this number opted out (Advanced Opt-Out) — converge
-        # our ledger with theirs so we never retry it.
+    if _is_opted_out_error(account, error_code, error_detail):
+        # The provider knows this number opted out — converge our suppression
+        # ledger with theirs so we never retry it (Twilio 21610 via Advanced
+        # Opt-Out; Sendblue surfaces it in the error text / opted_out flag).
         sms_consent.record_opt_out(
             db,
             account.organization_id,
             to_number,
             SMS_SUPPRESS_CARRIER,
-            detail="Twilio 21610 — recipient opted out at the carrier level",
+            detail=f"{account.provider}: recipient opted out at the provider "
+            f"({error_code})",
         )
     db.flush()
     return FAILED, row
+
+
+def _is_opted_out_error(
+    account: SmsAccount, error_code: Optional[str], error_detail: Optional[str]
+) -> bool:
+    """Whether a provider send-failure means 'this recipient opted out'.
+    Twilio has the explicit 21610 code; Sendblue has no documented equivalent
+    code, so fall back to matching the opt-out language in its error text."""
+    if account.provider == "sendblue":
+        return "opt" in (error_detail or "").lower() and "out" in (
+            error_detail or ""
+        ).lower()
+    return error_code == _TWILIO_OPTED_OUT_CODE

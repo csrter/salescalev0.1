@@ -17,6 +17,7 @@ import base64
 import hashlib
 import hmac
 import logging
+from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import Response
@@ -100,6 +101,101 @@ def _contacts_for_number(db: Session, org_id: str, number: str) -> list:
     ]
 
 
+def _process_inbound(
+    db: Session,
+    account: SmsAccount,
+    *,
+    from_raw: Optional[str],
+    to_raw: Optional[str],
+    body: str,
+    provider_sid: Optional[str],
+    forced_stop: bool = False,
+) -> None:
+    """Provider-agnostic inbound handling: record the message, and on STOP
+    suppress + exit all enrollments org-wide; on a real (non-HELP) reply exit
+    exit_on_reply campaigns. `forced_stop` lets a provider that flags opt-out
+    structurally (Sendblue's opted_out=true) short-circuit keyword matching."""
+    from_number = sms_consent.normalize_phone(from_raw) or ""
+    lowered = body.lower().strip(" .!")
+    contacts = _contacts_for_number(db, account.organization_id, from_number)
+
+    db.add(
+        SmsMessage(
+            organization_id=account.organization_id,
+            account_id=account.id,
+            contact_id=contacts[0].id if contacts else None,
+            direction=SMS_DIR_IN,
+            kind="inbound",
+            to_number=sms_consent.normalize_phone(to_raw) or "",
+            from_number=from_number,
+            body=body,
+            status=SMS_MSG_RECEIVED,
+            provider_sid=provider_sid,
+        )
+    )
+
+    if (forced_stop or lowered in STOP_KEYWORDS) and from_number:
+        sms_consent.record_opt_out(
+            db,
+            account.organization_id,
+            from_number,
+            SMS_SUPPRESS_STOP,
+            detail=f"Inbound: {body[:100]}",
+        )
+        for c in contacts:
+            _exit_contact_enrollments(db, c, "opted_out")
+    elif lowered not in HELP_KEYWORDS:
+        for c in contacts:
+            for e in db.execute(
+                select(SmsEnrollment).where(
+                    SmsEnrollment.contact_id == c.id,
+                    SmsEnrollment.status == SMS_ENROLL_ACTIVE,
+                )
+            ).scalars():
+                campaign = db.get(SmsCampaign, e.campaign_id)
+                if campaign is not None and campaign.exit_on_reply:
+                    e.status = SMS_ENROLL_EXITED
+                    e.exit_reason = "replied"
+                    e.next_run_at = None
+                    e.replied_at = utcnow()
+                    e.ended_at = utcnow()
+
+
+def _apply_status(
+    db: Session, account: SmsAccount, sid: Optional[str], status: str, error_code
+) -> None:
+    """Provider-agnostic delivery-receipt handling. `status` is normalized to
+    lowercase; 'delivered'/'sent' → delivered, failure words → failed."""
+    if not sid:
+        return
+    row = db.execute(
+        select(SmsMessage).where(
+            SmsMessage.provider_sid == sid,
+            SmsMessage.organization_id == account.organization_id,
+        )
+    ).scalar_one_or_none()
+    if row is None:
+        return
+    status = (status or "").lower()
+    if status in ("delivered",):
+        row.status = SMS_MSG_DELIVERED
+    elif status in ("failed", "undelivered", "error", "declined"):
+        row.status = SMS_MSG_FAILED
+        if error_code is not None:
+            row.error_code = str(error_code)
+
+
+def _require_token(account: SmsAccount, token: str) -> None:
+    """Constant-time check of the per-account URL secret used by providers
+    without request signing (Sendblue)."""
+    expected = account.webhook_token or ""
+    if not expected or not hmac.compare_digest(expected, token or ""):
+        raise HTTPException(403, "Invalid webhook token")
+
+
+# --- Twilio (signature-authenticated) ---
+
+
 @router.post("/inbound/{account_id}")
 async def inbound(account_id: str, request: Request):
     db = SessionLocal()
@@ -108,53 +204,15 @@ async def inbound(account_id: str, request: Request):
         if account is None:
             raise HTTPException(404, "Not found")
         form = await _validated(request, account)
-        from_number = sms_consent.normalize_phone(form.get("From")) or ""
-        body = (form.get("Body") or "").strip()
-        lowered = body.lower().strip(" .!")
-        contacts = _contacts_for_number(db, account.organization_id, from_number)
-
-        db.add(
-            SmsMessage(
-                organization_id=account.organization_id,
-                account_id=account.id,
-                contact_id=contacts[0].id if contacts else None,
-                direction=SMS_DIR_IN,
-                kind="inbound",
-                to_number=sms_consent.normalize_phone(form.get("To")) or "",
-                from_number=from_number,
-                body=body,
-                status=SMS_MSG_RECEIVED,
-                provider_sid=form.get("MessageSid"),
-            )
+        _process_inbound(
+            db,
+            account,
+            from_raw=form.get("From"),
+            to_raw=form.get("To"),
+            body=(form.get("Body") or "").strip(),
+            provider_sid=form.get("MessageSid"),
+            forced_stop=form.get("OptOutType") == "STOP",
         )
-
-        is_stop = lowered in STOP_KEYWORDS or form.get("OptOutType") == "STOP"
-        if is_stop and from_number:
-            sms_consent.record_opt_out(
-                db,
-                account.organization_id,
-                from_number,
-                SMS_SUPPRESS_STOP,
-                detail=f"Inbound: {body[:100]}",
-            )
-            for c in contacts:
-                _exit_contact_enrollments(db, c, "opted_out")
-        elif lowered not in HELP_KEYWORDS:
-            # A real reply: stop the sequence for exit_on_reply campaigns.
-            for c in contacts:
-                for e in db.execute(
-                    select(SmsEnrollment).where(
-                        SmsEnrollment.contact_id == c.id,
-                        SmsEnrollment.status == SMS_ENROLL_ACTIVE,
-                    )
-                ).scalars():
-                    campaign = db.get(SmsCampaign, e.campaign_id)
-                    if campaign is not None and campaign.exit_on_reply:
-                        e.status = SMS_ENROLL_EXITED
-                        e.exit_reason = "replied"
-                        e.next_run_at = None
-                        e.replied_at = utcnow()
-                        e.ended_at = utcnow()
         db.commit()
     finally:
         db.close()
@@ -175,22 +233,86 @@ async def status_callback(account_id: str, request: Request):
         if account is None:
             raise HTTPException(404, "Not found")
         form = await _validated(request, account)
-        sid = form.get("MessageSid")
-        status = (form.get("MessageStatus") or "").lower()
-        if sid:
-            row = db.execute(
-                select(SmsMessage).where(
-                    SmsMessage.provider_sid == sid,
-                    SmsMessage.organization_id == account.organization_id,
+        _apply_status(
+            db,
+            account,
+            form.get("MessageSid"),
+            form.get("MessageStatus") or "",
+            form.get("ErrorCode"),
+        )
+        db.commit()
+    finally:
+        db.close()
+    return {"ok": True}
+
+
+# --- Sendblue (token-authenticated; no documented signature header) ---
+
+
+@router.post("/sendblue/inbound/{account_id}/{token}")
+async def sendblue_inbound(account_id: str, token: str, request: Request):
+    """Sendblue inbound-message webhook. JSON body; from_number/content/
+    message_handle/opted_out fields. Authed by the per-account URL token."""
+    db = SessionLocal()
+    try:
+        account = db.get(SmsAccount, account_id)
+        if account is None:
+            raise HTTPException(404, "Not found")
+        _require_token(account, token)
+        try:
+            payload = await request.json()
+        except Exception:
+            payload = {}
+        _process_inbound(
+            db,
+            account,
+            from_raw=payload.get("from_number"),
+            to_raw=payload.get("to_number") or payload.get("sendblue_number"),
+            body=(payload.get("content") or "").strip(),
+            provider_sid=payload.get("message_handle"),
+            forced_stop=bool(payload.get("opted_out")),
+        )
+        db.commit()
+    finally:
+        db.close()
+    return {"ok": True}
+
+
+@router.post("/sendblue/status/{account_id}/{token}")
+async def sendblue_status(account_id: str, token: str, request: Request):
+    """Sendblue status callback. JSON body; message_handle/status/error_code."""
+    db = SessionLocal()
+    try:
+        account = db.get(SmsAccount, account_id)
+        if account is None:
+            raise HTTPException(404, "Not found")
+        _require_token(account, token)
+        try:
+            payload = await request.json()
+        except Exception:
+            payload = {}
+        # A status callback can also be where Sendblue reports a post-send
+        # opt-out (opted_out=true) — converge our ledger if so.
+        if payload.get("opted_out") and payload.get("from_number") is None:
+            number = sms_consent.normalize_phone(payload.get("number"))
+            if number:
+                sms_consent.record_opt_out(
+                    db,
+                    account.organization_id,
+                    number,
+                    SMS_SUPPRESS_STOP,
+                    detail="Sendblue reported opted_out on a status callback",
                 )
-            ).scalar_one_or_none()
-            if row is not None:
-                if status == "delivered":
-                    row.status = SMS_MSG_DELIVERED
-                elif status in ("failed", "undelivered"):
-                    row.status = SMS_MSG_FAILED
-                    row.error_code = form.get("ErrorCode")
-                db.commit()
+                for c in _contacts_for_number(db, account.organization_id, number):
+                    _exit_contact_enrollments(db, c, "opted_out")
+        _apply_status(
+            db,
+            account,
+            payload.get("message_handle"),
+            payload.get("status") or "",
+            payload.get("error_code"),
+        )
+        db.commit()
     finally:
         db.close()
     return {"ok": True}

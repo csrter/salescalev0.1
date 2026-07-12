@@ -579,3 +579,160 @@ def test_campaign_tenant_isolation(sc_org, api, twilio_creds_ok, team_headers):
         a for a in api.get("/api/sms/accounts", headers=team_headers).json()
         if a["id"] != acct["id"]
     ]
+
+
+# --- Sendblue provider ------------------------------------------------------
+
+
+def test_sendblue_account_requires_from_number(sc_org, api, monkeypatch):
+    monkeypatch.setattr(gateway, "verify_credentials", lambda a: (True, "ok"))
+    r = api.post(
+        "/api/sms/accounts",
+        json={
+            "name": "iMessage line",
+            "provider": "sendblue",
+            "account_sid": "sb-key-id-000000",
+            "auth_token": "sb-secret-key-000000",
+        },
+        headers=sc_org["headers"],
+    )
+    assert r.status_code == 422  # no from_number
+    r = api.post(
+        "/api/sms/accounts",
+        json={
+            "name": "iMessage line",
+            "provider": "sendblue",
+            "account_sid": "sb-key-id-000000",
+            "auth_token": "sb-secret-key-000000",
+            "from_number": "+14805559000",
+        },
+        headers=sc_org["headers"],
+    )
+    assert r.status_code == 201, r.text
+    body = r.json()
+    assert body["provider"] == "sendblue"
+    assert body["webhook_token"]  # a URL secret was minted
+
+
+def test_sendblue_send_dispatches_to_sendblue(sc_org, api, monkeypatch):
+    monkeypatch.setattr(gateway, "verify_credentials", lambda a: (True, "ok"))
+    calls = []
+
+    def _fake_sb(account, to_number, body):
+        calls.append({"account": account.id, "to": to_number, "body": body})
+        return "SB_handle_1", None, None
+
+    # If the gateway picks the Twilio path by mistake this stays empty.
+    monkeypatch.setattr(gateway, "_sendblue_send", _fake_sb)
+    monkeypatch.setattr(
+        gateway, "_twilio_send",
+        lambda *a, **k: pytest.fail("twilio path used for a sendblue account"),
+    )
+
+    acct = _mk_account(
+        sc_org, api, name="sb", provider="sendblue", from_number="+14805559100",
+        account_sid="sb-key-id-1", auth_token="sb-secret-1",
+    )
+    camp = _mk_campaign(sc_org, api, acct["id"], **_ALWAYS)
+    _set_steps(sc_org, api, camp["id"], [{"position": 1, "body": "Hi {{first_name}}"}])
+    _activate(sc_org, api, camp["id"])
+    contact = _mk_contact(sc_org, api, mobile_phone="+14805559200", first="Sam")
+    assert _enroll(sc_org, api, camp["id"], [contact]).status_code == 200
+    _tick()
+    assert len(calls) == 1
+    assert calls[0]["to"] == "+14805559200"
+    assert "Sam" in calls[0]["body"]
+
+
+def test_sendblue_inbound_stop_requires_token(sc_org, api, monkeypatch):
+    monkeypatch.setattr(gateway, "verify_credentials", lambda a: (True, "ok"))
+    acct = _mk_account(
+        sc_org, api, name="sb2", provider="sendblue", from_number="+14805559300",
+        account_sid="sb-key-id-2", auth_token="sb-secret-2",
+    )
+    token = acct["webhook_token"]
+    aid = acct["id"]
+
+    # Wrong token → 403, no suppression.
+    bad = api.post(
+        f"/api/sms/webhooks/sendblue/inbound/{aid}/wrong-token",
+        json={"from_number": "+14805559400", "content": "STOP"},
+    )
+    assert bad.status_code == 403
+
+    # Right token → suppression recorded + opt-in cleared.
+    contact = _mk_contact(sc_org, api, mobile_phone="+14805559400", first="Pat")
+    ok = api.post(
+        f"/api/sms/webhooks/sendblue/inbound/{aid}/{token}",
+        json={"from_number": "+14805559400", "content": "STOP"},
+    )
+    assert ok.status_code == 200
+    db = SessionLocal()
+    try:
+        supp = db.execute(
+            select(SmsSuppression).where(
+                SmsSuppression.phone_e164 == "+14805559400"
+            )
+        ).scalar_one_or_none()
+        assert supp is not None
+        c = db.get(Contact, contact)
+        assert c.sms_opt_in is False
+    finally:
+        db.close()
+
+
+def test_sendblue_status_marks_delivered(sc_org, api, monkeypatch):
+    monkeypatch.setattr(gateway, "verify_credentials", lambda a: (True, "ok"))
+    monkeypatch.setattr(
+        gateway, "_sendblue_send", lambda a, t, b: ("SB_handle_9", None, None)
+    )
+    acct = _mk_account(
+        sc_org, api, name="sb3", provider="sendblue", from_number="+14805559500",
+        account_sid="sb-key-id-3", auth_token="sb-secret-3",
+    )
+    camp = _mk_campaign(sc_org, api, acct["id"], **_ALWAYS)
+    _set_steps(sc_org, api, camp["id"], [{"position": 1, "body": "hi"}])
+    _activate(sc_org, api, camp["id"])
+    contact = _mk_contact(sc_org, api, mobile_phone="+14805559600")
+    _enroll(sc_org, api, camp["id"], [contact])
+    _tick()
+    r = api.post(
+        f"/api/sms/webhooks/sendblue/status/{acct['id']}/{acct['webhook_token']}",
+        json={"message_handle": "SB_handle_9", "status": "DELIVERED"},
+    )
+    assert r.status_code == 200
+    db = SessionLocal()
+    try:
+        row = db.execute(
+            select(SmsMessage).where(SmsMessage.provider_sid == "SB_handle_9")
+        ).scalar_one()
+        assert row.status == "delivered"
+    finally:
+        db.close()
+
+
+def test_sendblue_failed_status_from_error(monkeypatch):
+    """A 2xx Sendblue response carrying an ERROR status / nonzero error_code is
+    a failure, not a success — the message object is the source of truth."""
+    import httpx
+
+    class _Resp:
+        status_code = 200
+        def json(self):
+            return {"message_handle": "h", "status": "ERROR", "error_code": 4002,
+                    "error_message": "blacklisted number"}
+
+    monkeypatch.setattr(httpx, "post", lambda *a, **k: _Resp())
+    monkeypatch.setattr(gateway, "decrypt_secret", lambda s: "secret")
+
+    class _Acct:
+        provider = "sendblue"
+        account_sid = "id"
+        auth_token_encrypted = "enc"
+        from_number = "+14805559700"
+        webhook_token = "tok"
+        id = "acct"
+
+    handle, code, detail = gateway._sendblue_send(_Acct(), "+14805559800", "hi")
+    assert code == "4002"
+    assert "blacklist" in detail.lower()

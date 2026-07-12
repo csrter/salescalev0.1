@@ -1649,10 +1649,12 @@ export const listSmsCrmContactsForClient = (clientId: string) =>
 
 export type SmsAccountStatus = "active" | "error";
 
+export type SmsProvider = "twilio" | "sendblue";
+
 export interface SmsAccount {
   id: string;
   name: string;
-  provider: string;
+  provider: SmsProvider;
   account_sid: string;
   from_number: string | null;
   messaging_service_sid: string | null;
@@ -1660,13 +1662,16 @@ export interface SmsAccount {
   error_detail: string | null;
   daily_send_cap: number;
   sends_today: number;
+  /** URL secret for providers without request signing (Sendblue). */
+  webhook_token: string | null;
   created_at: string;
 }
 
 export interface SmsAccountBody {
   name?: string;
+  provider?: SmsProvider;
   account_sid?: string;
-  /** Only sent to rotate the Twilio auth token (write-only, never returned). */
+  /** Only sent to rotate the auth token / secret (write-only, never returned). */
   auth_token?: string;
   from_number?: string | null;
   messaging_service_sid?: string | null;
@@ -1883,12 +1888,22 @@ export const smsUsage = () => api<SmsUsage>(`${SO}/usage`);
 /** The two per-account Twilio webhook URLs the user must paste into their
  * Twilio number / Messaging Service config. Built client-side from API_BASE —
  * inbound is REQUIRED for STOP/HELP keyword handling to ever reach us. */
-export function smsWebhookUrls(accountId: string): {
-  inbound: string;
-  status: string;
-} {
+export function smsWebhookUrls(account: {
+  id: string;
+  provider: SmsProvider;
+  webhook_token: string | null;
+}): { inbound: string; status: string } {
+  if (account.provider === "sendblue") {
+    // Sendblue webhooks carry no documented signature header, so the
+    // per-account token in the URL path is the authenticity check.
+    const t = account.webhook_token ?? "";
+    return {
+      inbound: `${API_BASE}/api/sms/webhooks/sendblue/inbound/${account.id}/${t}`,
+      status: `${API_BASE}/api/sms/webhooks/sendblue/status/${account.id}/${t}`,
+    };
+  }
   return {
-    inbound: `${API_BASE}/api/sms/webhooks/inbound/${accountId}`,
-    status: `${API_BASE}/api/sms/webhooks/status/${accountId}`,
+    inbound: `${API_BASE}/api/sms/webhooks/inbound/${account.id}`,
+    status: `${API_BASE}/api/sms/webhooks/status/${account.id}`,
   };
 }

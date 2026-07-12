@@ -108,6 +108,11 @@ class SmsAccount(Base):
     # Tenant guardrail, enforced server-side in the gateway. Long codes are
     # carrier-limited under A2P 10DLC anyway; 200 is a sane default.
     daily_send_cap: Mapped[int] = mapped_column(Integer, default=200, nullable=False)
+    # Webhook URL secret for providers WITHOUT request signing (Sendblue).
+    # Twilio's webhooks are authenticated by X-Twilio-Signature instead; this
+    # token is generated for every account regardless (secrets.token_urlsafe)
+    # and compared via hmac.compare_digest in the webhook routes.
+    webhook_token: Mapped[Optional[str]] = mapped_column(String(64))
     created_at: Mapped[dt.datetime] = created_at_column()
 
 

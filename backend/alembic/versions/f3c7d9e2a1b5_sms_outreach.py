@@ -40,6 +40,7 @@ def upgrade() -> None:
         sa.Column(
             "daily_send_cap", sa.Integer(), nullable=False, server_default="200"
         ),
+        sa.Column("webhook_token", sa.String(length=64)),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         sa.UniqueConstraint("organization_id", "from_number", name="uq_sms_account_from"),
     )
