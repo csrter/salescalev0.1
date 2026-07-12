@@ -1832,6 +1832,7 @@ export interface SmsMessage {
   } | null;
   sent_at: string | null;
   received_at: string | null;
+  read_at: string | null;
 }
 
 export interface SmsSuppression {
@@ -1951,6 +1952,12 @@ export const composeSms = (body: {
   method: "POST",
   body: JSON.stringify(body),
 });
+
+export const markSmsRead = (contactId: string) =>
+  api<{ marked: number }>(`${SO}/messages/mark-read`, {
+    method: "POST",
+    body: JSON.stringify({ contact_id: contactId }),
+  });
 
 // --- suppression ---
 export const listSmsSuppression = () => api<SmsSuppression[]>(`${SO}/suppression`);

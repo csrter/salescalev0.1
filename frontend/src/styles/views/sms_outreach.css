@@ -470,6 +470,10 @@
   white-space: nowrap;
 }
 
+.sms-thread-item--unread .sms-thread-name {
+  font-weight: var(--weight-semibold);
+}
+
 .sms-thread-time {
   flex: none;
   font-family: var(--font-mono);

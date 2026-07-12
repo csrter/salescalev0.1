@@ -66,6 +66,7 @@ SMS_DIR_OUT = "out"
 SMS_MSG_QUEUED = "queued"
 SMS_MSG_SENT = "sent"
 SMS_MSG_DELIVERED = "delivered"  # via Twilio status callback
+SMS_MSG_READ = "read"  # Sendblue/iMessage read receipt only — Twilio never sends this
 SMS_MSG_FAILED = "failed"
 SMS_MSG_RECEIVED = "received"  # inbound
 
@@ -228,8 +229,13 @@ class SmsEnrollment(Base):
 class SmsMessage(Base):
     """Append-only send/receive ledger — the audit trail (guardrail #8) and
     the monthly entitlement meter (direction=out rows). provider_sid is
-    Twilio's Message SID; status moves queued→sent→delivered/failed via the
-    status callback."""
+    Twilio's Message SID (or Sendblue's message_handle); status moves
+    queued→sent→delivered/failed via the status callback, or →read for a
+    Sendblue/iMessage read receipt (Twilio never sends this). read_at is
+    dual-purpose by direction: for an outbound row it's when the RECIPIENT
+    read it (from that same Sendblue receipt); for an inbound row it's when
+    OUR team marked the conversation read (POST /messages/mark-read) — null
+    means unread on whichever side is doing the reading."""
 
     __tablename__ = "sms_messages"
 
@@ -261,6 +267,7 @@ class SmsMessage(Base):
     provider_sid: Mapped[Optional[str]] = mapped_column(String(64), index=True)
     error_code: Mapped[Optional[str]] = mapped_column(String(20))
     error_detail: Mapped[Optional[str]] = mapped_column(Text)
+    read_at: Mapped[Optional[dt.datetime]] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[dt.datetime] = created_at_column()
 
 

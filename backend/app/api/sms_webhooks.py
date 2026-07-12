@@ -34,6 +34,7 @@ from ..models.sms_outreach import (
     SMS_ENROLL_EXITED,
     SMS_MSG_DELIVERED,
     SMS_MSG_FAILED,
+    SMS_MSG_READ,
     SMS_MSG_RECEIVED,
     SMS_SUPPRESS_STOP,
     STOP_KEYWORDS,
@@ -165,7 +166,9 @@ def _apply_status(
     db: Session, account: SmsAccount, sid: Optional[str], status: str, error_code
 ) -> None:
     """Provider-agnostic delivery-receipt handling. `status` is normalized to
-    lowercase; 'delivered'/'sent' → delivered, failure words → failed."""
+    lowercase; 'delivered'/'sent' → delivered, failure words → failed,
+    'read' → read (Sendblue/iMessage read receipts only — Twilio never sends
+    this status, so the branch is simply unreachable on that provider)."""
     if not sid:
         return
     row = db.execute(
@@ -177,7 +180,10 @@ def _apply_status(
     if row is None:
         return
     status = (status or "").lower()
-    if status in ("delivered",):
+    if status in ("read",):
+        row.status = SMS_MSG_READ
+        row.read_at = row.read_at or utcnow()
+    elif status in ("delivered",):
         row.status = SMS_MSG_DELIVERED
     elif status in ("failed", "undelivered", "error", "declined"):
         row.status = SMS_MSG_FAILED

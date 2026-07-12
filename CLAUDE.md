@@ -975,6 +975,40 @@ live activation + the entitlement flip, the Outreach module build
       proving the guard order, not a real send), both appeared in the right
       order under the contact's real name/number, not "Unknown contact".
       NOT deployed yet.
+- [x] SMS read tracking, both directions (same-day follow-up, researched via
+      Sendblue's public docs — confirmed their status webhook reports a
+      "READ" value for iMessage read receipts, keyed by message_handle,
+      alongside SENT/DELIVERED/ERROR/DECLINED): (1) Outbound — Sendblue/
+      iMessage read receipts. SMS_MSG_READ status + sms_messages.read_at
+      (migration d1e5f3b7a924); _apply_status (shared by both providers)
+      now handles status "read" → row.status=read, read_at=now. Twilio
+      never sends this status so the branch is simply unreachable on that
+      provider — no per-provider special-casing needed, the existing
+      provider-agnostic webhook handler already covers it. (2) Inbound —
+      our own unread/read state, since SMS has no thread model to hang a
+      per-thread unread flag on (unlike email's EmailThread.unread). Reused
+      the SAME read_at column dual-purpose by direction: outbound = when
+      the recipient read it (Sendblue), inbound = when OUR team marked the
+      conversation read. New POST /api/sms/messages/mark-read {contact_id}
+      (require_team, contact is the conversation key) sets read_at on every
+      unread inbound row for that contact. Frontend: conversation list gets
+      an email-style "new" Badge + bold name while unread; opening a
+      conversation (click, or the auto-selected default one on load) calls
+      mark-read and refreshes; message bubbles show "Read {time}" under
+      status for any outbound message with a read receipt. Tests:
+      test_sendblue_read_receipt_sets_status_and_read_at,
+      test_twilio_status_webhook_ignores_unknown_status (regression —
+      needed its own unique provider_sid via a fresh _twilio_send
+      monkeypatch, not the captured_sends fixture's shared hardcoded
+      "SM_test_sid" literal, which collides across this module-scoped
+      org's many other tests once looked up by sid+org),
+      test_mark_read_only_clears_inbound_unread_for_that_contact (outbound
+      rows untouched, idempotent second call), test_mark_read_cross_org_
+      contact_404s. Tests 437 → 441. Verified live on alt2: fired a real
+      Sendblue-shaped status webhook (message bubble showed "read · Read
+      just now"), simulated a signed Twilio inbound reply (unread), then
+      confirmed opening the Messages tab auto-called mark-read and
+      persisted read_at server-side. NOT deployed yet.
 - [ ] Stripe live activation + entitlement flip (after 12–14, so real
       limits land everywhere in one pass)
 - [ ] Outreach module build (dev-mode) — go-live gated on Meta App

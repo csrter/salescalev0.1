@@ -31,6 +31,7 @@ from ..models.sms_outreach import (
     SMS_CAMPAIGN_ARCHIVED,
     SMS_CAMPAIGN_DRAFT,
     SMS_CAMPAIGN_PAUSED,
+    SMS_DIR_IN,
     SMS_DIR_OUT,
     SMS_ENROLL_ACTIVE,
     SMS_KIND_MANUAL,
@@ -50,6 +51,7 @@ from ..schemas import (
     SmsCampaignPatch,
     SmsComposeIn,
     SmsEnrollIn,
+    SmsMarkReadIn,
     SmsPreviewIn,
     SmsStepsIn,
 )
@@ -790,6 +792,7 @@ def _message_out(m: SmsMessage, contact: Optional[Contact] = None) -> dict:
         "error_detail": m.error_detail,
         "sent_at": sent_at,
         "received_at": received_at,
+        "read_at": m.read_at.isoformat() if m.read_at else None,
         "created_at": m.created_at.isoformat(),
     }
 
@@ -869,6 +872,32 @@ def list_messages(
         ).scalars()
     }
     return [_message_out(m, contacts.get(m.contact_id)) for m in rows]
+
+
+@router.post("/messages/mark-read")
+def mark_read(
+    body: SmsMarkReadIn,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_team),
+    scope: TenantScope = Depends(get_scope),
+):
+    """Marks every unread INBOUND message with this contact as read — SMS has
+    no thread id, so the contact is the conversation key (mirrors the email
+    module's per-thread mark-read, keyed differently since SMS is threadless)."""
+    contact = scope.get_or_404(db, Contact, body.contact_id)
+    rows = db.execute(
+        select(SmsMessage).where(
+            SmsMessage.organization_id == scope.organization_id,
+            SmsMessage.contact_id == contact.id,
+            SmsMessage.direction == SMS_DIR_IN,
+            SmsMessage.read_at.is_(None),
+        )
+    ).scalars().all()
+    now = utcnow()
+    for row in rows:
+        row.read_at = now
+    db.commit()
+    return {"marked": len(rows)}
 
 
 @router.get("/conversations")

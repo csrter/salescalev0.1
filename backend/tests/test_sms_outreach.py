@@ -1041,3 +1041,136 @@ def test_compose_cross_org_contact_404s(sc_org, api, twilio_creds_ok, team_heade
         headers=team_headers,
     )
     assert r.status_code == 404
+
+
+# --- read tracking (Sendblue/iMessage read receipts + our own inbox) --------
+
+
+def test_sendblue_read_receipt_sets_status_and_read_at(sc_org, api, monkeypatch):
+    monkeypatch.setattr(gateway, "verify_credentials", lambda a: (True, "ok"))
+    monkeypatch.setattr(
+        gateway, "_sendblue_send", lambda a, t, b: ("SB_handle_read1", None, None)
+    )
+    acct = _mk_account(
+        sc_org, api, name="sb-read", provider="sendblue", from_number="+14805559700",
+        account_sid="sb-key-id-4", auth_token="sb-secret-4",
+    )
+    contact = _mk_contact(sc_org, api, mobile_phone="4805559701", first="Reader")
+    r = api.post(
+        "/api/sms/compose",
+        json={"account_id": acct["id"], "contact_id": contact, "body": "Hi there"},
+        headers=sc_org["headers"],
+    )
+    assert r.status_code == 200, r.text
+
+    r = api.post(
+        f"/api/sms/webhooks/sendblue/status/{acct['id']}/{acct['webhook_token']}",
+        json={"message_handle": "SB_handle_read1", "status": "READ"},
+    )
+    assert r.status_code == 200
+
+    msgs = api.get(
+        f"/api/sms/messages?contact_id={contact}", headers=sc_org["headers"]
+    ).json()
+    assert msgs[0]["status"] == "read"
+    assert msgs[0]["read_at"] is not None
+
+
+def test_twilio_status_webhook_ignores_unknown_status(sc_org, api, twilio_creds_ok, monkeypatch):
+    # A status string _apply_status doesn't recognize is a safe no-op, not a
+    # crash — the row's existing status/read_at are left untouched. Uses its
+    # own unique provider_sid rather than the captured_sends fixture's
+    # shared hardcoded "SM_test_sid" — _apply_status looks a message up by
+    # sid+org, and that literal is reused by many other tests sharing this
+    # module-scoped org, which makes a plain lookup ambiguous.
+    def _fake_send(account, to_number, body):
+        return "SM_unique_ignore_status_test", None, None
+
+    monkeypatch.setattr(gateway, "_twilio_send", _fake_send)
+    acct = _mk_account(sc_org, api, from_number="+14805550501")
+    camp = _mk_campaign(sc_org, api, acct["id"], **_ALWAYS)
+    _set_steps(sc_org, api, camp["id"], [{"position": 1, "body": "hi"}])
+    _activate(sc_org, api, camp["id"])
+    contact = _mk_contact(sc_org, api, mobile_phone="4805559501")
+    _enroll(sc_org, api, camp["id"], [contact])
+    _tick()
+    params = {"MessageSid": "SM_unique_ignore_status_test", "MessageStatus": "queued"}
+    auth_token = _AUTH_TOKEN
+    url = f"http://testserver/api/sms/webhooks/status/{acct['id']}"
+    sig = _twilio_signature(auth_token, url, params)
+    r = api.post(
+        f"/api/sms/webhooks/status/{acct['id']}",
+        data=params,
+        headers={"X-Twilio-Signature": sig},
+    )
+    assert r.status_code == 200
+    db = SessionLocal()
+    try:
+        row = db.execute(
+            select(SmsMessage).where(
+                SmsMessage.provider_sid == "SM_unique_ignore_status_test"
+            )
+        ).scalar_one()
+        assert row.read_at is None
+        assert row.status == "sent"
+    finally:
+        db.close()
+
+
+def test_mark_read_only_clears_inbound_unread_for_that_contact(sc_org, api, twilio_creds_ok, captured_sends):
+    acct = _mk_account(sc_org, api, from_number="+14805550502")
+    camp = _mk_campaign(sc_org, api, acct["id"], **_ALWAYS)
+    _set_steps(sc_org, api, camp["id"], [{"position": 1, "body": "hi"}])
+    _activate(sc_org, api, camp["id"])
+    contact = _mk_contact(sc_org, api, mobile_phone="4805559502", first="Marked")
+    _enroll(sc_org, api, camp["id"], [contact])
+    _tick()  # step 1 goes out (direction=out, unaffected by mark-read)
+
+    # Simulate an inbound reply.
+    params = {"From": "+14805559502", "To": acct["from_number"], "Body": "sounds good"}
+    auth_token = _AUTH_TOKEN
+    url = f"http://testserver/api/sms/webhooks/inbound/{acct['id']}"
+    sig = _twilio_signature(auth_token, url, params)
+    r = api.post(
+        f"/api/sms/webhooks/inbound/{acct['id']}", data=params,
+        headers={"X-Twilio-Signature": sig},
+    )
+    assert r.status_code == 200
+
+    msgs = api.get(
+        f"/api/sms/messages?contact_id={contact}", headers=sc_org["headers"]
+    ).json()
+    inbound = [m for m in msgs if m["direction"] == "in"]
+    assert len(inbound) == 1
+    assert inbound[0]["read_at"] is None
+
+    r = api.post(
+        "/api/sms/messages/mark-read", json={"contact_id": contact},
+        headers=sc_org["headers"],
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["marked"] == 1
+
+    msgs = api.get(
+        f"/api/sms/messages?contact_id={contact}", headers=sc_org["headers"]
+    ).json()
+    inbound = [m for m in msgs if m["direction"] == "in"]
+    outbound = [m for m in msgs if m["direction"] == "out"]
+    assert inbound[0]["read_at"] is not None
+    assert outbound[0]["read_at"] is None  # mark-read never touches outbound rows
+
+    # Idempotent — nothing left to mark.
+    r = api.post(
+        "/api/sms/messages/mark-read", json={"contact_id": contact},
+        headers=sc_org["headers"],
+    )
+    assert r.json()["marked"] == 0
+
+
+def test_mark_read_cross_org_contact_404s(sc_org, api, team_headers):
+    contact = _mk_contact(sc_org, api, mobile_phone="4805559503")
+    r = api.post(
+        "/api/sms/messages/mark-read", json={"contact_id": contact},
+        headers=team_headers,
+    )
+    assert r.status_code == 404

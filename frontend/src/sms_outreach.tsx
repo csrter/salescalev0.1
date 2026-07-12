@@ -34,6 +34,7 @@ import {
   listSmsEnrollments,
   listSmsMessages,
   listSmsSuppression,
+  markSmsRead,
   pauseSmsCampaign,
   previewSmsStep,
   saveSmsSteps,
@@ -1699,6 +1700,35 @@ function MessagesPanel({ accounts }: { accounts: SmsAccount[] }) {
 
   const selected = conversations.find((c) => c.id === selectedContactId) ?? conversations[0] ?? null;
 
+  const hasUnread = (c: (typeof conversations)[number]) =>
+    c.messages.some((m) => m.direction === "in" && !m.read_at);
+
+  const open = (contactId: string) => {
+    setSelectedContactId(contactId);
+    if (contactId !== "unknown") {
+      markSmsRead(contactId)
+        .then((r) => {
+          if (r.marked > 0) refresh();
+        })
+        .catch(() => {});
+    }
+  };
+
+  // Auto-mark-read the conversation that lands selected by default (the
+  // most-recent one), same as opening it explicitly — otherwise it would
+  // silently sit unread forever until someone clicks a different thread
+  // first.
+  useEffect(() => {
+    if (selected && selected.id !== "unknown" && hasUnread(selected)) {
+      markSmsRead(selected.id)
+        .then((r) => {
+          if (r.marked > 0) refresh();
+        })
+        .catch(() => {});
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selected?.id]);
+
   // Reply from the same number the conversation has been using so far —
   // falling back to the org's only/first connected number for a thread
   // that's somehow empty of outbound messages yet.
@@ -1752,6 +1782,7 @@ function MessagesPanel({ accounts }: { accounts: SmsAccount[] }) {
           )}
           {conversations.map((c) => {
             const last = c.messages[0];
+            const unread = hasUnread(c);
             return (
               <button
                 key={c.id}
@@ -1759,14 +1790,16 @@ function MessagesPanel({ accounts }: { accounts: SmsAccount[] }) {
                 className={[
                   "sms-thread-item",
                   selected?.id === c.id ? "sms-thread-item--active" : "",
+                  unread ? "sms-thread-item--unread" : "",
                 ]
                   .filter(Boolean)
                   .join(" ")}
-                onClick={() => setSelectedContactId(c.id)}
+                onClick={() => open(c.id)}
               >
                 <div className="sms-thread-top">
                   <span className="sms-thread-name">
                     <span>{c.contact ? contactLabel(c.contact) : "Unknown contact"}</span>
+                    {unread && <Badge tone="info">new</Badge>}
                   </span>
                   <time className="sms-thread-time" title={last?.sent_at ?? last?.received_at ?? undefined}>
                     {timeAgo(last?.sent_at || last?.received_at || null)}
@@ -1800,6 +1833,11 @@ function MessagesPanel({ accounts }: { accounts: SmsAccount[] }) {
                     {m.status}
                     {" · "}
                     {timeAgo(m.sent_at || m.received_at)}
+                    {m.direction === "out" && m.read_at && (
+                      <span className="sms-read">
+                        {" · "}Read {timeAgo(m.read_at)}
+                      </span>
+                    )}
                   </small>
                 </div>
               ))}

@@ -1430,3 +1430,7 @@ class SmsComposeIn(BaseModel):
     account_id: str
     contact_id: str
     body: str = Field(min_length=1, max_length=1600)
+
+
+class SmsMarkReadIn(BaseModel):
+    contact_id: str
