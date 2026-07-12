@@ -488,6 +488,50 @@ live activation + the entitlement flip, the Outreach module build
       image; dispatch module loads and all three providers are selectable.
       Active provider stays anthropic until an operator sets AI_PROVIDER +
       the matching key in backend/.env.
+- [x] 2FA "remember this device" (post-multi-provider-AI): a login on a
+      device that recently passed a 2FA challenge can skip the challenge on
+      future logins for settings.mfa_remember_device_days (default 30).
+      New TrustedDevice model (migration a8f2c4d9e6b3): user_id + sha256
+      token_hash (unique, indexed — same lookup-by-hash pattern models/
+      team.py uses for invite tokens; O(1) lookup instead of a bcrypt scan
+      since this is checked on every login) + user_agent/ip/expires_at/
+      last_used_at/revoked. services/trusted_devices.py mirrors services/
+      sessions.py's shape (remember/verify/list_for_user/revoke_one/
+      revoke_all). Wire-up in api/auth.py: POST /login checks an incoming
+      X-Device-Token header BEFORE issuing a challenge — a live grant (org
+      policy permitting) skips straight to session creation, same as the
+      no-MFA path; POST /login/mfa takes remember_device: bool and, on a
+      successful code, mints a grant and returns its raw token once as
+      TokenResponse.device_token (never re-derivable from the stored hash).
+      Explicitly listable/revocable (GET/DELETE /api/auth/trusted-devices),
+      and wiped alongside every other account-wide credential reset —
+      logout-all, password reset, and MFA disable — since a device-trust
+      grant is itself a standing credential. New org policy column
+      Organization.allow_remember_device (default true; PUT /api/orgs/me/
+      allow-remember-device, owner-only) — an agency handling compliance-
+      sensitive clients can force a 2FA code on every login regardless of
+      device. Frontend: a "Remember this device for 30 days" checkbox on
+      the 2FA challenge screen (App.tsx Login); the device token lives in
+      localStorage under its OWN key ("device_token"), separate from
+      "session" — a plain sign-out clears the session but deliberately
+      leaves the device token in place (that's the whole point: logging
+      back in on the same browser should skip the challenge), while
+      "log out everywhere" clears it locally AND revokes every grant
+      server-side. New "Remembered devices" panel in security.tsx (mirrors
+      the existing Active-sessions panel: list + per-device "Forget"), plus
+      the org-policy toggle alongside "Require two-factor for all team
+      members". Tests: 4 new cases in test_mfa.py (skip-on-valid-token,
+      revoke, wiped by logout-all/disable, org-policy-off suppresses
+      minting) — 334 → 338 passing. Verified live end-to-end in the browser
+      on the alt3 stack (a real TOTP enroll hit a pre-existing, unrelated
+      dev-env gap — TOKEN_ENCRYPTION_KEY unset on that throwaway stack 500s
+      any Fernet-encrypted-secret path — so verification used email 2FA
+      instead, which needs no Fernet key): logged in, checked "remember this
+      device" at the challenge, confirmed the device_token landed in
+      localStorage and the row appeared correctly in the Remembered-devices
+      panel (right IP/UA/expiry), then did a NORMAL sign-out + fresh
+      email+password login and watched it go straight into the app with
+      zero 2FA prompt. Not deployed yet.
 - [ ] Stripe live activation + entitlement flip (after 12–14, so real
       limits land everywhere in one pass)
 - [ ] Outreach module build (dev-mode) — go-live gated on Meta App

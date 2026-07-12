@@ -49,6 +49,10 @@ class Settings(BaseSettings):
     google_login_customer_id: str = ""
     google_redirect_uri: str = "http://localhost:8000/api/connect/google/callback"
 
+    # 2FA "remember this device" — how long a trusted-device grant lasts
+    # before a login on that browser needs a fresh 2FA challenge again.
+    mfa_remember_device_days: int = 30
+
     # Web frontend origin(s) allowed by CORS. Comma-separated for multiple
     # (e.g. a production domain plus a preview/staging domain). Ignored when
     # DESKTOP_MODE=1 (the Electron UI is file:// and uses a wildcard instead).

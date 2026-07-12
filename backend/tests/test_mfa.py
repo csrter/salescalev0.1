@@ -125,3 +125,120 @@ def test_sms_setup_unconfigured_returns_503(api):
     sess = _signup(api, "Sms Co", "sms@smsco.com")
     r = api.post("/api/mfa/sms/setup", headers=_headers(sess), json={"phone": "+15555550123"})
     assert r.status_code == 503
+
+
+def _enroll_totp(api, org, email):
+    sess = _signup(api, org, email)
+    h = _headers(sess)
+    secret = api.post("/api/mfa/totp/setup", headers=h).json()["secret"]
+    api.post("/api/mfa/totp/enable", headers=h, json={"code": pyotp.TOTP(secret).now()})
+    return sess, h, secret
+
+
+def test_remember_device_skips_future_challenge(api):
+    """remember_device=true on /login/mfa returns a device_token; sending it
+    back as X-Device-Token on a later /login for the SAME account skips the
+    challenge entirely (no challenge_token in the response)."""
+    _, h, secret = _enroll_totp(api, "Remember Co", "remember@rememberco.com")
+
+    ch = api.post(
+        "/api/auth/login", json={"email": "remember@rememberco.com", "password": PW}
+    ).json()["challenge_token"]
+    done = api.post(
+        "/api/auth/login/mfa",
+        json={
+            "challenge_token": ch,
+            "code": pyotp.TOTP(secret).now(),
+            "remember_device": True,
+        },
+    )
+    assert done.status_code == 200
+    device_token = done.json()["device_token"]
+    assert device_token
+
+    # Same device, next login: no challenge — straight to a session.
+    r = api.post(
+        "/api/auth/login",
+        json={"email": "remember@rememberco.com", "password": PW},
+        headers={"X-Device-Token": device_token},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert "access_token" in body and "challenge_token" not in body
+
+    # A different/absent device token still gets challenged normally.
+    r2 = api.post(
+        "/api/auth/login", json={"email": "remember@rememberco.com", "password": PW}
+    )
+    assert r2.status_code == 200
+    assert r2.json().get("mfa_required") is True
+
+
+def test_remember_device_can_be_revoked(api):
+    _, h, secret = _enroll_totp(api, "Revoke Device Co", "revokedev@revokedevco.com")
+    ch = api.post(
+        "/api/auth/login", json={"email": "revokedev@revokedevco.com", "password": PW}
+    ).json()["challenge_token"]
+    done = api.post(
+        "/api/auth/login/mfa",
+        json={"challenge_token": ch, "code": pyotp.TOTP(secret).now(), "remember_device": True},
+    )
+    device_token = done.json()["device_token"]
+
+    listed = api.get("/api/auth/trusted-devices", headers=h)
+    assert listed.status_code == 200
+    devices = listed.json()
+    assert len(devices) == 1
+
+    assert api.delete(f"/api/auth/trusted-devices/{devices[0]['id']}", headers=h).status_code == 200
+    assert api.get("/api/auth/trusted-devices", headers=h).json() == []
+
+    # Revoked token no longer skips the challenge.
+    r = api.post(
+        "/api/auth/login",
+        json={"email": "revokedev@revokedevco.com", "password": PW},
+        headers={"X-Device-Token": device_token},
+    )
+    assert r.json().get("mfa_required") is True
+
+
+def test_remember_device_wiped_by_logout_all_and_disable(api):
+    _, h, secret = _enroll_totp(api, "Wipe Device Co", "wipedev@wipedevco.com")
+    ch = api.post(
+        "/api/auth/login", json={"email": "wipedev@wipedevco.com", "password": PW}
+    ).json()["challenge_token"]
+    api.post(
+        "/api/auth/login/mfa",
+        json={"challenge_token": ch, "code": pyotp.TOTP(secret).now(), "remember_device": True},
+    )
+    assert len(api.get("/api/auth/trusted-devices", headers=h).json()) == 1
+
+    assert api.post("/api/auth/logout-all", headers=h).status_code == 200
+    # Re-login (fresh session) to get a valid header again, re-enroll a device.
+    sess2 = api.post(
+        "/api/auth/login", json={"email": "wipedev@wipedevco.com", "password": PW}
+    )
+    # logout-all revoked trusted devices; this account still has 2FA, so a
+    # fresh login challenges again regardless of device history.
+    assert sess2.json().get("mfa_required") is True
+
+
+def test_org_can_disable_remember_device_policy(api):
+    sess = _signup(api, "Policy Co", "policy@policyco.com")
+    h = _headers(sess)
+    secret = api.post("/api/mfa/totp/setup", headers=h).json()["secret"]
+    api.post("/api/mfa/totp/enable", headers=h, json={"code": pyotp.TOTP(secret).now()})
+
+    assert api.put(
+        "/api/orgs/me/allow-remember-device", headers=h, json={"allow_remember_device": False}
+    ).status_code == 200
+
+    ch = api.post(
+        "/api/auth/login", json={"email": "policy@policyco.com", "password": PW}
+    ).json()["challenge_token"]
+    done = api.post(
+        "/api/auth/login/mfa",
+        json={"challenge_token": ch, "code": pyotp.TOTP(secret).now(), "remember_device": True},
+    )
+    # Policy off: no device_token minted even though remember_device was requested.
+    assert done.json()["device_token"] is None

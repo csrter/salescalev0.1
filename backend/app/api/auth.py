@@ -19,6 +19,7 @@ from ..schemas import (
     ResetPasswordRequest,
     SessionOut,
     TokenResponse,
+    TrustedDeviceOut,
     VerifyEmailRequest,
 )
 from ..security import (
@@ -32,7 +33,7 @@ from ..security import (
 )
 from ..services import auth_email
 from ..services import email as email_service
-from ..services import mfa, sessions, sms
+from ..services import mfa, sessions, sms, trusted_devices
 
 _MFA_CHALLENGE_PURPOSE = "mfa_login"
 
@@ -54,7 +55,12 @@ def _mfa_setup_required(org: Organization, user: User) -> bool:
     return bool(org.require_mfa and user.role in TEAM_ROLES and not user.mfa_method)
 
 
-def _token_response(user: User, org: Organization, session_id: str | None) -> TokenResponse:
+def _token_response(
+    user: User,
+    org: Organization,
+    session_id: str | None,
+    device_token: str | None = None,
+) -> TokenResponse:
     token = create_access_token(
         user.id,
         user.role,
@@ -73,6 +79,7 @@ def _token_response(user: User, org: Organization, session_id: str | None) -> To
         is_superadmin=is_superadmin(user),
         email_verified=user.email_verified,
         mfa_setup_required=_mfa_setup_required(org, user),
+        device_token=device_token,
     )
 
 
@@ -128,8 +135,17 @@ def login(
         )
     # Second factor: password alone isn't a session — issue a short-lived
     # challenge and (for email/SMS) send the code. The client completes at
-    # /login/mfa.
+    # /login/mfa. EXCEPT when this device already holds a live "remember this
+    # device" grant (org policy permitting) — then it's already proven a
+    # factor recently and can go straight to a session, same as no-MFA below.
     if user.mfa_method:
+        if org.allow_remember_device and trusted_devices.verify(
+            db, user.id, request.headers.get("x-device-token")
+        ):
+            sid = sessions.create(db, user, request)
+            resp = _token_response(user, org, sid)
+            db.commit()
+            return resp
         challenge = create_action_token(
             _MFA_CHALLENGE_PURPOSE,
             user.id,
@@ -173,8 +189,11 @@ def login_mfa(
     if not _verify_mfa_code(user, body.code):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid code")
     sid = sessions.create(db, user, request)
+    device_token = None
+    if body.remember_device and org.allow_remember_device:
+        device_token = trusted_devices.remember(db, user, request)
     db.commit()  # persist a consumed one-time / backup code + the new session
-    return _token_response(user, org, sid)
+    return _token_response(user, org, sid, device_token=device_token)
 
 
 def _verify_mfa_code(user: User, code: str) -> bool:
@@ -230,6 +249,36 @@ def revoke_session(
 ):
     """Sign a specific device out. Its next request 401s."""
     if not sessions.revoke_one(db, session_id, user.id):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Not found")
+    db.commit()
+    return OkResponse()
+
+
+@router.get("/trusted-devices", response_model=List[TrustedDeviceOut])
+def list_trusted_devices(
+    user: User = Depends(get_current_user), db: Session = Depends(get_db)
+):
+    return [
+        TrustedDeviceOut(
+            id=d.id,
+            user_agent=d.user_agent,
+            ip=d.ip,
+            created_at=d.created_at,
+            last_used_at=d.last_used_at,
+            expires_at=d.expires_at,
+        )
+        for d in trusted_devices.list_for_user(db, user.id)
+    ]
+
+
+@router.delete("/trusted-devices/{device_id}", response_model=OkResponse)
+def revoke_trusted_device(
+    device_id: str,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Forget a remembered device — its next login needs a fresh 2FA challenge."""
+    if not trusted_devices.revoke_one(db, device_id, user.id):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Not found")
     db.commit()
     return OkResponse()
@@ -302,6 +351,9 @@ def reset_password(
     # Revoke every existing session — a reset should log out other devices,
     # and if an attacker triggered it, kick them the moment the owner resets.
     user.token_version += 1
+    # A remembered-device grant is itself a standing credential (it can skip a
+    # future 2FA challenge) — wipe it too, same as every other session.
+    trusted_devices.revoke_all(db, user.id)
     db.commit()
     return OkResponse()
 
@@ -309,9 +361,10 @@ def reset_password(
 @router.post("/logout-all", response_model=OkResponse)
 def logout_all(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Sign out everywhere (all devices), including the caller. Bumps
-    token_version (so every existing JWT fails) and marks all sessions revoked
-    (so the device list reflects it)."""
+    token_version (so every existing JWT fails), marks all sessions revoked
+    (so the device list reflects it), and forgets every remembered device."""
     user.token_version += 1
     sessions.revoke_all(db, user.id)
+    trusted_devices.revoke_all(db, user.id)
     db.commit()
     return OkResponse()

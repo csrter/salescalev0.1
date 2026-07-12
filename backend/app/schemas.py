@@ -76,6 +76,10 @@ class LoginChallenge(BaseModel):
 class MfaLoginIn(BaseModel):
     challenge_token: str
     code: str = Field(min_length=4, max_length=20)  # a 2FA code or a backup code
+    # "Remember this device" — mint a trusted-device grant on success so this
+    # browser skips the 2FA challenge next time (services/trusted_devices.py).
+    # Ignored when the org has turned the policy off.
+    remember_device: bool = False
 
 
 class VerifyEmailRequest(BaseModel):
@@ -106,6 +110,19 @@ class TokenResponse(BaseModel):
     # True when the org requires 2FA of team members and this user hasn't set it
     # up — the frontend gates them to enrollment.
     mfa_setup_required: bool = False
+    # Present only when /login/mfa just minted a "remember this device" grant
+    # (remember_device=true on that request) — the frontend stores it and
+    # sends it back as X-Device-Token on future /login calls.
+    device_token: Optional[str] = None
+
+
+class TrustedDeviceOut(BaseModel):
+    id: str
+    user_agent: Optional[str] = None
+    ip: Optional[str] = None
+    created_at: dt.datetime
+    last_used_at: dt.datetime
+    expires_at: dt.datetime
 
 
 class SessionOut(BaseModel):
@@ -133,11 +150,16 @@ class OrganizationOut(BaseModel):
     id: str
     name: str
     require_mfa: bool = False
+    allow_remember_device: bool = True
     created_at: dt.datetime
 
 
 class OrgSecurityIn(BaseModel):
     require_mfa: bool
+
+
+class OrgRememberDeviceIn(BaseModel):
+    allow_remember_device: bool
 
 
 class TeamMemberCreate(BaseModel):

@@ -8,8 +8,11 @@ import {
   getMfaStatus,
   getMyOrg,
   getSessions,
+  getTrustedDevices,
   logoutEverywhere,
   revokeSession,
+  revokeTrustedDevice,
+  setAllowRememberDevice,
   setRequireMfa,
   setSession,
   smsMfaEnable,
@@ -19,6 +22,7 @@ import {
   type MfaStatus,
   type Session,
   type SessionInfo,
+  type TrustedDeviceInfo,
 } from "./api";
 import { DataTable, type Column } from "./components/DataTable";
 import { ConfirmDialog } from "./components/Dialog";
@@ -256,6 +260,7 @@ export function TwoFactorSettings({ session }: { session: Session }) {
       )}
 
       <SessionsPanel />
+      <TrustedDevicesPanel />
       <OrgPolicyPanel session={session} />
     </div>
   );
@@ -385,13 +390,85 @@ function SessionsPanel() {
   );
 }
 
+function TrustedDevicesPanel() {
+  const [list, setList] = useState<TrustedDeviceInfo[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = () => getTrustedDevices().then(setList).catch((e) => setError(e.message));
+  useEffect(() => {
+    load();
+  }, []);
+  const revoke = async (id: string) => {
+    setError(null);
+    try {
+      await revokeTrustedDevice(id);
+      load();
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  };
+
+  const columns: Column<TrustedDeviceInfo>[] = [
+    {
+      key: "device",
+      header: "Device",
+      render: (d) => <strong>{_device(d.user_agent)}</strong>,
+    },
+    { key: "ip", header: "IP", render: (d) => d.ip ?? "—" },
+    {
+      key: "last",
+      header: "Last used",
+      render: (d) => new Date(d.last_used_at).toLocaleString(),
+      sortValue: (d) => d.last_used_at,
+    },
+    {
+      key: "expires",
+      header: "Expires",
+      render: (d) => new Date(d.expires_at).toLocaleDateString(),
+      sortValue: (d) => d.expires_at,
+    },
+    {
+      key: "actions",
+      header: "Actions",
+      render: (d) => (
+        <Button size="sm" variant="danger-outline" onClick={() => revoke(d.id)}>
+          Forget
+        </Button>
+      ),
+    },
+  ];
+
+  return (
+    <section className="sec-block">
+      <h3>Remembered devices</h3>
+      <p className="sec-sub">
+        Devices you've told Salescale to skip the two-factor prompt on. Forget
+        a device to require a code there again.
+      </p>
+      {error && <Alert tone="danger">{error}</Alert>}
+      <DataTable<TrustedDeviceInfo>
+        rows={list ?? []}
+        rowKey={(d) => d.id}
+        loading={list == null}
+        initialSort="-last"
+        emptyMessage="No remembered devices."
+        columns={columns}
+      />
+    </section>
+  );
+}
+
 function OrgPolicyPanel({ session }: { session: Session }) {
   const [required, setRequired] = useState<boolean | null>(null);
+  const [allowRemember, setAllowRemember] = useState<boolean | null>(null);
   const [error, setError] = useState<string | null>(null);
   const isOwner = session.role === "owner";
   useEffect(() => {
     getMyOrg()
-      .then((o) => setRequired(o.require_mfa))
+      .then((o) => {
+        setRequired(o.require_mfa);
+        setAllowRemember(o.allow_remember_device);
+      })
       .catch((e) => setError(e.message));
   }, []);
   if (!isOwner) return null;
@@ -401,6 +478,16 @@ function OrgPolicyPanel({ session }: { session: Session }) {
     try {
       const o = await setRequireMfa(!required);
       setRequired(o.require_mfa);
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  };
+  const toggleRemember = async () => {
+    if (allowRemember == null) return;
+    setError(null);
+    try {
+      const o = await setAllowRememberDevice(!allowRemember);
+      setAllowRemember(o.allow_remember_device);
     } catch (e) {
       setError((e as Error).message);
     }
@@ -423,6 +510,24 @@ function OrgPolicyPanel({ session }: { session: Session }) {
             onClick={toggle}
           >
             {required ? "Turn off" : "Turn on"}
+          </Button>
+        )}
+      </div>
+      <div className="card sec-policy">
+        <div className="sec-policy-copy">
+          <strong>Allow "remember this device"</strong>
+          <p className="sec-policy-desc">
+            When on, team members can skip the 2FA prompt on devices they've
+            marked as trusted. Turn off to require a code every login,
+            regardless of device.
+          </p>
+        </div>
+        {allowRemember != null && (
+          <Button
+            variant={allowRemember ? "danger-outline" : "primary"}
+            onClick={toggleRemember}
+          >
+            {allowRemember ? "Turn off" : "Turn on"}
           </Button>
         )}
       </div>

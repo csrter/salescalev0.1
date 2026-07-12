@@ -67,6 +67,14 @@ class Organization(Base):
     require_mfa: Mapped[bool] = mapped_column(
         Boolean, default=False, server_default=text("false"), nullable=False
     )
+    # Org policy: when true (default), a member who checks "remember this
+    # device" at a 2FA challenge gets a trusted-device grant that skips future
+    # challenges on that device (see models.core.TrustedDevice, services/
+    # trusted_devices.py). Owners handling compliance-sensitive clients may
+    # turn this off to force 2FA on every login regardless of device.
+    allow_remember_device: Mapped[bool] = mapped_column(
+        Boolean, default=True, server_default=text("true"), nullable=False
+    )
     # Phase 8 — Stripe subscription linkage. Populated by the billing webhook.
     stripe_customer_id: Mapped[Optional[str]] = mapped_column(
         String(64), unique=True, index=True
@@ -216,6 +224,42 @@ class UserSession(Base):
     user_agent: Mapped[Optional[str]] = mapped_column(String(400))
     ip: Mapped[Optional[str]] = mapped_column(String(64))
     last_seen_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    revoked: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=text("false"), nullable=False
+    )
+    created_at: Mapped[dt.datetime] = created_at_column()
+
+
+class TrustedDevice(Base):
+    """A "remember this device" grant: proof that this browser recently passed
+    a 2FA challenge, so POST /api/auth/login can skip issuing a new one for it
+    until expires_at. Proven by a random token the client stores locally and
+    sends back on /login (header, never a cookie — this app has no cookie
+    auth surface) — only its sha256 hash is ever persisted, the same
+    lookup-by-hash pattern models/team.py uses for invite tokens. This is
+    NOT a session and never substitutes for one; it only ever short-circuits
+    the MFA step, and every real request still needs a genuine access token
+    tied to a UserSession. Explicitly listable and revocable per user
+    (api/auth.py trusted-devices endpoints), and wiped alongside every other
+    account-wide credential reset (logout-all, password reset, MFA disable)."""
+
+    __tablename__ = "trusted_devices"
+
+    id: Mapped[str] = id_column()
+    user_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id"), nullable=False, index=True
+    )
+    token_hash: Mapped[str] = mapped_column(
+        String(64), unique=True, nullable=False, index=True
+    )
+    user_agent: Mapped[Optional[str]] = mapped_column(String(400))
+    ip: Mapped[Optional[str]] = mapped_column(String(64))
+    expires_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    last_used_at: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
     )
     revoked: Mapped[bool] = mapped_column(

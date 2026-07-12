@@ -78,6 +78,7 @@ from ..schemas import (
     MembershipOut,
     OkResponse,
     OrganizationOut,
+    OrgRememberDeviceIn,
     OrgSecurityIn,
     OrgSignupRequest,
     QualifiedLeadCriteriaIn,
@@ -215,6 +216,22 @@ def set_require_mfa(
     next request; it doesn't retroactively invalidate their sessions."""
     org = db.get(Organization, user.organization_id)
     org.require_mfa = body.require_mfa
+    db.commit()
+    return org
+
+
+@router.put("/me/allow-remember-device", response_model=OrganizationOut)
+def set_allow_remember_device(
+    body: OrgRememberDeviceIn,
+    user: User = Depends(require_owner),
+    db: Session = Depends(get_db),
+):
+    """Owner policy: whether team members may check "remember this device" at
+    a 2FA challenge to skip future challenges on that device. Turning it off
+    doesn't retroactively revoke devices already remembered — see
+    trusted_devices for the explicit per-device/revoke-all controls."""
+    org = db.get(Organization, user.organization_id)
+    org.allow_remember_device = body.allow_remember_device
     db.commit()
     return org
 

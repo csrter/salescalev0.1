@@ -153,6 +153,21 @@
   margin-top: var(--space-1);
 }
 
+.auth-remember-device {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-sm);
+  color: var(--ink-soft);
+  cursor: pointer;
+}
+
+.auth-remember-device input[type="checkbox"] {
+  width: auto;
+  min-height: 0;
+  accent-color: var(--accent);
+}
+
 .oauth-divider {
   display: flex;
   align-items: center;

@@ -27,6 +27,19 @@ export function setSession(s: Session | null) {
   else localStorage.removeItem("session");
 }
 
+// "Remember this device" for 2FA — deliberately stored under its OWN key,
+// separate from "session". A plain sign-out clears the session but must NOT
+// clear this: the entire point is that logging back in on the same browser
+// skips the 2FA challenge. It's only cleared by revoking it explicitly, by
+// "log out everywhere" (which revokes it server-side too), or by expiring.
+function getDeviceToken(): string | null {
+  return localStorage.getItem("device_token");
+}
+function setDeviceToken(t: string | null) {
+  if (t) localStorage.setItem("device_token", t);
+  else localStorage.removeItem("device_token");
+}
+
 // Bound every request so a stalled backend/proxy surfaces as a readable
 // timeout instead of the browser's opaque "NetworkError" long after the
 // user gave up. Generous: live platform refreshes can legitimately take
@@ -81,20 +94,35 @@ export function isMfaChallenge(r: LoginResult): r is LoginChallenge {
 }
 
 export async function login(email: string, password: string): Promise<LoginResult> {
+  // If this browser holds a "remember this device" grant, send it along — a
+  // valid one lets the backend skip straight past the 2FA challenge.
+  const deviceToken = getDeviceToken();
   const r = await api<LoginResult>("/api/auth/login", {
     method: "POST",
     body: JSON.stringify({ email, password }),
+    headers: deviceToken ? { "X-Device-Token": deviceToken } : undefined,
   });
   if (!isMfaChallenge(r)) setSession(r);
   return r;
 }
 
-/** Second step of a 2FA login: exchange the challenge + code for a session. */
-export async function loginMfa(challenge_token: string, code: string): Promise<Session> {
-  const s = await api<Session>("/api/auth/login/mfa", {
+interface LoginMfaResponse extends Session {
+  device_token?: string | null;
+}
+
+/** Second step of a 2FA login: exchange the challenge + code for a session.
+ * Pass rememberDevice=true to also get a "remember this device" grant back
+ * (stored locally so future logins on this browser skip the challenge). */
+export async function loginMfa(
+  challenge_token: string,
+  code: string,
+  rememberDevice = false,
+): Promise<Session> {
+  const s = await api<LoginMfaResponse>("/api/auth/login/mfa", {
     method: "POST",
-    body: JSON.stringify({ challenge_token, code }),
+    body: JSON.stringify({ challenge_token, code, remember_device: rememberDevice }),
   });
+  if (s.device_token) setDeviceToken(s.device_token);
   setSession(s);
   return s;
 }
@@ -142,8 +170,27 @@ export interface SessionInfo {
 export const getSessions = () => api<SessionInfo[]>("/api/auth/sessions");
 export const revokeSession = (id: string) =>
   api<{ ok: boolean }>(`/api/auth/sessions/${id}`, { method: "DELETE" });
-export const logoutEverywhere = () =>
-  api<{ ok: boolean }>("/api/auth/logout-all", { method: "POST" });
+export const logoutEverywhere = async () => {
+  const r = await api<{ ok: boolean }>("/api/auth/logout-all", { method: "POST" });
+  // The server just revoked every trusted device too — drop the local copy.
+  setDeviceToken(null);
+  return r;
+};
+
+// --- Remembered 2FA devices ---
+
+export interface TrustedDeviceInfo {
+  id: string;
+  user_agent: string | null;
+  ip: string | null;
+  created_at: string;
+  last_used_at: string;
+  expires_at: string;
+}
+export const getTrustedDevices = () =>
+  api<TrustedDeviceInfo[]>("/api/auth/trusted-devices");
+export const revokeTrustedDevice = (id: string) =>
+  api<{ ok: boolean }>(`/api/auth/trusted-devices/${id}`, { method: "DELETE" });
 
 // --- Organization (security policy) ---
 
@@ -151,11 +198,17 @@ export interface Org {
   id: string;
   name: string;
   require_mfa: boolean;
+  allow_remember_device: boolean;
   created_at: string;
 }
 export const getMyOrg = () => api<Org>("/api/orgs/me");
 export const setRequireMfa = (require_mfa: boolean) =>
   api<Org>("/api/orgs/me/require-mfa", { method: "PUT", body: JSON.stringify({ require_mfa }) });
+export const setAllowRememberDevice = (allow_remember_device: boolean) =>
+  api<Org>("/api/orgs/me/allow-remember-device", {
+    method: "PUT",
+    body: JSON.stringify({ allow_remember_device }),
+  });
 
 /** The org's own "house" prospect pipeline lives on a hidden client that the
  * server gets-or-creates. Team-only; not returned by GET /api/clients. */

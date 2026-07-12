@@ -23,7 +23,7 @@ from ..schemas import (
 )
 from ..security import verify_password
 from ..services import email as email_service
-from ..services import mfa, sms
+from ..services import mfa, sms, trusted_devices
 
 router = APIRouter(prefix="/api/mfa", tags=["mfa"])
 
@@ -163,5 +163,8 @@ def disable(
     if not verify_password(body.password, user.hashed_password):
         raise HTTPException(400, "Password is incorrect")
     mfa.clear(user)
+    # A remembered device only ever means "skip the 2FA challenge" — with no
+    # 2FA left to skip, stale grants are meaningless; wipe them.
+    trusted_devices.revoke_all(db, user.id)
     db.commit()
     return OkResponse()

@@ -942,6 +942,7 @@ function Login({ onLogin }: { onLogin: (s: Session) => void }) {
   const [resetSent, setResetSent] = useState(false);
   const [challenge, setChallenge] = useState<LoginChallenge | null>(null);
   const [code, setCode] = useState("");
+  const [rememberDevice, setRememberDevice] = useState(false);
   const oauth = async (provider: "google" | "meta") => {
     setError(null);
     try {
@@ -983,7 +984,7 @@ function Login({ onLogin }: { onLogin: (s: Session) => void }) {
               e.preventDefault();
               setError(null);
               try {
-                onLogin(await loginMfa(challenge.challenge_token, code));
+                onLogin(await loginMfa(challenge.challenge_token, code, rememberDevice));
               } catch (err) {
                 setError((err as Error).message);
               }
@@ -1007,6 +1008,14 @@ function Login({ onLogin }: { onLogin: (s: Session) => void }) {
                 placeholder="123456"
               />
             </Field>
+            <label className="auth-remember-device">
+              <input
+                type="checkbox"
+                checked={rememberDevice}
+                onChange={(e) => setRememberDevice(e.target.checked)}
+              />
+              <span>Remember this device for 30 days</span>
+            </label>
             <Button type="submit" variant="primary" size="lg" block>
               Verify
             </Button>
@@ -1018,6 +1027,7 @@ function Login({ onLogin }: { onLogin: (s: Session) => void }) {
               onClick={() => {
                 setChallenge(null);
                 setCode("");
+                setRememberDevice(false);
                 setError(null);
               }}
             >
