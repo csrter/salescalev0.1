@@ -483,7 +483,11 @@ live activation + the entitlement flip, the Outreach module build
       "OAuth from Claude": there is no consumer-OAuth path for a backend to call
       the Claude API on a user's behalf; server auth is an API key (or WIF), so
       personalization uses a server-held key per the BYO/operator resolution
-      above. Not deployed yet.
+      above. DEPLOYED to production (2026-07-12): backend/frontend rebuilt on
+      the VPS with openai 2.45.0 + google-genai + anthropic 0.116.0 in the
+      image; dispatch module loads and all three providers are selectable.
+      Active provider stays anthropic until an operator sets AI_PROVIDER +
+      the matching key in backend/.env.
 - [ ] Stripe live activation + entitlement flip (after 12–14, so real
       limits land everywhere in one pass)
 - [ ] Outreach module build (dev-mode) — go-live gated on Meta App
