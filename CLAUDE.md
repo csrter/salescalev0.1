@@ -639,8 +639,21 @@ live activation + the entitlement flip, the Outreach module build
       warmup toggle → started stamp → bar at 0%/50%/"week 3 of 4", ramped cap
       (0 of 20 / 0 of 60 today), live step edit on an active campaign with
       stable ids, archive → activate 409, and preview rendering
-      "Hi John O'Brien … Mesa, AZ" from all-lowercase CRM data. NOT yet
-      deployed to production.
+      "Hi John O'Brien … Mesa, AZ" from all-lowercase CRM data.
+      DEPLOYED to production (2026-07-12): migration d7f3b9c1e4a6 applied
+      cleanly to the live Supabase DB, health green. Deploy incident worth
+      remembering: the first rollout CRASH-LOOPED (exit 3, traceback
+      swallowed by stdout buffering) because ~30k macOS AppleDouble files
+      (._*, 163-byte null-padded resource forks) had been scattered through
+      ~/salescale on the VPS by a Mac-made `tar czf` tarball extracted there
+      at 11:22 UTC (NOT by the git-archive deploy flow — those archives are
+      clean; likely a manual re-extract of the old salescale-deploy.tar.gz).
+      The image build baked them in and alembic parsed ._<migration>.py as
+      Python → "source code string cannot contain null bytes". Fixed by
+      purging ._*/.DS_Store on the VPS AND excluding both patterns in
+      backend/ + frontend/.dockerignore so tree junk can never enter an
+      image again. Never use plain macOS `tar czf` for anything that lands
+      on the VPS — git archive only (or COPYFILE_DISABLE=1).
 - [ ] Stripe live activation + entitlement flip (after 12–14, so real
       limits land everywhere in one pass)
 - [ ] Outreach module build (dev-mode) — go-live gated on Meta App
