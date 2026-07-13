@@ -1055,7 +1055,8 @@ live activation + the entitlement flip, the Outreach module build
       queued 200, context card PUT 200, Review tab rendered both enrollments
       personalized ("Hi John O'Brien … Desert Air HVAC"), Approve badge,
       hand-edit override round-trip ("Edited" badge), require-approval
-      Switch PATCH 200. NOT deployed yet. NOTE: alt2 has no AI key, so
+      Switch PATCH 200. DEPLOYED to production (2026-07-13 UTC, bdb8b25
+      deploy). NOTE: alt2 has no AI key, so
       research/snippet paths verified fail-open; prod needs ANTHROPIC_API_KEY
       (or a BYO provider key) before research fields return values.
 - [x] AI provider key in Integrations (same-day follow-up): the BYO AI keys
@@ -1076,7 +1077,8 @@ live activation + the entitlement flip, the Outreach module build
       (owner save/status/remove round-trip; admin 403 on all three AI
       providers but still 200 on google_places). Verified live on alt2:
       card renders "No Key — AI Features Off", owner Add key → PUT 200 →
-      "Your Key" badges, Remove → back to warning state. NOT deployed yet.
+      "Your Key" badges, Remove → back to warning state. DEPLOYED to
+      production (2026-07-13 UTC, bdb8b25 deploy).
 - [x] Warmup functionality audit (same-day): proved the warmup pipeline
       end-to-end with ZERO mocks — scratchpad harness (warmup_e2e.py) ran a
       local aiosmtpd sink (implicit TLS + AUTH, self-signed cert trusted via
@@ -1097,7 +1099,9 @@ live activation + the entitlement flip, the Outreach module build
       warn Alert explaining peer exchange needs a second mailbox (cap ramp
       still applies). THIS IS PROD'S CURRENT STATE: Atlas Reach has one
       mailbox — warmup exchange is inert until a second mailbox is connected
-      with warmup on (user-side). NOT deployed yet.
+      with warmup on (user-side). DEPLOYED to production (2026-07-13 UTC,
+      bdb8b25 deploy); since resolved user-side — three mailboxes
+      connected with warmup on.
 - [x] Desktop app repair + flaw audit (2026-07-12, post-DMG-fix): the
       running desktop app was silently talking to a July-10 zombie dev
       server on port 8000 (throwaway /tmp e2e SQLite — explained the
@@ -1143,8 +1147,7 @@ live activation + the entitlement flip, the Outreach module build
       (user-side: add APP_BASE_URL=https://app.salescale.lol to the VPS
       backend/.env and recreate). Tests 459 → 462, tsc clean, DMG rebuilt
       (148MB) + contents verified (backend hash, new main.js, frontend
-      asar). NOT deployed (the scheduler-gate backend change is
-      desktop-only behavior; deploy bundles it with the pending commits).
+      asar). DEPLOYED to production with the 2026-07-13 UTC bdb8b25 deploy.
 - [x] Warmup timezone (2026-07-12, same-day): the warmup engine's
       08:00–18:00 send window, weekend reduction, AND daily-budget midnight
       now follow a per-mailbox IANA `warmup_timezone` (migration
@@ -1163,9 +1166,11 @@ live activation + the entitlement flip, the Outreach module build
       459→462→465 (test_desktop_mode.py 3 + warmup tz cases in
       test_email_warmup.py incl. the straddle-midnight budget case).
       Atlas Reach wants America/Phoenix on its three mailboxes —
-      set in the Warmup tab after the deploy (or SQL). NOT deployed yet;
-      NOTE: until deployed, prod's UTC window starts warmup at 1am
-      Phoenix.
+      DEPLOYED to production (2026-07-13 UTC): migration 924b1e025dc1
+      applied to the live Supabase DB, backend/frontend rebuilt, health
+      green, new routes auth-gated; all three Atlas Reach mailboxes set
+      to America/Phoenix (user-approved SQL) — first warmup sends land
+      8am–6pm Phoenix.
 - [ ] Stripe live activation + entitlement flip (after 12–14, so real
       limits land everywhere in one pass)
 - [ ] Outreach module build (dev-mode) — go-live gated on Meta App
