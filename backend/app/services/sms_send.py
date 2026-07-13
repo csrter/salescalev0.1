@@ -26,6 +26,7 @@ ledger converges with Twilio Advanced Opt-Out's.
 
 import datetime as dt
 import logging
+import random
 import uuid
 from typing import Optional, Tuple
 from zoneinfo import ZoneInfo
@@ -63,6 +64,13 @@ SUPPRESSED = "suppressed"
 BLOCKED = "blocked"
 CAP_REACHED = "cap"
 OUTSIDE_WINDOW = "window"
+SPACING = "spacing"  # deferred by the per-account min-spacing throttle
+
+# BlueBubbles sends go through a real Mac + Apple ID, so an account gets a
+# conservative default spacing (jittered up in next_spacing_time) unless the
+# operator sets their own — a personal iMessage sender machine-gunning texts
+# is the fastest way to get the Apple ID flagged. Applied at account creation.
+BLUEBUBBLES_DEFAULT_SPACING_SECONDS = 60
 
 _TWILIO_OPTED_OUT_CODE = "21610"
 _STOP_FOOTER = "Reply STOP to opt out"
@@ -112,6 +120,48 @@ def campaign_sends_today(db: Session, campaign: SmsCampaign) -> int:
         ).scalar_one()
         or 0
     )
+
+
+# --- send spacing (anti-detection pacing, BlueBubbles especially) ---
+
+
+def _last_out_created_at(
+    db: Session, account: SmsAccount
+) -> Optional[dt.datetime]:
+    """Timestamp of this account's most recent outbound message, tz-normalized
+    to UTC-aware (SQLite hands back naive datetimes even for
+    DateTime(timezone=True); Postgres returns aware)."""
+    last = db.execute(
+        select(SmsMessage.created_at)
+        .where(
+            SmsMessage.account_id == account.id,
+            SmsMessage.direction == SMS_DIR_OUT,
+        )
+        .order_by(SmsMessage.created_at.desc())
+        .limit(1)
+    ).scalar_one_or_none()
+    if last is not None and last.tzinfo is None:
+        last = last.replace(tzinfo=dt.timezone.utc)
+    return last
+
+
+def next_spacing_time(
+    db: Session, account: SmsAccount, *, now: Optional[dt.datetime] = None
+) -> dt.datetime:
+    """When a spacing-deferred campaign send should next be attempted: the last
+    send time plus the configured spacing scaled by a random 1.0–1.8× jitter,
+    so consecutive iMessages land at a human-irregular cadence rather than a
+    fixed, obviously-scripted interval. Always strictly in the future."""
+    ref = now or utcnow()
+    spacing = account.min_send_spacing_seconds or 0
+    last = _last_out_created_at(db, account)
+    gap = spacing * random.uniform(1.0, 1.8)
+    target = (last or ref) + dt.timedelta(seconds=gap)
+    if target <= ref:
+        # last + gap already passed (slow tick) — still keep a jittered gap off
+        # `now` so we never fire two sends in the same instant.
+        target = ref + dt.timedelta(seconds=random.uniform(spacing * 0.5, spacing) + 1)
+    return target
 
 
 # --- quiet hours (TCPA) ---
@@ -503,31 +553,21 @@ def send(
     if campaign is not None and campaign_sends_today(db, campaign) >= campaign.daily_cap:
         return CAP_REACHED, None
 
-    # Minimum spacing between sends on this account (mainly for BlueBubbles'
-    # single-device send rate, but provider-agnostic by design). Enforced
-    # here in the gateway — the one adapter-agnostic layer — so it survives a
-    # provider swap. A violation defers via the engine's standard CAP_REACHED
-    # backoff (retried next cycle); coarse by design for the dev path.
+    # Minimum spacing between sends on this account. This is the anti-detection
+    # throttle for the BlueBubbles path especially: those sends go through a
+    # real Mac + Apple ID, and machine-gun sending (many iMessages in seconds)
+    # is exactly what Apple flags. Enforced here in the gateway — the one
+    # adapter-agnostic layer — so it survives a provider swap. Only AUTOMATED
+    # campaign sends are paced; a human's 1:1 reply in the inbox (campaign is
+    # None) is already human-timed and is never throttled. A violation returns
+    # SPACING, which the engine reschedules to a jittered short delay
+    # (next_spacing_time) rather than the coarse cap backoff.
     spacing = account.min_send_spacing_seconds or 0
-    if spacing > 0:
-        last = db.execute(
-            select(SmsMessage.created_at)
-            .where(
-                SmsMessage.account_id == account.id,
-                SmsMessage.direction == SMS_DIR_OUT,
-            )
-            .order_by(SmsMessage.created_at.desc())
-            .limit(1)
-        ).scalar_one_or_none()
+    if campaign is not None and spacing > 0:
+        last = _last_out_created_at(db, account)
         ref = now or utcnow()
-        if last is not None:
-            # SQLite (dev/test) returns naive datetimes even for
-            # DateTime(timezone=True); Postgres returns aware. Normalize so the
-            # subtraction can't raise on either backend.
-            if last.tzinfo is None:
-                last = last.replace(tzinfo=dt.timezone.utc)
-            if (ref - last).total_seconds() < spacing:
-                return CAP_REACHED, None
+        if last is not None and (ref - last).total_seconds() < spacing:
+            return SPACING, None
 
     final_body = apply_compliance_suffix(
         body,

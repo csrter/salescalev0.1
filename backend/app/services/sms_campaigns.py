@@ -581,6 +581,13 @@ def process_enrollment(db: Session, enrollment: SmsEnrollment) -> None:
     if code == gateway.CAP_REACHED:
         enrollment.next_run_at = now + dt.timedelta(hours=1)
         return
+    if code == gateway.SPACING:
+        # Per-account min-spacing throttle (anti-detection pacing, BlueBubbles
+        # especially) — retry the SAME step shortly, at a jittered interval, so
+        # a burst of due enrollments drips out at a human cadence instead of
+        # firing all at once.
+        enrollment.next_run_at = gateway.next_spacing_time(db, account, now=now)
+        return
     if code == gateway.OUTSIDE_WINDOW:
         # Our own window check above passed but the gateway's re-check
         # disagreed (clock skew right at a window edge, or the campaign's

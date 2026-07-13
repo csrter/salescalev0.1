@@ -1263,10 +1263,17 @@ live activation + the entitlement flip, the Outreach module build
       {relay}/api/v1/message/text?password=, chatGuid iMessage;-;<e164>,
       returns data.guid) + _verify_bluebubbles (GET /api/v1/ping) wired
       into _provider_send/verify_credentials ahead of the twilio default;
-      a provider-agnostic min-spacing guard in the gateway send() (survives
-      a bluebubbles→sendblue swap; a violation defers via the standard
-      CAP_REACHED backoff — coarse by design; naive/aware datetime coerced
-      so it can't 500 on SQLite vs Postgres); and channel_health(db,account)
+      a provider-agnostic min-spacing THROTTLE in the gateway send()
+      (anti-detection pacing — BlueBubbles runs through a real Mac/Apple ID,
+      so machine-gun sends get the ID flagged): only AUTOMATED campaign sends
+      are paced (a human's 1:1 inbox reply, campaign=None, is never
+      throttled), a violation returns the SPACING code which the engine
+      reschedules to last_send + spacing×random(1.0–1.8) via
+      next_spacing_time (jittered so the cadence isn't robotic, NOT the old
+      coarse +1h), and bluebubbles accounts default to a 60s spacing at
+      creation (BLUEBUBBLES_DEFAULT_SPACING_SECONDS; operator can override,
+      incl. 0); naive/aware datetime coerced so it can't 500 on SQLite vs
+      Postgres. Plus channel_health(db,account)
       → {status: healthy|degraded|blocked, ...} from account status + a
       25-row outbound sample (green-bubble/SMS fallback = degraded via the
       new service column; ≥50% failed = blocked). NEW api/imessage_webhooks

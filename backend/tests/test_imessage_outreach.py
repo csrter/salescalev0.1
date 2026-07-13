@@ -18,15 +18,18 @@ import pytest
 from sqlalchemy import select
 
 from app.db import SessionLocal
+from app.models.base import utcnow
 from app.models.crm import Contact
 from app.models.sms_outreach import (
     SMS_ACCOUNT_ACTIVE,
     SMS_ACCOUNT_ERROR,
+    SMS_CAMPAIGN_ACTIVE,
     SMS_DIR_OUT,
     SMS_MSG_FAILED,
     SMS_MSG_READ,
     SMS_MSG_SENT,
     SmsAccount,
+    SmsCampaign,
     SmsMessage,
     SmsSuppression,
 )
@@ -190,14 +193,39 @@ def test_verify_credentials_dispatches_bluebubbles(monkeypatch):
     assert ok and calls == ["bb"]  # bluebubbles path only, twilio untouched
 
 
-# --- min-spacing guard (in the gateway, provider-agnostic) -------------------
+# --- min-spacing throttle (anti-detection pacing) ---------------------------
 
 
-def test_min_spacing_defers_second_send(im_org, api, bb_creds_ok, captured_bb):
+def _always_open_campaign(db, account):
+    """A minimal campaign whose send window is always open, so tests exercise
+    the spacing guard (which sits after the window check) without clock luck."""
+    camp = SmsCampaign(
+        organization_id=account.organization_id,
+        name="Pacing Camp",
+        status=SMS_CAMPAIGN_ACTIVE,
+        account_id=account.id,
+        send_window_start=0,
+        send_window_end=24,
+        send_days=[0, 1, 2, 3, 4, 5, 6],
+    )
+    db.add(camp)
+    db.flush()
+    return camp
+
+
+def test_bluebubbles_account_defaults_to_conservative_spacing(im_org, api, bb_creds_ok):
+    # not specified → defaults to the BlueBubbles anti-detection spacing
+    acct = _mk_bb_account(im_org, api, from_number="+14805551040")
+    assert acct["min_send_spacing_seconds"] == gateway.BLUEBUBBLES_DEFAULT_SPACING_SECONDS
+    # explicit value (incl. 0 to opt out) is respected
+    acct0 = _mk_bb_account(im_org, api, from_number="+14805551041", min_send_spacing_seconds=0)
+    assert acct0["min_send_spacing_seconds"] == 0
+
+
+def test_campaign_send_defers_on_spacing_with_jitter(im_org, api, bb_creds_ok, captured_bb):
     acct = _mk_bb_account(
         im_org, api, from_number="+14805551004", min_send_spacing_seconds=300
     )
-    assert acct["min_send_spacing_seconds"] == 300
     _mk_contact(im_org, api, mobile_phone="+14805559004")
     db = SessionLocal()
     try:
@@ -205,14 +233,42 @@ def test_min_spacing_defers_second_send(im_org, api, bb_creds_ok, captured_bb):
         contact = db.execute(
             select(Contact).where(Contact.mobile_phone == "+14805559004")
         ).scalars().first()
-        first, _ = gateway.send(db, account, contact, "one", org_name="iMessage Co")
-        second, second_row = gateway.send(db, account, contact, "two", org_name="iMessage Co")
+        camp = _always_open_campaign(db, account)
+        first, _ = gateway.send(db, account, contact, "one", campaign=camp, org_name="iMessage Co")
+        second, second_row = gateway.send(db, account, contact, "two", campaign=camp, org_name="iMessage Co")
+        # the engine's reschedule target sits within [1.0x, 1.8x] the spacing
+        nxt = gateway.next_spacing_time(db, account)
+        now = utcnow()
         db.commit()
     finally:
         db.close()
     assert first == gateway.SENT
-    assert second == gateway.CAP_REACHED and second_row is None
+    assert second == gateway.SPACING and second_row is None
     assert len(captured_bb) == 1  # the deferred send never hit the provider
+    gap = (nxt - now).total_seconds()
+    assert 300 * 1.0 - 5 <= gap <= 300 * 1.8 + 5  # jittered, human-irregular
+
+
+def test_manual_send_is_never_throttled(im_org, api, bb_creds_ok, captured_bb):
+    """A human's 1:1 reply in the inbox (campaign is None) bypasses spacing —
+    it's already human-timed, and throttling live replies is user-hostile."""
+    acct = _mk_bb_account(
+        im_org, api, from_number="+14805551042", min_send_spacing_seconds=300
+    )
+    _mk_contact(im_org, api, mobile_phone="+14805559042")
+    db = SessionLocal()
+    try:
+        account = db.get(SmsAccount, acct["id"])
+        contact = db.execute(
+            select(Contact).where(Contact.mobile_phone == "+14805559042")
+        ).scalars().first()
+        first, _ = gateway.send(db, account, contact, "one", kind="manual", org_name="iMessage Co")
+        second, _ = gateway.send(db, account, contact, "two", kind="manual", org_name="iMessage Co")
+        db.commit()
+    finally:
+        db.close()
+    assert first == gateway.SENT and second == gateway.SENT
+    assert len(captured_bb) == 2
 
 
 # --- channel_health enum ----------------------------------------------------

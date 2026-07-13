@@ -186,7 +186,18 @@ def create_account(
         messaging_service_sid=(body.messaging_service_sid or "").strip() or None,
         daily_send_cap=body.daily_send_cap,
         relay_url=(body.relay_url or "").strip() or None,
-        min_send_spacing_seconds=body.min_send_spacing_seconds,
+        # BlueBubbles sends through a real Mac/Apple ID — default to a
+        # conservative, jittered spacing so it's not machine-gun-detectable
+        # out of the box (the operator can still set their own, incl. 0).
+        min_send_spacing_seconds=(
+            body.min_send_spacing_seconds
+            if body.min_send_spacing_seconds is not None
+            else (
+                sms_send.BLUEBUBBLES_DEFAULT_SPACING_SECONDS
+                if body.provider == "bluebubbles"
+                else None
+            )
+        ),
         # URL secret for unsigned-webhook providers (Sendblue, BlueBubbles);
         # minted for every account so a later provider switch never leaves a
         # gap.

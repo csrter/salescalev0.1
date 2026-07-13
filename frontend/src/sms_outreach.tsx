@@ -2463,14 +2463,14 @@ function AccountDialog({
           <Field
             label="Min seconds between sends"
             optional
-            description="Enforced in the send gateway for this account — leave blank for no minimum."
+            description="Paces automated campaign sends so this Mac/Apple ID isn't flagged for machine-gun texting (gaps are randomized above this floor; live 1:1 replies are never throttled). Leave blank for the recommended 60s default; set 0 to disable."
           >
             <input
               type="number"
               min={0}
               value={minSendSpacing}
               onChange={(e) => setMinSendSpacing(e.target.value)}
-              placeholder="e.g. 30"
+              placeholder="60"
             />
           </Field>
         )}
