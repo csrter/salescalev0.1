@@ -42,6 +42,9 @@ PRICING_MICRO_USD_PER_TOKEN = {
     "gpt-4o-mini": (0.15, 0.6),
     "gpt-4.1": (2.0, 8.0),
     "gpt-4.1-mini": (0.4, 1.6),
+    "gemini-2.5-flash": (0.30, 2.50),
+    # Retired by Google 2026-06-01 (404 NOT_FOUND) — kept only so price()
+    # still prices any pre-existing AiUsage rows recorded under this model.
     "gemini-2.0-flash": (0.1, 0.4),
     "gemini-1.5-pro": (1.25, 5.0),
     "gemini-1.5-flash": (0.075, 0.3),

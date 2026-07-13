@@ -124,7 +124,13 @@ class Settings(BaseSettings):
     openai_api_key: str = ""
     openai_model: str = "gpt-4o"
     gemini_api_key: str = ""
-    gemini_model: str = "gemini-2.0-flash"
+    # gemini-2.0-flash was shut down by Google 2026-06-01 (404 NOT_FOUND);
+    # gemini-2.5-flash is the same low-latency/high-volume/price-performance
+    # tier, still stable — the direct-fit replacement for this app's short,
+    # cheap, high-volume completions (personalization snippets, city
+    # inference, research fields), not the pricier gemini-3.5-flash "frontier"
+    # tier aimed at agentic/coding workloads.
+    gemini_model: str = "gemini-2.5-flash"
     # Global default monthly cap on AI queries per Organization until Phase 8
     # wires real tier limits into services/entitlements.py.
     ai_monthly_query_limit: int = 200
