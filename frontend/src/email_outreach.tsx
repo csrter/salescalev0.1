@@ -3075,6 +3075,18 @@ function WarmupPanel({
         </p>
       </div>
 
+      {accounts.some((a) => a.warmup_enabled) &&
+        accounts.filter((a) => a.warmup_enabled && a.status === "active")
+          .length < 2 && (
+          <Alert tone="warn">
+            Warmup mail is exchanged between your own mailboxes, so it needs
+            at least two active mailboxes with warmup on — right now no
+            warmup emails can send. The sending-cap ramp still applies to
+            this mailbox; connect a second mailbox and enable warmup on it to
+            start the exchange.
+          </Alert>
+        )}
+
       <div className="eml-wu-grid">
         {accounts.map((a) => {
           const fresh = !a.warmup_started_at;

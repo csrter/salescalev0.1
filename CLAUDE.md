@@ -1077,6 +1077,27 @@ live activation + the entitlement flip, the Outreach module build
       providers but still 200 on google_places). Verified live on alt2:
       card renders "No Key — AI Features Off", owner Add key → PUT 200 →
       "Your Key" badges, Remove → back to warning state. NOT deployed yet.
+- [x] Warmup functionality audit (same-day): proved the warmup pipeline
+      end-to-end with ZERO mocks — scratchpad harness (warmup_e2e.py) ran a
+      local aiosmtpd sink (implicit TLS + AUTH, self-signed cert trusted via
+      SSL_CERT_FILE; aiosmtpd gotcha: implicit-TLS sessions never set
+      session.ssl, so AUTH is only advertised with auth_require_tls=False)
+      and drove email_warmup.run_warmup_tick against the alt2 dev DB through
+      the REAL gateway + smtplib transport: tick 1 sent 2 (one per mailbox,
+      peer-rotated), tick 2 paced by the jitter gap sent 1, messages carried
+      X-Salescale-Warmup/Depth headers, on_warmup_received recorded receipt
+      and fired a threaded "Re:" auto-reply (In-Reply-To correct, depth 1),
+      peer-pair sent/received counters advanced, failed-send → account
+      status=error guard observed live. Scheduler wiring confirmed
+      (main.py _email_outreach_scheduler → email_warmup.run_due;
+      email_campaigns.register_hooks binds on_warmup_received/junk at
+      import). 17 warmup unit tests green. ONE functional gap found + fixed:
+      an org with <2 active warmup-enabled mailboxes gets ZERO exchange
+      volume silently ("0 of N today" forever) — the Warmup tab now shows a
+      warn Alert explaining peer exchange needs a second mailbox (cap ramp
+      still applies). THIS IS PROD'S CURRENT STATE: Atlas Reach has one
+      mailbox — warmup exchange is inert until a second mailbox is connected
+      with warmup on (user-side). NOT deployed yet.
 - [ ] Stripe live activation + entitlement flip (after 12–14, so real
       limits land everywhere in one pass)
 - [ ] Outreach module build (dev-mode) — go-live gated on Meta App
