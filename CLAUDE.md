@@ -1228,6 +1228,9 @@ live activation + the entitlement flip, the Outreach module build
       alt2: real 3-lead run (card appeared mid-flight then completed), a
       simulated 20/80 job rendered the bar at 25% + "about 5m 10s
       remaining" (ETA math verified), running-job-wins-hero display fix.
+      DEPLOYED to production (2026-07-13 UTC, 0972fa9): migration
+      e4e04c133222 applied to the live Supabase DB, health green, endpoint
+      live + auth-gated.
 - [ ] Stripe live activation + entitlement flip (after 12–14, so real
       limits land everywhere in one pass)
 - [ ] Outreach module build (dev-mode) — go-live gated on Meta App
