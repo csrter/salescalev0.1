@@ -1179,15 +1179,17 @@ def test_mark_read_cross_org_contact_404s(sc_org, api, team_headers):
 # --- render failsafes (business-name greeting + AI city inference) -----------
 
 
-def test_sms_failsafe_business_name_greeting_and_ai_city(
+def test_sms_failsafe_business_name_greeting_city_is_plain_field(
     sc_org, api, twilio_creds_ok, monkeypatch
 ):
+    """The AI-inference-when-blank city failsafe is disabled (proved
+    unreliable in practice); {{city}} is now a plain contact.city lookup,
+    same as {{state}} — no AI call is ever attempted for it. The
+    business-name greeting failsafe is unrelated and still active."""
     calls = {"n": 0}
 
     def _fake_call(system, user_content, max_tokens=300):
         calls["n"] += 1
-        assert "city" in system.lower()  # the city-failsafe prompt, not a snippet
-        assert "DESERT AIR HVAC LLC" in user_content  # grounded in the lead's facts
         return "mesa", 8, 3
 
     monkeypatch.setattr(email_personalize, "_call_model", _fake_call)
@@ -1223,26 +1225,20 @@ def test_sms_failsafe_business_name_greeting_and_ai_city(
         )
         body = sms_campaigns.render_body(db, c, step)
         # The business-name failsafe beats the explicit |there fallback (a
-        # named greeting is the point), with acronym-aware proper casing; the
-        # AI-inferred city is smart-cased into the body.
-        assert body == "Hi Desert Air HVAC LLC — great work in Mesa!"
-        # ...and persisted fill-blanks-only, so it's cached on the contact.
-        assert c.city == "Mesa"
-        db.commit()
-        body2 = sms_campaigns.render_body(db, c, step)
-        assert "Mesa" in body2
-        assert calls["n"] == 1  # second render reads the cached city, no re-bill
+        # named greeting is the point), with acronym-aware proper casing.
+        # City is blank on this contact and nothing infers it — the tidy
+        # pass collapses the emptied {{city}} token and its trailing space.
+        assert body == "Hi Desert Air HVAC LLC — great work in!"
+        assert c.city is None
+        assert calls["n"] == 0  # no AI call attempted for city, ever
     finally:
         db.close()
 
 
-def test_sms_failsafe_fails_open(sc_org, api, twilio_creds_ok, monkeypatch):
-    monkeypatch.setattr(
-        email_personalize, "_call_model", lambda s, u, max_tokens=300: ("UNKNOWN", 5, 2)
-    )
-    monkeypatch.setattr(
-        email_personalize.ai_insights, "check_allowance", lambda db, org: None
-    )
+def test_sms_city_fallback_token_when_blank(sc_org, api, twilio_creds_ok):
+    """No AI inference is attempted for {{city}} (disabled — see render_body);
+    a blank city with an explicit template |fallback just renders the
+    fallback, same as any other missing token."""
     acct = _mk_account(sc_org, api, from_number="+14805550882")
     camp = _mk_campaign(sc_org, api, acct["id"])
     contact = _mk_contact(
@@ -1262,26 +1258,19 @@ def test_sms_failsafe_fails_open(sc_org, api, twilio_creds_ok, monkeypatch):
             .scalars()
             .first()
         )
-        # UNKNOWN from the model → city stays blank, template fallbacks apply,
-        # nothing crashes, nothing is written to the contact.
         body = sms_campaigns.render_body(db, c, step)
         assert body == "Hi there, how is your area?"
         assert c.city is None
-
-        # A model exception is equally non-fatal.
-        def _boom(s, u, max_tokens=300):
-            raise RuntimeError("model timeout")
-
-        monkeypatch.setattr(email_personalize, "_call_model", _boom)
-        assert (
-            sms_campaigns.render_body(db, c, step)
-            == "Hi there, how is your area?"
-        )
-        # Garbage answers (digits, sentences) are discarded by the guard.
-        assert sms_campaigns._clean_city("call 480-555-1212") == ""
-        assert sms_campaigns._clean_city("It is probably Mesa, Arizona.") != "Mesa"
     finally:
         db.close()
+
+
+def test_clean_city_guard_discards_garbage():
+    """_clean_city is kept (uncalled by render_body for now — see its
+    docstring) but still unit-tested on its own, since it's a one-line
+    re-enable away from being live again."""
+    assert sms_campaigns._clean_city("call 480-555-1212") == ""
+    assert sms_campaigns._clean_city("It is probably Mesa, Arizona.") != "Mesa"
 
 
 def test_reactivation_rearms_parked_enrollments(sc_org, api, twilio_creds_ok, captured_sends):

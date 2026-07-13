@@ -1344,6 +1344,38 @@ live activation + the entitlement flip, the Outreach module build
       floor-fallback-when-max-unset regression). DEPLOYED to production
       2026-07-13 (migrations f9a3c7e1b6d4 + a3d7c1f8e942 both applied
       cleanly on the live Supabase DB in this session).
+- [x] Gemini model retirement fix + SMS city AI-inference disabled
+      (2026-07-13, same-day follow-up): live-diagnosed (one prod test call,
+      user-authorized, output redacted) why AI personalization went blank
+      right after the Gemini flip above — Google retired gemini-2.0-flash
+      2026-06-01 (HTTP 404), so every Gemini-routed call failed and was
+      silently swallowed by the by-design fail-open try/except around every
+      AI call site. Usage/entitlement/key-resolution all checked out fine
+      (0/200 monthly queries, key resolved). Fixed: default gemini_model →
+      gemini-2.5-flash (same price-performance tier 2.0-flash held, not the
+      pricier gemini-3.5-flash frontier tier; pricing $0.30/$2.50 per 1M
+      in/out confirmed against Google's own pricing page), PRICING table
+      updated (old entry kept so historical AiUsage rows still price
+      correctly). DEPLOYED — config-only, no migration. SEPARATE follow-up
+      the same day: the SMS city AI-inference failsafe (infer_city_failsafe,
+      only fires when {{city}} is referenced AND contact.city is blank)
+      proved inconsistent per-lead in practice even after the model fix
+      (one lead's preview worked, others didn't — root cause not fully
+      pinned down, rate-limiting on the BYO Gemini key was the leading
+      hypothesis but unconfirmed) — user chose to unblock a live campaign
+      rather than keep debugging it. services/sms_campaigns.render_body no
+      longer calls infer_city_failsafe at all: {{city}} is now a PLAIN
+      contact.city field lookup, same as {{state}} — blank renders blank,
+      zero AI dependency, zero failure modes. infer_city_failsafe/
+      _clean_city/_CITY_TOKEN_RE/_CITY_FAILSAFE_SYSTEM are kept defined but
+      uncalled (a one-line change to re-enable, not a rebuild) — read
+      render_body's docstring before re-enabling. Two tests updated to
+      match (business-name-greeting test split from the now-removed AI-city
+      assertion; the fails-open test's now-vacuous _call_model monkeypatches
+      removed, _clean_city's own guard behavior kept as a standalone unit
+      test). Tests 490 → 491. DEPLOYED — config/code only, no migration.
+      Email's {{city}} was never AI-dependent (always a plain field lookup)
+      so this only affects SMS.
 - [ ] Stripe live activation + entitlement flip (after 12–14, so real
       limits land everywhere in one pass)
 - [ ] Outreach module build (dev-mode) — go-live gated on Meta App

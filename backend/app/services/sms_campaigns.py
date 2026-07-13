@@ -208,20 +208,20 @@ def render_body(db: Session, contact: Contact, step: SmsStep, *, ai_snippet: str
     """Render one step's body for one contact. Reuses email_personalize's
     template substitution (casing normalization, #if/spin, the emptied-token
     tidy pass) so `{{first_name|there}}` etc. behave identically to email.
-    `ai_snippet` is the only extra token SMS injects, plus the failsafes:
-    a blank first_name renders as the proper-cased business name (beats any
-    |fallback — a named greeting is the point), and a blank city referenced
-    by the template is AI-inferred and written back fill-blanks-only so the
-    answer is cached on the contact (and visible/correctable in the CRM)."""
+    `ai_snippet` is the only extra token SMS injects, plus the business-name
+    greeting failsafe: a blank first_name renders as the proper-cased
+    business name (beats any |fallback — a named greeting is the point).
+
+    {{city}} is a plain deterministic field lookup (contact.city), same as
+    {{state}} — blank renders blank. The AI-inference-when-blank failsafe
+    that used to live here is disabled for now (proved unreliable in
+    practice — a retired Gemini model + inconsistent per-lead behavior);
+    infer_city_failsafe/_clean_city are kept, just uncalled, so it's a
+    one-line change to re-enable rather than a rebuild."""
     facts = email_personalize._company_facts(db, contact)
     extra = {"ai_snippet": ai_snippet}
     if not (contact.first_name or "").strip() and (facts.get("company") or "").strip():
         extra["first_name"] = business_case(facts["company"])
-    if _CITY_TOKEN_RE.search(step.body_template or "") and not (contact.city or "").strip():
-        org = db.get(Organization, contact.organization_id)
-        city = infer_city_failsafe(db, org, contact)
-        if city:
-            contact.city = city  # caller's commit persists the cache
     return email_personalize._render_template(
         step.body_template or "", contact, facts, extra
     )
