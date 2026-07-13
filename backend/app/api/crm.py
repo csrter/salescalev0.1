@@ -865,6 +865,30 @@ def verify_contacts_bulk(
     }
 
 
+@router.post("/contacts/enrich")
+def enrich_contacts_bulk(
+    body: VerifyContactsIn,
+    background: BackgroundTasks,
+    user: User = Depends(require_team),
+    scope: TenantScope = Depends(get_scope),
+    db: Session = Depends(get_db),
+):
+    """Re-run the full enrichment pipeline (own-site discovery → licensed
+    profile provider for owner name/title/mobile/firmographics → email
+    verification) on an existing contact set. The import-time run is the
+    only other trigger, so leads imported BEFORE the org connected its
+    profile-provider key (Apollo) had no way to backfill owner contact
+    info. Fill-blanks-only throughout — a human edit always wins. Runs in
+    the background (provider calls are slow); the caller re-fetches."""
+    contacts = [scope.get_or_404(db, Contact, cid) for cid in body.contact_ids]
+    background.add_task(
+        lead_finder_svc.enrich_and_verify,
+        scope.organization_id,
+        [c.id for c in contacts],
+    )
+    return {"queued": len(contacts)}
+
+
 def _write_contact_delete_audit(db: Session, contact: Contact, user: User) -> None:
     """Per-deleted-contact trail in the standard audit pattern (guardrail 8):
     actor, target contact, org, timestamp — written before the cascade."""

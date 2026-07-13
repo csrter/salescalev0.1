@@ -1194,6 +1194,15 @@ live activation + the entitlement flip, the Outreach module build
       from_numbers +14805550301/302 — pick unused numbers, the sms_accounts
       (org, from_number) unique index bites across the module-scoped DB).
       DEPLOYED to production (2026-07-13 UTC, 425cb95).
+- [x] Bulk re-enrich (2026-07-13, same-day): POST /api/crm/contacts/enrich
+      (require_team, VerifyContactsIn ≤500 ids, TenantScope 404 on any
+      cross-org id, BackgroundTask → lead_finder.enrich_and_verify) + an
+      "Enrich contact info" button on the lead-list bulk bar. Closes the
+      backfill gap: enrichment (owner name/title/MOBILE via the org's
+      Apollo key, site discovery, verification) previously ran ONLY at
+      import time, so the 80 Atlas Reach leads imported before the Apollo
+      key was connected had no owner/mobile data and no way to get it.
+      Fill-blanks-only as always. Tests 467 → 468.
 - [ ] Stripe live activation + entitlement flip (after 12–14, so real
       limits land everywhere in one pass)
 - [ ] Outreach module build (dev-mode) — go-live gated on Meta App

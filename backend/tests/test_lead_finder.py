@@ -990,3 +990,54 @@ def test_apollo_listed_as_provider(api, team_headers):
         for p in api.get("/api/lead-finder/providers", headers=team_headers).json()
     }
     assert "apollo" in listing
+
+
+# --- bulk re-enrich (backfill for leads imported before a provider key) ------
+
+
+def test_bulk_enrich_queues_scoped_contacts(lf_org, api, monkeypatch):
+    """POST /api/crm/contacts/enrich re-runs the import-time pipeline on an
+    existing selection — the backfill path for leads that predate the org's
+    Apollo key. The pipeline itself is covered elsewhere; this checks the
+    endpoint queues exactly the scoped ids (and 404s on cross-org ids)."""
+    captured = {}
+
+    def _capture(org_id, contact_ids):
+        captured["org"] = org_id
+        captured["ids"] = list(contact_ids)
+
+    monkeypatch.setattr(lead_finder_svc, "enrich_and_verify", _capture)
+
+    ids = []
+    for i in range(2):
+        r = api.post(
+            "/api/crm/contacts",
+            json={
+                "client_id": lf_org["client"],
+                "first_name": f"Enrich{i}",
+                "phone": f"480555200{i}",
+            },
+            headers=lf_org["headers"],
+        )
+        assert r.status_code == 201, r.text
+        ids.append(r.json()["id"])
+
+    r = api.post(
+        "/api/crm/contacts/enrich",
+        json={"contact_ids": ids},
+        headers=lf_org["headers"],
+    )
+    assert r.status_code == 200, r.text
+    assert r.json() == {"queued": 2}
+    assert captured["org"] == lf_org["org"]
+    assert sorted(captured["ids"]) == sorted(ids)
+
+    # A cross-org id 404s the whole request (TenantScope), nothing queued.
+    captured.clear()
+    r = api.post(
+        "/api/crm/contacts/enrich",
+        json={"contact_ids": [ids[0], "00000000-0000-0000-0000-000000000000"]},
+        headers=lf_org["headers"],
+    )
+    assert r.status_code == 404
+    assert captured == {}

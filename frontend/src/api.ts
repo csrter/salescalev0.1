@@ -1288,6 +1288,15 @@ export interface AiProviderStatus {
 export const getAiProviderStatus = () =>
   api<AiProviderStatus>("/api/integrations/ai-provider");
 
+/** Re-run enrichment (owner name/title/mobile via the org's profile
+ * provider, site discovery, verification) on existing leads — backfills
+ * contacts imported before the Apollo key was connected. */
+export const enrichContacts = (contactIds: string[]) =>
+  api<{ queued: number }>("/api/crm/contacts/enrich", {
+    method: "POST",
+    body: JSON.stringify({ contact_ids: contactIds }),
+  });
+
 export const verifyContacts = (contactIds: string[]) =>
   api<{
     verified: Record<string, { verification_status: VerificationStatus; verified_at: string | null }>;

@@ -38,6 +38,7 @@ import {
   renameContactList,
   runResearch,
   updateContact,
+  enrichContacts,
   verifyContacts,
   type ContactEditBody,
   type ContactList,
@@ -1246,6 +1247,22 @@ function LeadList({
                 </Button>
                 <Button variant="ghost" size="sm" onClick={() => setRunningResearch(true)}>
                   Run AI research
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => {
+                    enrichContacts([...selected])
+                      .then((r) =>
+                        toast(
+                          `Enrichment queued for ${r.queued} lead${r.queued === 1 ? "" : "s"} — owner names, titles and mobile numbers fill in as the provider responds`,
+                          "ok",
+                        ),
+                      )
+                      .catch((e) => toast((e as Error).message, "error"));
+                  }}
+                >
+                  Enrich contact info
                 </Button>
                 <Button
                   variant="danger-outline"
