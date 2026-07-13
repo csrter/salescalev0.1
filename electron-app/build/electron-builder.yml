@@ -9,6 +9,7 @@ files:
   - from: ../frontend/dist
     to: frontend
 mac:
+  icon: build/icon.icns
   target:
     - target: dmg
       arch:
