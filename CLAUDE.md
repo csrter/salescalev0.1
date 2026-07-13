@@ -1193,6 +1193,7 @@ live activation + the entitlement flip, the Outreach module build
       cases; note the module's earlier compliance-footer test owns
       from_numbers +14805550301/302 — pick unused numbers, the sms_accounts
       (org, from_number) unique index bites across the module-scoped DB).
+      DEPLOYED to production (2026-07-13 UTC, 425cb95).
 - [ ] Stripe live activation + entitlement flip (after 12–14, so real
       limits land everywhere in one pass)
 - [ ] Outreach module build (dev-mode) — go-live gated on Meta App
