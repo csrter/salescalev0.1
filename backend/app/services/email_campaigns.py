@@ -235,6 +235,46 @@ def _last_thread_message(db: Session, thread_id: str) -> Optional[EmailMessage]:
     ).scalar_one_or_none()
 
 
+def rearm_parked(db: Session, campaign: EmailCampaign) -> int:
+    """Re-schedule this campaign's ACTIVE enrollments that a tick parked
+    (next_run_at = NULL — campaign paused or mailbox disconnected at the
+    time). Without this, reactivating leaves the audience dormant forever:
+    run_due only scans non-NULL next_run_at."""
+    now = utcnow()
+    when = _next_valid_send_time(now, campaign) or now
+    parked = (
+        db.execute(
+            select(EmailEnrollment).where(
+                EmailEnrollment.campaign_id == campaign.id,
+                EmailEnrollment.status == ENROLL_ACTIVE,
+                EmailEnrollment.next_run_at.is_(None),
+            )
+        )
+        .scalars()
+        .all()
+    )
+    for e in parked:
+        e.next_run_at = when
+    return len(parked)
+
+
+def rearm_account(db: Session, account_id: str) -> int:
+    """Mailbox reconnected: re-arm parked enrollments across all of the
+    account's ACTIVE campaigns (the \"reconnect flow re-arms\" contract in
+    process_enrollment)."""
+    campaigns = (
+        db.execute(
+            select(EmailCampaign).where(
+                EmailCampaign.account_id == account_id,
+                EmailCampaign.status == CAMPAIGN_ACTIVE,
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return sum(rearm_parked(db, c) for c in campaigns)
+
+
 def _end(
     enrollment: EmailEnrollment, status: str, reason: Optional[str] = None
 ) -> None:

@@ -226,6 +226,10 @@ def test_account(
     ok, detail = sms_send.verify_credentials(account)
     account.status = SMS_ACCOUNT_ACTIVE if ok else SMS_ACCOUNT_ERROR
     account.error_detail = None if ok else detail
+    if ok:
+        # The "reconnect flow re-arms" contract: enrollments parked while
+        # this account was down get scheduled again.
+        sms_campaigns.rearm_account(db, account.id)
     db.commit()
     return {"ok": ok, "detail": detail}
 
@@ -597,6 +601,9 @@ def activate_campaign(
         raise HTTPException(422, "The campaign's Twilio number is not connected")
     campaign.status = SMS_CAMPAIGN_ACTIVE
     campaign.activated_at = utcnow()
+    # Enrollments a tick parked while paused/disconnected stay dormant
+    # otherwise — run_due only scans non-NULL next_run_at.
+    sms_campaigns.rearm_parked(db, campaign)
     db.commit()
     return _campaign_out(db, campaign, full=True)
 

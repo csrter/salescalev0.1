@@ -441,6 +441,47 @@ def _steps(db: Session, campaign_id: str) -> List[SmsStep]:
     )
 
 
+def rearm_parked(db: Session, campaign: SmsCampaign) -> int:
+    """Re-schedule this campaign's ACTIVE enrollments that a tick parked
+    (next_run_at = NULL — campaign paused or account disconnected at the
+    time). Without this, reactivating a campaign leaves its audience
+    dormant forever: run_due only scans non-NULL next_run_at. Scheduled at
+    the next valid window open, never immediately-past-quiet-hours."""
+    now = utcnow()
+    when = _next_valid_send_time(now, campaign) or now
+    parked = (
+        db.execute(
+            select(SmsEnrollment).where(
+                SmsEnrollment.campaign_id == campaign.id,
+                SmsEnrollment.status == SMS_ENROLL_ACTIVE,
+                SmsEnrollment.next_run_at.is_(None),
+            )
+        )
+        .scalars()
+        .all()
+    )
+    for e in parked:
+        e.next_run_at = when
+    return len(parked)
+
+
+def rearm_account(db: Session, account_id: str) -> int:
+    """Account reconnected: re-arm parked enrollments across all of the
+    account's ACTIVE campaigns (the \"reconnect flow re-arms\" contract in
+    process_enrollment)."""
+    campaigns = (
+        db.execute(
+            select(SmsCampaign).where(
+                SmsCampaign.account_id == account_id,
+                SmsCampaign.status == SMS_CAMPAIGN_ACTIVE,
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return sum(rearm_parked(db, c) for c in campaigns)
+
+
 def _end(enrollment: SmsEnrollment, status: str, reason: Optional[str] = None) -> None:
     enrollment.status = status
     enrollment.exit_reason = reason

@@ -1067,3 +1067,42 @@ def test_render_error_exits_enrollment_on_unclosed_conditional(
     # enrollment from an earlier test can legitimately fire on the same
     # tick, so filter rather than requiring the whole list empty).
     assert not any(m["To"] == "rendererr-lead@example.com" for m in captured_sends)
+
+
+def test_reactivation_rearms_parked_enrollments(cc_org, api, probe_ok, captured_sends):
+    """Same dead-end as the SMS module (found live in production there): a
+    tick that catches the campaign paused parks enrollments with
+    next_run_at NULL, and reactivating must re-arm them — run_due only
+    scans non-NULL next_run_at."""
+    acct = _mk_account(cc_org, api, from_email="rearm@campaignco.com")
+    camp = _mk_campaign(cc_org, api, acct["id"], **_ALWAYS)
+    contact = _mk_contact(cc_org, api, email_addr="rearm-lead@example.com", first="Parky")
+    _enroll_and_activate(
+        cc_org, api, camp,
+        [{"position": 1, "wait_days": 0, "subject": "Hi", "body": "First touch {{first_name}}"}],
+        [contact],
+    )
+    assert _get_enrollment(camp["id"], contact).next_run_at is not None
+
+    r = api.post(
+        f"/api/email-outreach/campaigns/{camp['id']}/pause", headers=cc_org["headers"]
+    )
+    assert r.status_code == 200
+    _tick()
+    e = _get_enrollment(camp["id"], contact)
+    assert e.status == "active" and e.next_run_at is None
+
+    assert _activate(cc_org, api, camp["id"]).status_code == 200
+    e = _get_enrollment(camp["id"], contact)
+    assert e.status == "active" and e.next_run_at is not None
+
+    # Exit so later tests' run_due in the shared module DB never sends it.
+    db = SessionLocal()
+    try:
+        en = db.execute(
+            select(EmailEnrollment).where(EmailEnrollment.id == e.id)
+        ).scalar_one()
+        email_campaigns.exit_manual(db, en)
+        db.commit()
+    finally:
+        db.close()

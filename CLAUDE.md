@@ -1231,6 +1231,22 @@ live activation + the entitlement flip, the Outreach module build
       DEPLOYED to production (2026-07-13 UTC, 0972fa9): migration
       e4e04c133222 applied to the live Supabase DB, health green, endpoint
       live + auth-gated.
+- [x] Parked-enrollment re-arm fix, SMS + email (2026-07-13): found
+      checking "is SMS working" in prod — the CPA campaign had 31 ACTIVE
+      enrollments with next_run_at NULL, permanently invisible to run_due.
+      Both engines park enrollments (next_run_at = None) when a tick
+      catches the campaign paused or the account disconnected, and the
+      code comments promised "reconnect flow re-arms" — but no re-arm
+      existed anywhere, in either module: pause→resume (or account
+      error→reconnect) stranded the audience forever. Fix:
+      sms_campaigns.rearm_parked/rearm_account + email_campaigns twins
+      (schedule at the campaign's next valid send window, never
+      mid-quiet-hours), called from both activate endpoints, the SMS
+      account /test endpoint, and the email account reprobe/test paths.
+      Sends themselves verified working in prod: Sendblue account active,
+      both messages ever sent were delivered, 181 opted-in textable
+      contacts, 0 suppressions. Tests 469 → 471 (park→reactivate→re-armed
+      in both modules, + the SMS account-test re-arm path).
 - [ ] Stripe live activation + entitlement flip (after 12–14, so real
       limits land everywhere in one pass)
 - [ ] Outreach module build (dev-mode) — go-live gated on Meta App

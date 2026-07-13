@@ -318,9 +318,11 @@ def update_account(
         else:
             setattr(account, field, value)
     if reprobe:
-        # A successful re-probe clears a prior error state.
+        # A successful re-probe clears a prior error state — and re-arms
+        # enrollments parked while the mailbox was down.
         account.status = ACCOUNT_ACTIVE
         account.error_detail = None
+        email_campaigns.rearm_account(db, account.id)
     db.commit()
     return _account_out(db, account)
 
@@ -390,6 +392,10 @@ def test_account(
     ok = result["smtp_ok"] and result["imap_ok"]
     account.status = ACCOUNT_ACTIVE if ok else ACCOUNT_ERROR
     account.error_detail = None if ok else (result["detail"] or "Connection failed")
+    if ok:
+        # The "reconnect flow re-arms" contract: enrollments parked while
+        # this mailbox was down get scheduled again.
+        email_campaigns.rearm_account(db, account.id)
     db.commit()
     return {
         "ok": ok,
@@ -881,6 +887,9 @@ def activate_campaign(
         )
     campaign.status = CAMPAIGN_ACTIVE
     campaign.activated_at = utcnow()
+    # Enrollments a tick parked while paused/disconnected stay dormant
+    # otherwise — run_due only scans non-NULL next_run_at.
+    email_campaigns.rearm_parked(db, campaign)
     db.commit()
     return _campaign_out(db, campaign, full=True)
 

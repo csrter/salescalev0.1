@@ -1282,3 +1282,57 @@ def test_sms_failsafe_fails_open(sc_org, api, twilio_creds_ok, monkeypatch):
         assert sms_campaigns._clean_city("It is probably Mesa, Arizona.") != "Mesa"
     finally:
         db.close()
+
+
+def test_reactivation_rearms_parked_enrollments(sc_org, api, twilio_creds_ok, captured_sends):
+    """A tick that catches the campaign paused parks its enrollments
+    (next_run_at NULL); reactivating must re-arm them or the audience is
+    dormant forever (run_due only scans non-NULL next_run_at) — found live
+    with 31 parked enrollments in production."""
+    acct = _mk_account(sc_org, api, from_number="+14805550883")
+    camp = _mk_campaign(sc_org, api, acct["id"], **_ALWAYS)
+    contact = _mk_contact(sc_org, api, mobile_phone="4805559401", first="Parked")
+    _set_steps(sc_org, api, camp["id"], [{"position": 1, "body": "Hi {{first_name}}"}])
+    assert _activate(sc_org, api, camp["id"]).status_code == 200
+    _enroll(sc_org, api, camp["id"], [contact])
+    assert _get_enrollment(camp["id"], contact).next_run_at is not None
+
+    # Pause, then let a tick catch the due enrollment → parked, still active.
+    r = api.post(f"/api/sms/campaigns/{camp['id']}/pause", headers=sc_org["headers"])
+    assert r.status_code == 200
+    _tick()
+    e = _get_enrollment(camp["id"], contact)
+    assert e.status == "active" and e.next_run_at is None
+
+    # Reactivate → re-armed with a real schedule again.
+    r = api.post(f"/api/sms/campaigns/{camp['id']}/activate", headers=sc_org["headers"])
+    assert r.status_code == 200, r.text
+    e = _get_enrollment(camp["id"], contact)
+    assert e.status == "active" and e.next_run_at is not None
+
+    # Account-reconnect path re-arms too: park again via pause+tick+activate-
+    # while-account-down is overkill — directly park and hit the test button.
+    db = SessionLocal()
+    try:
+        en = db.execute(
+            select(SmsEnrollment).where(SmsEnrollment.id == e.id)
+        ).scalar_one()
+        en.next_run_at = None
+        db.commit()
+    finally:
+        db.close()
+    r = api.post(f"/api/sms/accounts/{acct['id']}/test", headers=sc_org["headers"])
+    assert r.status_code == 200 and r.json()["ok"] is True
+    e = _get_enrollment(camp["id"], contact)
+    assert e.next_run_at is not None
+
+    # Exit so later tests' run_due in the shared module DB never sends it.
+    db = SessionLocal()
+    try:
+        en = db.execute(
+            select(SmsEnrollment).where(SmsEnrollment.id == e.id)
+        ).scalar_one()
+        sms_campaigns.exit_manual(db, en)
+        db.commit()
+    finally:
+        db.close()
