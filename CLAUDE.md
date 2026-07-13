@@ -1246,7 +1246,10 @@ live activation + the entitlement flip, the Outreach module build
       Sends themselves verified working in prod: Sendblue account active,
       both messages ever sent were delivered, 181 opted-in textable
       contacts, 0 suppressions. Tests 469 → 471 (park→reactivate→re-armed
-      in both modules, + the SMS account-test re-arm path).
+      in both modules, + the SMS account-test re-arm path). DEPLOYED to
+      production (2026-07-13 UTC, 572f338), and the 32 stranded prod
+      enrollments re-armed with user approval (CPA x31 due 16:00 UTC =
+      9am Phoenix, test2 x1 due 18:00 UTC) — verified scheduled.
 - [ ] Stripe live activation + entitlement flip (after 12–14, so real
       limits land everywhere in one pass)
 - [ ] Outreach module build (dev-mode) — go-live gated on Meta App
