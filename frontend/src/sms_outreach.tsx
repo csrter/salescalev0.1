@@ -25,6 +25,7 @@ import {
   deleteSmsSuppression,
   enrollSmsContacts,
   getHouseClient,
+  getLeadNotifications,
   getMyOrg,
   getSmsCampaign,
   listContactLists,
@@ -38,6 +39,7 @@ import {
   pauseSmsCampaign,
   previewSmsStep,
   saveSmsSteps,
+  setLeadNotifications,
   setOrgSmsOptInDefault,
   smsAnalytics,
   smsUsage,
@@ -348,6 +350,7 @@ function DashboardPanel({
       </div>
 
       {isAdmin && <OrgOptInDefaultCard isOwner={isOwner} />}
+      {isAdmin && <LeadNotificationsCard hasAccount={accounts.length > 0} />}
 
       <div className="sms-bar">
         <select
@@ -544,6 +547,105 @@ function OrgOptInDefaultCard({ isOwner }: { isOwner: boolean }) {
           STOP/suppression always wins.
           {!isOwner && " Only the organization owner can change this."}
         </p>
+      </GlassCard>
+    </div>
+  );
+}
+
+/** Admin-only: text-the-team alerts on new leads. Reuses whichever SMS
+ * account the org has already connected — no separate sender setup. */
+function LeadNotificationsCard({ hasAccount }: { hasAccount: boolean }) {
+  const toast = useToast();
+  const [enabled, setEnabled] = useState<boolean | null>(null);
+  const [phones, setPhones] = useState<string[]>([]);
+  const [busy, setBusy] = useState(false);
+
+  const load = useCallback(() => {
+    getLeadNotifications()
+      .then((c) => {
+        setEnabled(c.enabled);
+        setPhones(c.phones.length > 0 ? c.phones : [""]);
+      })
+      .catch(() => {});
+  }, []);
+  useEffect(load, [load]);
+
+  const save = async (next: { enabled: boolean; phones: string[] }) => {
+    setBusy(true);
+    try {
+      const saved = await setLeadNotifications({
+        enabled: next.enabled,
+        phones: next.phones.map((p) => p.trim()).filter(Boolean),
+      });
+      setEnabled(saved.enabled);
+      setPhones(saved.phones.length > 0 ? saved.phones : [""]);
+    } catch (e) {
+      toast(e instanceof Error ? e.message : "Failed to update", "error");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (enabled == null) return null;
+
+  return (
+    <div className="sms-redline">
+      <GlassCard className="sms-optin-card">
+        <Switch
+          checked={enabled}
+          onChange={(next) => save({ enabled: next, phones })}
+          disabled={busy}
+          label="Text the team when a new lead comes in"
+        />
+        <p className="sms-hint">
+          Sends a short SMS to the numbers below the moment a lead arrives
+          (native lead-form webhooks or a landing-page submission — not bulk
+          CSV/Lead Finder imports), using the org's own connected number.
+          {!hasAccount &&
+            " Connect a number in the Accounts tab first — nothing sends without one."}
+        </p>
+        {enabled && (
+          <div className="sms-notify-phones">
+            {phones.map((phone, i) => (
+              <div key={i} className="sms-form-row">
+                <input
+                  className="input"
+                  placeholder="+1 480 555 0100"
+                  value={phone}
+                  onChange={(e) =>
+                    setPhones(phones.map((p, j) => (j === i ? e.target.value : p)))
+                  }
+                />
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  disabled={busy}
+                  onClick={() => setPhones(phones.filter((_, j) => j !== i))}
+                >
+                  Remove
+                </Button>
+              </div>
+            ))}
+            <div className="sms-form-actions">
+              <Button
+                variant="ghost"
+                size="sm"
+                disabled={busy}
+                onClick={() => setPhones([...phones, ""])}
+              >
+                <Plus size={14} /> Add number
+              </Button>
+              <Button
+                variant="primary"
+                size="sm"
+                busy={busy}
+                onClick={() => save({ enabled, phones })}
+              >
+                Save numbers
+              </Button>
+            </div>
+          </div>
+        )}
       </GlassCard>
     </div>
   );

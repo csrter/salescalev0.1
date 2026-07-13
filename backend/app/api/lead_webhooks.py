@@ -17,20 +17,23 @@ Trust model (these are public, unauthenticated-by-JWT endpoints):
 
 import hmac
 import json
+import re
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from sqlalchemy import select
 from sqlalchemy.orm import Session
+from starlette.datastructures import UploadFile
 
 from ..config import get_settings
 from ..db import get_db
 from ..models.attribution import LandingEvent
 from ..models.base import utcnow
 from ..models.core import CONN_ACTIVE, Client, PlatformConnection
-from ..models.crm import LeadFormConfig
+from ..models.crm import Activity, LeadFormConfig
 from ..services import connections as conn_svc
+from ..services import crm as crm_svc
 from ..ratelimit import rate_limit
-from ..services import integration_creds, lead_ingest, meta_leadgen
+from ..services import integration_creds, lead_ingest, lead_notify, meta_leadgen
 from ..services.external_sync import push_contact_update
 
 router = APIRouter(prefix="/api/webhooks", tags=["lead-webhooks"])
@@ -188,6 +191,7 @@ def _ingest_meta_lead(db: Session, value: dict) -> dict:
     )
     if created:
         push_contact_update(db, client, contact, event="lead.created")
+        lead_notify.notify_new_lead(db, client, contact)
     return {"status": "created" if created else "updated", "contact_id": contact.id}
 
 
@@ -292,7 +296,196 @@ def google_lead_form_webhook(
                 contact_id=contact.id,
             )
         )
-    db.commit()
     if created:
         push_contact_update(db, client, contact, event="lead.created")
+        lead_notify.notify_new_lead(db, client, contact)
+    db.commit()
     return {}
+
+
+# --- Generic landing-page form webhook ---
+# For clients whose landing pages/form tools aren't Meta or Google's native
+# lead ads (Webflow, WPForms, Elementor, Typeform, Zapier/Make catch-hooks, a
+# plain HTML form posted via fetch/curl) — anything that can POST JSON or
+# form-encoded data to a URL. There's no platform-run console to configure a
+# shared secret in (unlike Google's google_key), so the secret is generated
+# by Salescale and folded into the URL path (services/clients.py
+# rotate_landing_page_webhook) — the one auth mechanism every such tool
+# supports without needing custom headers.
+#
+# The client's landing page controls the field names it posts, so routing
+# uses a normalized-synonym table (case/punctuation-insensitive) rather than
+# a fixed schema — the same "meet the data where it is" posture as the CSV
+# import's header auto-detect. Unrecognized fields are kept verbatim (capped)
+# in source_detail for audit; a recognized "message" field is logged onto the
+# contact's activity timeline as the visitor's own inquiry text.
+
+_LANDING_FORM_SYNONYMS: dict = {}
+
+
+def _lf_key(raw: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", raw.lower())
+
+
+def _lf_register(target: str, *names: str) -> None:
+    for name in names:
+        _LANDING_FORM_SYNONYMS[_lf_key(name)] = target
+
+
+_lf_register("email", "email", "e-mail", "email address", "work email")
+_lf_register(
+    "phone", "phone", "phone number", "telephone", "tel", "mobile", "cell", "cell phone"
+)
+_lf_register("first_name", "first name", "fname", "first", "given name")
+_lf_register("last_name", "last name", "lname", "last", "surname", "family name")
+_lf_register("full_name", "name", "full name", "your name", "contact name")
+_lf_register("city", "city", "town")
+_lf_register("state", "state", "province", "region")
+_lf_register("zip", "zip", "zip code", "postal code", "postcode")
+_lf_register(
+    "company", "company", "company name", "business", "business name", "organization"
+)
+_lf_register("job_title", "job title", "title", "position", "role")
+_lf_register(
+    "message", "message", "comments", "comment", "notes", "details", "inquiry", "enquiry"
+)
+_lf_register(
+    "landing_url", "landing url", "page url", "url", "source url", "referrer", "referer"
+)
+_lf_register("utm_source", "utm_source")
+_lf_register("utm_medium", "utm_medium")
+_lf_register("utm_campaign", "utm_campaign")
+_lf_register("utm_content", "utm_content")
+_lf_register("utm_term", "utm_term")
+_lf_register("gclid", "gclid", "google click id")
+_lf_register("fbclid", "fbclid", "facebook click id")
+_lf_register("fbp", "fbp")
+
+_LANDING_FORM_EXTRA_CAP = 25
+
+
+def _map_landing_form_fields(raw: dict) -> dict:
+    mapped: dict = {}
+    extra: dict = {}
+    for key, value in raw.items():
+        if value is None or isinstance(value, (dict, list, UploadFile)):
+            continue
+        text = str(value).strip()
+        if not text:
+            continue
+        target = _LANDING_FORM_SYNONYMS.get(_lf_key(str(key)))
+        if target and target not in mapped:
+            mapped[target] = text[:2000]
+        elif len(extra) < _LANDING_FORM_EXTRA_CAP:
+            extra[str(key)[:100]] = text[:500]
+    if mapped.get("full_name") and not mapped.get("first_name"):
+        parts = mapped["full_name"].split(None, 1)
+        mapped["first_name"] = parts[0]
+        if len(parts) > 1:
+            mapped.setdefault("last_name", parts[1])
+    mapped["extra"] = extra
+    return mapped
+
+
+@router.post("/landing-form/{client_id}/{key}")
+async def landing_form_webhook(
+    client_id: str,
+    key: str,
+    request: Request,
+    db: Session = Depends(get_db),
+    _: None = _webhook_limit,
+):
+    client = db.get(Client, client_id)
+    config = (
+        db.execute(
+            select(LeadFormConfig).where(
+                LeadFormConfig.client_id == client_id,
+                LeadFormConfig.platform == "landing_page",
+                LeadFormConfig.enabled.is_(True),
+            )
+        ).scalar_one_or_none()
+        if client is not None
+        else None
+    )
+    # One failure shape whether the client id, key, or config is wrong — a
+    # public URL-embedded-secret endpoint shouldn't reveal which part failed.
+    if config is None or not hmac.compare_digest(key, config.external_key):
+        raise HTTPException(404, "Not found")
+
+    content_type = request.headers.get("content-type", "")
+    if "multipart/form-data" in content_type or "x-www-form-urlencoded" in content_type:
+        form = await request.form()
+        raw = {k: v for k, v in form.multi_items()}
+    else:
+        try:
+            raw = await request.json()
+        except (ValueError, json.JSONDecodeError):
+            raise HTTPException(400, "Send form fields as JSON or form-encoded data")
+    if not isinstance(raw, dict):
+        raise HTTPException(400, "Expected an object of form fields")
+
+    fields = _map_landing_form_fields(raw)
+    if not fields.get("email") and not fields.get("phone"):
+        raise HTTPException(
+            400, "No recognized email or phone field in the submitted data"
+        )
+
+    contact, created = lead_ingest.upsert_contact(
+        db,
+        client,
+        email=fields.get("email"),
+        phone=fields.get("phone"),
+        first_name=fields.get("first_name"),
+        last_name=fields.get("last_name"),
+        source="landing_page_webhook",
+        source_detail=fields["extra"] or None,
+    )
+    for attr in ("city", "state", "job_title"):
+        if getattr(contact, attr) is None and fields.get(attr):
+            setattr(contact, attr, fields[attr])
+    if fields.get("company") and contact.company_id is None:
+        contact.company_id = crm_svc.get_or_create_company(
+            db, client.organization_id, client.id, fields["company"]
+        )
+
+    # Attribution parity with the Google lead-form webhook: any click id/UTM
+    # in the payload gets a first-class LandingEvent row, same capture layer
+    # as JS-tracked landing pages.
+    if created and any(
+        fields.get(k)
+        for k in ("utm_source", "utm_medium", "utm_campaign", "gclid", "fbclid")
+    ):
+        db.add(
+            LandingEvent(
+                organization_id=client.organization_id,
+                client_id=client.id,
+                session_key=f"landing-webhook-{contact.id}",
+                landing_url=fields.get("landing_url"),
+                utm_source=fields.get("utm_source"),
+                utm_medium=fields.get("utm_medium"),
+                utm_campaign=fields.get("utm_campaign"),
+                utm_content=fields.get("utm_content"),
+                utm_term=fields.get("utm_term"),
+                gclid=fields.get("gclid"),
+                fbclid=fields.get("fbclid"),
+                fbp=fields.get("fbp"),
+                occurred_at=utcnow(),
+                contact_id=contact.id,
+            )
+        )
+    if created and fields.get("message"):
+        db.add(
+            Activity(
+                organization_id=client.organization_id,
+                client_id=client.id,
+                contact_id=contact.id,
+                type="note",
+                body=f"Landing-page form submission:\n\n{fields['message']}",
+                occurred_at=utcnow(),
+            )
+        )
+    if created:
+        push_contact_update(db, client, contact, event="lead.created")
+        lead_notify.notify_new_lead(db, client, contact)
+    db.commit()
+    return {"status": "created" if created else "updated", "contact_id": contact.id}

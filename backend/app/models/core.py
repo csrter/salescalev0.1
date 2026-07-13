@@ -82,6 +82,14 @@ class Organization(Base):
     sms_opt_in_default: Mapped[bool] = mapped_column(
         Boolean, default=False, server_default=text("false"), nullable=False
     )
+    # Org policy: text-the-team alerts on new leads, reusing the SMS Outreach
+    # module's connected account (services/lead_notify.py) rather than new
+    # send infrastructure. lead_notification_phones is the org's own ops
+    # numbers (E.164), never a CRM contact — one org-wide list, not per-client.
+    notify_new_leads: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=text("false"), nullable=False
+    )
+    lead_notification_phones: Mapped[Optional[list]] = mapped_column(JSON)
     # Phase 8 — Stripe subscription linkage. Populated by the billing webhook.
     stripe_customer_id: Mapped[Optional[str]] = mapped_column(
         String(64), unique=True, index=True

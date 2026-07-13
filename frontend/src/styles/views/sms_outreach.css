@@ -349,6 +349,18 @@
   padding: var(--space-3);
 }
 
+.sms-notify-phones {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  margin-top: var(--space-2);
+}
+
+.sms-notify-phones .sms-form-row {
+  grid-template-columns: 1fr auto;
+  align-items: center;
+}
+
 .sms-pickrow-name {
   font-weight: var(--weight-medium);
 }

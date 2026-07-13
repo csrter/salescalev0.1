@@ -42,6 +42,7 @@ from ..models.sms_outreach import (
     SMS_ACCOUNT_ACTIVE,
     SMS_DIR_OUT,
     SMS_KIND_CAMPAIGN,
+    SMS_KIND_NOTIFICATION,
     SMS_MSG_DELIVERED,
     SMS_MSG_FAILED,
     SMS_MSG_READ,
@@ -633,6 +634,54 @@ def send(
             detail=f"{account.provider}: recipient opted out at the provider "
             f"({error_code})",
         )
+    db.flush()
+    return FAILED, row
+
+
+def send_notification(
+    db: Session, account: SmsAccount, to_number: str, body: str
+) -> Tuple[str, Optional[SmsMessage]]:
+    """An alert to the agency's OWN team (services/lead_notify.py) — not
+    lead outreach, so this deliberately skips the TCPA consent/suppression
+    gate `send()` enforces for texting prospects (the recipient is an ops
+    phone number the org itself configured, never a Contact) and carries no
+    campaign/window/compliance-footer machinery. Still respects the
+    account's daily cap and goes through the same provider dispatch +
+    append-only ledger as every other send, so it shows up in the same
+    number-health accounting."""
+    if account.status != SMS_ACCOUNT_ACTIVE:
+        return BLOCKED, None
+    if sends_today(db, account) >= account.daily_send_cap:
+        return CAP_REACHED, None
+
+    row = SmsMessage(
+        organization_id=account.organization_id,
+        account_id=account.id,
+        contact_id=None,
+        direction=SMS_DIR_OUT,
+        kind=SMS_KIND_NOTIFICATION,
+        to_number=to_number,
+        from_number=account.from_number,
+        body=body,
+    )
+    try:
+        sid, error_code, error_detail = _provider_send(account, to_number, body)
+    except SmsProviderError as e:
+        row.status = SMS_MSG_FAILED
+        row.error_detail = str(e)
+        db.add(row)
+        db.flush()
+        return FAILED, row
+    if error_code is None:
+        row.status = SMS_MSG_SENT
+        row.provider_sid = sid
+        db.add(row)
+        db.flush()
+        return SENT, row
+    row.status = SMS_MSG_FAILED
+    row.error_code = error_code
+    row.error_detail = error_detail
+    db.add(row)
     db.flush()
     return FAILED, row
 

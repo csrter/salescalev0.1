@@ -1425,6 +1425,101 @@ live activation + the entitlement flip, the Outreach module build
       still 500s the whole import request rather than landing in the
       per-row `failed` list the way CustomFieldError already does; worth
       hardening if a specific reproducible bad row recurs.
+- [x] Generic landing-page form webhook (2026-07-13): a third-party-form-tool
+      counterpart to the existing Meta/Google native lead-form webhooks, for
+      clients whose landing pages use Webflow, WPForms, Elementor, Typeform,
+      Zapier/Make, or a plain HTML form — anything that can POST to a URL.
+      Reuses LeadFormConfig with platform="landing_page", but unlike meta/
+      google there's no external console to hold a shared secret, so the key
+      is server-generated (POST /api/clients/{id}/lead-forms/landing-page/
+      rotate, admin-only) and folded into the URL path
+      (/api/webhooks/landing-form/{client_id}/{key}) — the one auth
+      mechanism every such tool supports without custom headers; PATCH
+      .../landing-page toggles enabled without rotating. The client's tool
+      controls its own field names, so api/lead_webhooks.py matches incoming
+      keys via a case/punctuation-insensitive synonym table (email/phone —
+      one required — first/last/full name, city, state, company, job title,
+      message, utm_source/utm_medium/utm_campaign/utm_content/utm_term/
+      gclid/fbclid/fbp), same "meet the data where it is" posture as the CSV
+      import header auto-detect; unrecognized fields land in source_detail
+      for audit (capped), a recognized "message" becomes an Activity note on
+      the contact. Ingests through the same lead_ingest.upsert_contact used
+      by every other capture path (source="landing_page_webhook", dedupe by
+      email/phone, fill-blanks-only) and gets a LandingEvent for attribution
+      parity when the payload carries UTM/click-id evidence, matching the
+      Google lead-form webhook's gclid handling. Frontend: a new card in
+      CRM setup's "Native lead-form ingestion" section (LeadFormRouting in
+      frontend/src/crm.tsx) — Generate/Rotate/Disable, with the accepted
+      field names documented inline. Tests 493 (14 in test_crm.py, one new:
+      generate→ingest incl. synonym mapping, company auto-link, message→
+      note, attribution, resubmission update, missing-identity 400, disable
+      rejects, rotate invalidates the old URL). Verified live end-to-end on
+      alt2: generated a real URL from the UI, POSTed a realistic third-party
+      payload via curl exactly as a form tool would, confirmed the contact
+      (name split, phone, city, auto-created company, source, gclid
+      attribution) and the activity note through the API, then confirmed
+      wrong-key and no-identity-field both reject.
+- [x] Lead SMS notifications (2026-07-13): text-the-team alerts the moment a
+      lead arrives in real time (native Meta/Google lead-form webhooks, the
+      JS-tracked landing-page embed, and the generic landing-page webhook —
+      never bulk CSV/Lead Finder imports), reusing the existing SMS Outreach
+      module's connected account/provider transport instead of new send
+      infrastructure. NOT lead outreach: the recipient is an ops phone number
+      the org itself configures (Organization.notify_new_leads +
+      lead_notification_phones, migration b8e2f4a916c7), never a CRM Contact,
+      so services/sms_send.send_notification() is a new, deliberately
+      separate gateway path that skips the TCPA consent/suppression gate
+      built for texting prospects (services/sms_consent) — reusing send()
+      itself would have been wrong, since it hard-requires a Contact +
+      opted-in consent record that doesn't apply to an agency's own ops
+      alert. Logs to the same append-only SmsMessage ledger with a new
+      kind="notification" and contact_id=None, through whichever provider
+      (Twilio/Sendblue/BlueBubbles) the org's first ACTIVE SmsAccount uses —
+      no separate "default account" concept existed, so this is the first
+      caller of "pick one" (first by created_at). services/lead_notify.py is
+      the one new hook point, called at all 4 real-time lead-creation call
+      sites right alongside the existing push_contact_update(event="lead.
+      created") call — found and fixed a real commit-ordering bug while
+      wiring it in: 3 of the 4 sites (Google lead-form webhook, the generic
+      landing-page webhook, /api/track/lead) already called db.commit()
+      BEFORE their `if created:` block, so a notification's SmsMessage row
+      added after that point would never persist (silently dropped on
+      request teardown, since get_db never auto-commits) — fixed by moving
+      each site's commit to after the notify call. notify_new_lead() itself
+      never commits/rolls back the session (the caller's own commit, right
+      after, covers it) and swallows every exception — a Twilio outage must
+      never cost the lead that was just successfully created. API:
+      GET/PUT /api/orgs/me/lead-notifications (require_team read, require_
+      admin write; phones normalized to E.164 + deduped via the same
+      sms_consent.normalize_phone the consent gate uses, cap 10, full
+      replace). Frontend: LeadNotificationsCard on the SMS Dashboard next to
+      the existing sms_opt_in_default card (admin-only, Switch + add/remove
+      phone rows, a hint when the org has no connected SMS account yet).
+      Tests 493 → 498 (test_sms_outreach.py, own ln_org fixture per test —
+      notify_new_lead picks the org's first active account, so a shared
+      module-scoped org would make "which account sent it" nondeterministic
+      across a file with dozens of accounts already in it): settings
+      roundtrip + validation, a real /api/track/lead lead triggering a
+      captured send with the right account/body, resubmission not
+      re-notifying, off-by-default, no-active-account silently skips, and a
+      simulated provider outage that fails the SmsMessage row but still
+      201s the lead. Verified live end-to-end on alt2: toggled the switch and
+      saved a phone number through the real UI, then posted a real lead via
+      curl — it hit the connected account's actual Twilio API (real
+      "Authentication Error - invalid username" on the dev account's fake
+      creds, proving the live-network path) and logged a failed
+      kind="notification" row while the lead itself still created
+      successfully (201), confirming the never-blocks-lead-creation
+      guarantee under a real failure, not just the mocked test.
+      SAME-DAY FOLLOW-UP (user-requested): account selection now prefers the
+      org's BlueBubbles account over any other connected provider (a real
+      iMessage from a personal number reads as a human ping, not a shortcode
+      blast) — falls back to the first other active account for orgs with no
+      BlueBubbles connected, so the feature still works everywhere. Test
+      added proving BlueBubbles wins even when a Twilio account was
+      connected first (_twilio_send wired to explode if mis-dispatched).
+      Tests 498 → 499. DEPLOYED to production (2026-07-13, migration
+      b8e2f4a916c7 applied cleanly on the live Supabase DB).
 - [ ] Stripe live activation + entitlement flip (after 12–14, so real
       limits land everywhere in one pass)
 - [ ] Outreach module build (dev-mode) — go-live gated on Meta App

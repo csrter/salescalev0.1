@@ -72,6 +72,11 @@ SMS_MSG_RECEIVED = "received"  # inbound
 
 SMS_KIND_CAMPAIGN = "campaign"
 SMS_KIND_MANUAL = "manual"
+# An alert to the agency's OWN team (services/lead_notify.py), not lead
+# outreach — the recipient is an ops phone number, never a Contact, so this
+# kind skips the TCPA consent/suppression gate entirely (see sms_send.
+# send_notification).
+SMS_KIND_NOTIFICATION = "notification"
 
 SMS_SUPPRESS_STOP = "stop"  # inbound STOP/UNSUBSCRIBE/etc.
 SMS_SUPPRESS_CARRIER = "carrier"  # Twilio 21610 — opted out at the provider

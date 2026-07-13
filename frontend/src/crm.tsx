@@ -3248,6 +3248,7 @@ function LeadFormRouting({ clientId }: { clientId: string }) {
   >([]);
   const [pageId, setPageId] = useState("");
   const [googleKey, setGoogleKey] = useState("");
+  const [landingBusy, setLandingBusy] = useState(false);
 
   const load = useCallback(() => {
     api<{ platform: string; external_key: string; enabled: boolean }[]>(
@@ -3274,6 +3275,38 @@ function LeadFormRouting({ clientId }: { clientId: string }) {
       .catch((e) => toast((e as Error).message, "error"));
 
   const googleUrl = `${API_BASE}/api/webhooks/google/lead-form/${clientId}`;
+  const landingConfig = configs.find((c) => c.platform === "landing_page");
+  const landingUrl = landingConfig
+    ? `${API_BASE}/api/webhooks/landing-form/${clientId}/${landingConfig.external_key}`
+    : null;
+
+  const rotateLandingWebhook = () => {
+    if (landingConfig && !confirm("Generate a new key? The old webhook URL will stop working.")) {
+      return;
+    }
+    setLandingBusy(true);
+    api(`/api/clients/${clientId}/lead-forms/landing-page/rotate`, { method: "POST" })
+      .then(() => {
+        toast("Landing-page webhook URL generated", "ok");
+        load();
+      })
+      .catch((e) => toast((e as Error).message, "error"))
+      .finally(() => setLandingBusy(false));
+  };
+
+  const toggleLandingWebhook = (enabled: boolean) => {
+    setLandingBusy(true);
+    api(`/api/clients/${clientId}/lead-forms/landing-page`, {
+      method: "PATCH",
+      body: JSON.stringify({ enabled }),
+    })
+      .then(() => {
+        toast(enabled ? "Webhook enabled" : "Webhook disabled", "ok");
+        load();
+      })
+      .catch((e) => toast((e as Error).message, "error"))
+      .finally(() => setLandingBusy(false));
+  };
 
   return (
     <div className="crm-setup-block">
@@ -3318,8 +3351,52 @@ function LeadFormRouting({ clientId }: { clientId: string }) {
       {configs.length > 0 && (
         <p className="crm-muted">
           Configured:{" "}
-          {configs.map((c) => `${c.platform} (${c.external_key})`).join(", ")}
+          {configs
+            .filter((c) => c.platform !== "landing_page")
+            .map((c) => `${c.platform} (${c.external_key})`)
+            .join(", ")}
         </p>
+      )}
+
+      <h5 className="crm-subhead crm-subhead--sm" style={{ marginTop: 24 }}>
+        Generic landing-page form webhook
+      </h5>
+      <p className="crm-muted">
+        For any other form tool that can POST to a URL — Webflow, WPForms,
+        Elementor, Typeform, Zapier/Make, or a plain HTML form. It reads
+        common field names automatically: email/phone (one required),
+        first/last/full name, city, state, company, job title, message, and
+        utm_source/utm_medium/utm_campaign/gclid/fbclid if the form passes
+        them along.
+      </p>
+      {landingUrl ? (
+        <>
+          <Field label="Webhook URL">
+            <input readOnly value={landingUrl} onFocus={(e) => e.target.select()} />
+          </Field>
+          <div className="crm-form-actions">
+            <Button
+              variant="ghost"
+              size="sm"
+              busy={landingBusy}
+              onClick={() => toggleLandingWebhook(!landingConfig!.enabled)}
+            >
+              {landingConfig!.enabled ? "Disable" : "Enable"}
+            </Button>
+            <Button variant="ghost" size="sm" busy={landingBusy} onClick={rotateLandingWebhook}>
+              Rotate key
+            </Button>
+          </div>
+          {!landingConfig!.enabled && (
+            <Alert tone="warn">This webhook is disabled — submissions are rejected.</Alert>
+          )}
+        </>
+      ) : (
+        <div className="crm-form-actions">
+          <Button size="sm" busy={landingBusy} onClick={rotateLandingWebhook}>
+            Generate webhook URL
+          </Button>
+        </div>
       )}
     </div>
   );

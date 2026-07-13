@@ -34,7 +34,7 @@ from ..deps import (
     require_verified_email,
 )
 from ..ratelimit import enforce_bucket, rate_limit
-from ..services import auth_email, entitlements, sessions, team
+from ..services import auth_email, entitlements, sessions, sms_consent, team
 from ..models.base import utcnow
 from ..models.core import (
     ORG_SUSPENDED,
@@ -78,6 +78,7 @@ from ..schemas import (
     MembershipOut,
     OkResponse,
     OrganizationOut,
+    OrgLeadNotificationsIn,
     OrgOutreachContextIn,
     OrgRememberDeviceIn,
     OrgSmsOptInDefaultIn,
@@ -277,6 +278,53 @@ def set_outreach_context(
     org.outreach_context = body.model_dump(exclude_none=True) or None
     db.commit()
     return org.outreach_context or {}
+
+
+_MAX_NOTIFICATION_PHONES = 10
+
+
+@router.get("/me/lead-notifications")
+def get_lead_notifications(
+    user: User = Depends(require_team), db: Session = Depends(get_db)
+):
+    """Text-the-team alerts on new leads (services/lead_notify.py) — reuses
+    whichever SMS account the org has connected, no separate config needed
+    beyond these phone numbers. Readable by any team role."""
+    org = db.get(Organization, user.organization_id)
+    return {
+        "enabled": org.notify_new_leads,
+        "phones": org.lead_notification_phones or [],
+    }
+
+
+@router.put("/me/lead-notifications")
+def set_lead_notifications(
+    body: OrgLeadNotificationsIn,
+    user: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Full replace. Phones are normalized to E.164 and deduped so the
+    suppression/ledger comparisons in services/lead_notify.py never diverge
+    on formatting — same normalize_phone used by the SMS consent gate."""
+    phones: List[str] = []
+    for raw in body.phones:
+        normalized = sms_consent.normalize_phone(raw)
+        if not normalized:
+            raise HTTPException(422, f"Could not parse phone number: {raw!r}")
+        if normalized not in phones:
+            phones.append(normalized)
+    if len(phones) > _MAX_NOTIFICATION_PHONES:
+        raise HTTPException(
+            400, f"Up to {_MAX_NOTIFICATION_PHONES} notification numbers"
+        )
+    org = db.get(Organization, user.organization_id)
+    org.notify_new_leads = body.enabled
+    org.lead_notification_phones = phones or None
+    db.commit()
+    return {
+        "enabled": org.notify_new_leads,
+        "phones": org.lead_notification_phones or [],
+    }
 
 
 @router.get("/me/house-client")

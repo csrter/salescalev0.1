@@ -89,7 +89,9 @@ class Contact(Base):
     city: Mapped[Optional[str]] = mapped_column(String(120))
     state: Mapped[Optional[str]] = mapped_column(String(64))
     # Where the lead came from: meta_instant_form | google_lead_form |
-    # landing_page | manual — attribution details live on the landing event.
+    # landing_page (Salescale's own JS-tracked embed) | landing_page_webhook
+    # (a third-party form tool posting to /api/webhooks/landing-form) |
+    # manual — attribution details live on the landing event.
     source: Mapped[Optional[str]] = mapped_column(String(50))
     source_external_id: Mapped[Optional[str]] = mapped_column(String(100))
     # Native-form linkage the platform sent with the lead (campaign_id, ad_id,
@@ -321,8 +323,13 @@ class LeadFormConfig(Base):
     so the page_id in the payload is the routing key (external_key). Google
     lead-form webhooks are configured per form with a per-client URL + key,
     so external_key is the shared google_key the advertiser sets in Google
-    Ads. Routing by an indexed key — never by trusting anything else in a
-    public payload — is what keeps one tenant's leads out of another's CRM.
+    Ads. `landing_page` is the generic third-party-form-tool webhook
+    (api/lead_webhooks.py landing_form_webhook) — there's no external
+    platform to hold the key, so external_key is generated server-side
+    (api/clients.py rotate_landing_page_webhook) and folded into the URL
+    path rather than typed in by an admin. Routing by an indexed key — never
+    by trusting anything else in a public payload — is what keeps one
+    tenant's leads out of another's CRM.
     """
 
     __tablename__ = "lead_form_configs"
@@ -337,7 +344,9 @@ class LeadFormConfig(Base):
     client_id: Mapped[str] = mapped_column(
         ForeignKey("clients.id"), nullable=False, index=True
     )
-    platform: Mapped[str] = mapped_column(String(20), nullable=False)  # meta | google
+    platform: Mapped[str] = mapped_column(
+        String(20), nullable=False
+    )  # meta | google | landing_page
     external_key: Mapped[str] = mapped_column(String(200), nullable=False, index=True)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     created_at: Mapped[dt.datetime] = created_at_column()

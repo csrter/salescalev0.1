@@ -223,6 +223,22 @@ export const setOrgSmsOptInDefault = (sms_opt_in_default: boolean) =>
     body: JSON.stringify({ sms_opt_in_default }),
   });
 
+// --- Lead SMS notifications (text-the-team alerts on new leads) ---
+
+export interface LeadNotificationsConfig {
+  enabled: boolean;
+  phones: string[];
+}
+
+export const getLeadNotifications = () =>
+  api<LeadNotificationsConfig>("/api/orgs/me/lead-notifications");
+
+export const setLeadNotifications = (body: LeadNotificationsConfig) =>
+  api<LeadNotificationsConfig>("/api/orgs/me/lead-notifications", {
+    method: "PUT",
+    body: JSON.stringify(body),
+  });
+
 // --- Org outreach context (grounds the AI snippet + AI research prompts) ---
 
 export interface OrgOutreachContext {

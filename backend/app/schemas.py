@@ -1130,6 +1130,13 @@ class LeadFormConfigIn(BaseModel):
     enabled: bool = True
 
 
+class LeadFormEnabledIn(BaseModel):
+    """Toggle-only body for the generic landing-page webhook, whose key is
+    server-generated (never client-supplied) — see /lead-forms/landing-page."""
+
+    enabled: bool
+
+
 class LeadFormConfigOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -1445,6 +1452,14 @@ class OrgOutreachContextIn(BaseModel):
     icp: Optional[str] = Field(default=None, max_length=2000)
     offer: Optional[str] = Field(default=None, max_length=2000)
     tone_guide: Optional[str] = Field(default=None, max_length=2000)
+
+
+class OrgLeadNotificationsIn(BaseModel):
+    """Text-the-team alerts on new leads. Phones are raw strings — the
+    endpoint normalizes to E.164 and rejects anything unparseable."""
+
+    enabled: bool
+    phones: List[str] = Field(default_factory=list)
 
 
 # --- SMS campaigns (campaign engine) ---------------------------------------

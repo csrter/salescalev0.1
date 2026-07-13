@@ -1325,3 +1325,265 @@ def test_reactivation_rearms_parked_enrollments(sc_org, api, twilio_creds_ok, ca
         db.commit()
     finally:
         db.close()
+
+
+
+# --- lead SMS notifications (text-the-team alerts, services/lead_notify.py) --
+# Each test gets its OWN fresh org (unique signup email): notify_new_lead
+# picks the org's first ACTIVE SmsAccount, and sc_org accumulates dozens of
+# accounts across this whole module — reusing any shared org would make
+# "which account sent it" / "does this org already have an account"
+# nondeterministic depending on test order.
+
+import uuid as _uuid
+
+
+@pytest.fixture()
+def ln_org(api):
+    email = f"owner-{_uuid.uuid4().hex[:12]}@leadnotify.co"
+    r = api.post(
+        "/api/orgs/signup",
+        json={
+            "organization_name": "Lead Notify Co",
+            "email": email,
+            "password": "leadnotify-pass-1",
+            "full_name": "Notify Owner",
+        },
+    )
+    assert r.status_code == 201, r.text
+    body = r.json()
+    headers = {"Authorization": f"Bearer {body['access_token']}"}
+    client_id = api.post(
+        "/api/clients", json={"name": "Notify Client"}, headers=headers
+    ).json()["id"]
+    return {"org": body["organization_id"], "headers": headers, "client": client_id}
+
+
+def _enable_notifications(api, ln_org, phones):
+    r = api.put(
+        "/api/orgs/me/lead-notifications",
+        json={"enabled": True, "phones": phones},
+        headers=ln_org["headers"],
+    )
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+def test_lead_notifications_settings_roundtrip(ln_org, api):
+    r = api.get("/api/orgs/me/lead-notifications", headers=ln_org["headers"])
+    assert r.status_code == 200, r.text
+    assert r.json() == {"enabled": False, "phones": []}
+
+    # Formatting variants normalize to the same E.164 and dedupe.
+    saved = _enable_notifications(api, ln_org, ["(480) 555-9991", "+14805559991"])
+    assert saved == {"enabled": True, "phones": ["+14805559991"]}
+
+    r = api.get("/api/orgs/me/lead-notifications", headers=ln_org["headers"])
+    assert r.json() == {"enabled": True, "phones": ["+14805559991"]}
+
+    # Unparseable phone -> 422, nothing saved.
+    r = api.put(
+        "/api/orgs/me/lead-notifications",
+        json={"enabled": True, "phones": ["not-a-phone"]},
+        headers=ln_org["headers"],
+    )
+    assert r.status_code == 422
+
+    # Over the cap -> 400.
+    r = api.put(
+        "/api/orgs/me/lead-notifications",
+        json={"enabled": True, "phones": [f"+1480555{n:04d}" for n in range(11)]},
+        headers=ln_org["headers"],
+    )
+    assert r.status_code == 400
+
+
+def test_new_lead_triggers_sms_notification_to_configured_numbers(
+    ln_org, api, twilio_creds_ok, captured_sends
+):
+    acct = _mk_account(ln_org, api, from_number="+14805559992")
+    _enable_notifications(api, ln_org, ["+14805559991"])
+
+    r = api.post(
+        "/api/track/lead",
+        json={
+            "client_id": ln_org["client"],
+            "session_key": "notify-sess-1",
+            "email": "newlead@example.com",
+            "first_name": "Newt",
+            "last_name": "Leadman",
+        },
+    )
+    assert r.status_code == 201, r.text
+
+    assert len(captured_sends) == 1
+    assert captured_sends[0]["to"] == "+14805559991"
+    assert captured_sends[0]["account_id"] == acct["id"]
+    assert "Newt Leadman" in captured_sends[0]["body"]
+
+    db = SessionLocal()
+    try:
+        msg = db.execute(
+            select(SmsMessage).where(
+                SmsMessage.to_number == "+14805559991",
+                SmsMessage.organization_id == ln_org["org"],
+            )
+        ).scalar_one()
+        assert msg.kind == "notification"
+        assert msg.contact_id is None
+        assert msg.status == "sent"
+    finally:
+        db.close()
+
+    # A resubmission of the SAME lead updates rather than re-notifying.
+    r = api.post(
+        "/api/track/lead",
+        json={
+            "client_id": ln_org["client"],
+            "session_key": "notify-sess-2",
+            "email": "newlead@example.com",
+        },
+    )
+    assert r.status_code == 201
+    assert len(captured_sends) == 1  # unchanged
+
+
+def test_lead_notification_off_by_default_sends_nothing(
+    ln_org, api, twilio_creds_ok, captured_sends
+):
+    _mk_account(ln_org, api, from_number="+14805559993")
+    r = api.post(
+        "/api/track/lead",
+        json={
+            "client_id": ln_org["client"],
+            "session_key": "notify-sess-off",
+            "email": "quietlead@example.com",
+        },
+    )
+    assert r.status_code == 201
+    assert captured_sends == []
+
+
+def test_lead_notification_skips_silently_with_no_active_account(ln_org, api):
+    """Enabled + a configured phone but no active SMS account: the lead
+    still gets created successfully, nothing crashes."""
+    _enable_notifications(api, ln_org, ["+14805559991"])
+    # No SmsAccount at all for this fresh org.
+    r = api.post(
+        "/api/track/lead",
+        json={
+            "client_id": ln_org["client"],
+            "session_key": "notify-sess-noaccount",
+            "email": "noaccountlead@example.com",
+        },
+    )
+    assert r.status_code == 201, r.text
+
+    db = SessionLocal()
+    try:
+        assert (
+            db.execute(
+                select(SmsMessage).where(
+                    SmsMessage.kind == "notification",
+                    SmsMessage.organization_id == ln_org["org"],
+                )
+            ).scalar_one_or_none()
+            is None
+        )
+    finally:
+        db.close()
+
+
+def test_lead_notification_provider_failure_never_blocks_lead_creation(
+    ln_org, api, twilio_creds_ok, monkeypatch
+):
+    """A Twilio outage while sending the alert must not cost the lead that
+    was just successfully created — the notification is a best-effort side
+    effect, never load-bearing for the request that triggered it."""
+    _mk_account(ln_org, api, from_number="+14805559994")
+    _enable_notifications(api, ln_org, ["+14805559991"])
+
+    def _boom(account, to_number, body):
+        raise gateway.SmsProviderError("Twilio is unreachable: simulated outage")
+
+    monkeypatch.setattr(gateway, "_twilio_send", _boom)
+
+    r = api.post(
+        "/api/track/lead",
+        json={
+            "client_id": ln_org["client"],
+            "session_key": "notify-sess-outage",
+            "email": "outagelead@example.com",
+        },
+    )
+    assert r.status_code == 201, r.text
+
+    db = SessionLocal()
+    try:
+        contact = db.execute(
+            select(Contact).where(Contact.email == "outagelead@example.com")
+        ).scalar_one_or_none()
+        assert contact is not None  # the lead itself was created fine
+        failed = db.execute(
+            select(SmsMessage).where(
+                SmsMessage.kind == "notification",
+                SmsMessage.to_number == "+14805559991",
+                SmsMessage.organization_id == ln_org["org"],
+                SmsMessage.status == "failed",
+            )
+        ).scalar_one_or_none()
+        assert failed is not None
+    finally:
+        db.close()
+
+
+def test_lead_notification_prefers_bluebubbles_over_other_active_accounts(
+    ln_org, api, twilio_creds_ok, monkeypatch
+):
+    """BlueBubbles reads as a human ping from a real number rather than a
+    shortcode blast, so it's preferred over any other connected provider —
+    even one created first."""
+    _mk_account(ln_org, api, from_number="+14805559995")  # twilio, created first
+
+    def _boom_twilio(*a, **k):
+        raise AssertionError("_twilio_send called even though BlueBubbles is connected")
+
+    monkeypatch.setattr(gateway, "_twilio_send", _boom_twilio)
+
+    bb_sent = []
+
+    def _fake_bb(account, to_number, body):
+        bb_sent.append({"account_id": account.id, "to": to_number, "body": body})
+        return "BB_test_guid", None, None
+
+    monkeypatch.setattr(gateway, "_bluebubbles_send", _fake_bb)
+
+    r = api.post(
+        "/api/sms/accounts",
+        json={
+            "name": "BlueBubbles Line",
+            "provider": "bluebubbles",
+            "auth_token": "bluebubbles-server-password-123",
+            "relay_url": "https://imessage-relay.example.com",
+            "from_number": "+14805559996",
+        },
+        headers=ln_org["headers"],
+    )
+    assert r.status_code == 201, r.text
+    bb_acct = r.json()
+
+    _enable_notifications(api, ln_org, ["+14805559991"])
+
+    r = api.post(
+        "/api/track/lead",
+        json={
+            "client_id": ln_org["client"],
+            "session_key": "notify-sess-bb",
+            "email": "bblead@example.com",
+        },
+    )
+    assert r.status_code == 201, r.text
+
+    assert len(bb_sent) == 1
+    assert bb_sent[0]["account_id"] == bb_acct["id"]
+    assert bb_sent[0]["to"] == "+14805559991"

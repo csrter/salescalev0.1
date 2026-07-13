@@ -1,3 +1,4 @@
+import secrets
 from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -17,6 +18,7 @@ from ..schemas import (
     ConnectionOut,
     ExternalSyncConfigIn,
     GuaranteeConfigIn,
+    LeadFormEnabledIn,
     LeadFormConfigIn,
     LeadFormConfigOut,
 )
@@ -212,6 +214,71 @@ def set_lead_form_config(
     else:
         config.external_key = body.external_key
         config.enabled = body.enabled
+    db.commit()
+    return config
+
+
+@router.post(
+    "/{client_id}/lead-forms/landing-page/rotate", response_model=LeadFormConfigOut
+)
+def rotate_landing_page_webhook(
+    client_id: str,
+    user: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Generic landing-page-form webhook (any form tool that can POST to a
+    URL — Webflow, WPForms, Zapier, a plain HTML form). Unlike meta/google,
+    there is no external platform dictating the key, so the secret is
+    generated server-side (never client-supplied) and folded into the URL
+    path — the model most third-party form tools support out of the box.
+    Calling this again rotates the key, invalidating the old URL."""
+    client = db.get(Client, client_id)
+    if client is None or client.organization_id != user.organization_id:
+        raise HTTPException(404, "Not found")
+    config = db.execute(
+        select(LeadFormConfig).where(
+            LeadFormConfig.client_id == client.id,
+            LeadFormConfig.platform == "landing_page",
+        )
+    ).scalar_one_or_none()
+    key = secrets.token_urlsafe(24)
+    if config is None:
+        config = LeadFormConfig(
+            organization_id=client.organization_id,
+            client_id=client.id,
+            platform="landing_page",
+            external_key=key,
+            enabled=True,
+        )
+        db.add(config)
+    else:
+        config.external_key = key
+        config.enabled = True
+    db.commit()
+    return config
+
+
+@router.patch(
+    "/{client_id}/lead-forms/landing-page", response_model=LeadFormConfigOut
+)
+def set_landing_page_webhook_enabled(
+    client_id: str,
+    body: LeadFormEnabledIn,
+    user: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    client = db.get(Client, client_id)
+    if client is None or client.organization_id != user.organization_id:
+        raise HTTPException(404, "Not found")
+    config = db.execute(
+        select(LeadFormConfig).where(
+            LeadFormConfig.client_id == client.id,
+            LeadFormConfig.platform == "landing_page",
+        )
+    ).scalar_one_or_none()
+    if config is None:
+        raise HTTPException(404, "No landing-page webhook configured yet")
+    config.enabled = body.enabled
     db.commit()
     return config
 

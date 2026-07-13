@@ -298,6 +298,104 @@ def test_google_lead_form_lead_ingested_with_gclid(api, team_headers, crm_client
     assert not any(c["source_external_id"] == "glead-test" for c in contacts)
 
 
+# --- lead ingestion: generic landing-page form webhook (third-party tools) ---
+
+
+def test_landing_page_webhook_generate_toggle_and_ingest(api, team_headers, crm_client):
+    # No key exists yet — rotate generates one server-side (never admin-typed).
+    resp = api.post(
+        f"/api/clients/{crm_client}/lead-forms/landing-page/rotate",
+        headers=team_headers,
+    )
+    assert resp.status_code == 200, resp.text
+    key = resp.json()["external_key"]
+    assert resp.json()["enabled"] is True
+    url = f"/api/webhooks/landing-form/{crm_client}/{key}"
+
+    # Wrong key on a real client → same 404 as an unknown client (no leak).
+    resp = api.post(f"/api/webhooks/landing-form/{crm_client}/wrong-key", json={"Email": "x@example.com"})
+    assert resp.status_code == 404
+
+    # Field names are matched by synonym, case/punctuation-insensitive, and
+    # unmapped fields land in source_detail; a "message" field becomes a note.
+    resp = api.post(
+        url,
+        json={
+            "Full Name": "Nora Quinn",
+            "Work Email": "nora@example.com",
+            "Phone Number": "(555) 099-2231",
+            "Business Name": "Quinn Roofing",
+            "City": "Tempe",
+            "Message": "Need a quote for a roof repair ASAP",
+            "gclid": "test-gclid-webhook",
+            "referral_code": "XY123",  # unmapped, kept for audit
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["status"] == "created"
+
+    contacts = _contacts(api, team_headers, crm_client)
+    lead = next(c for c in contacts if c["email"] == "nora@example.com")
+    assert lead["source"] == "landing_page_webhook"
+    assert lead["first_name"] == "Nora"
+    assert lead["last_name"] == "Quinn"
+    assert lead["city"] == "Tempe"
+    assert lead["company_name"] == "Quinn Roofing"
+    assert lead["source_detail"] == {"referral_code": "XY123"}
+    assert lead["attribution"]["platform"] == "google"
+    assert lead["attribution"]["has_click_id"] is True
+
+    # The message field is preserved as a note on the contact's timeline.
+    resp = api.get(
+        f"/api/crm/activities?client_id={crm_client}&contact_id={lead['id']}",
+        headers=team_headers,
+    )
+    assert resp.status_code == 200, resp.text
+    assert any("roof repair" in a["body"] for a in resp.json())
+
+    # Same email again updates in place rather than duplicating.
+    resp = api.post(url, json={"email": "nora@example.com", "last_name": "Quinn-Smith"})
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "updated"
+    contacts = _contacts(api, team_headers, crm_client)
+    assert sum(1 for c in contacts if c["email"] == "nora@example.com") == 1
+    # Fill-blanks-only: an existing last_name is never overwritten.
+    lead = next(c for c in contacts if c["email"] == "nora@example.com")
+    assert lead["last_name"] == "Quinn"
+
+    # No email or phone recognized → 400, nothing created.
+    resp = api.post(url, json={"message": "hello with no way to reach me"})
+    assert resp.status_code == 400
+
+    # Disabling the webhook rejects further submissions.
+    resp = api.patch(
+        f"/api/clients/{crm_client}/lead-forms/landing-page",
+        json={"enabled": False},
+        headers=team_headers,
+    )
+    assert resp.status_code == 200
+    assert resp.json()["enabled"] is False
+    resp = api.post(url, json={"email": "later@example.com"})
+    assert resp.status_code == 404
+
+    # Rotating issues a new key; the old one stops working, re-enables it.
+    resp = api.post(
+        f"/api/clients/{crm_client}/lead-forms/landing-page/rotate",
+        headers=team_headers,
+    )
+    assert resp.status_code == 200
+    new_key = resp.json()["external_key"]
+    assert new_key != key
+    assert resp.json()["enabled"] is True
+    resp = api.post(url, json={"email": "later@example.com"})
+    assert resp.status_code == 404  # old URL is dead
+    resp = api.post(
+        f"/api/webhooks/landing-form/{crm_client}/{new_key}",
+        json={"email": "later@example.com"},
+    )
+    assert resp.status_code == 200
+
+
 # --- lead ingestion: landing-page path updates instead of duplicating ---
 
 
