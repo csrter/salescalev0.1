@@ -1146,7 +1146,11 @@ function Login({ onLogin }: { onLogin: (s: Session) => void }) {
                     : "Send reset link"}
                 </Button>
                 {error && <Alert tone="danger">{error}</Alert>}
-                {mode !== "forgot" && (
+                {/* Social sign-in needs a web origin for the OAuth callback
+                    to land on — the desktop app is file:// + a localhost
+                    backend, so the redirect can never complete there. Hide
+                    the buttons rather than dead-end the user mid-flow. */}
+                {mode !== "forgot" && !window.salescale?.isDesktop && (
                   <>
                     <div className="oauth-divider">
                       <span>or</span>

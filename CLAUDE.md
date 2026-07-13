@@ -1098,6 +1098,53 @@ live activation + the entitlement flip, the Outreach module build
       still applies). THIS IS PROD'S CURRENT STATE: Atlas Reach has one
       mailbox — warmup exchange is inert until a second mailbox is connected
       with warmup on (user-side). NOT deployed yet.
+- [x] Desktop app repair + flaw audit (2026-07-12, post-DMG-fix): the
+      running desktop app was silently talking to a July-10 zombie dev
+      server on port 8000 (throwaway /tmp e2e SQLite — explained the
+      "verify email" banner, CRM "Not Found", stuck Email skeletons) while
+      its own bundled backend died at startup on a stale Supabase password
+      in userData config.json (the VPS .env is the only current copy;
+      local backend/.env is ALSO stale — flagged, not touched). Fixed:
+      zombie killed, config.json synced from the VPS via ssh-pipe (never
+      displayed), resendApiKey/emailFromAddress added (2FA email was
+      silently dropped without a transport), appBaseUrl + env.API_BASE_URL
+      set. Booting the desktop backend applied the additive b2e6f1a9c4d7
+      migration to the live DB (checked additive-only first; the pending
+      deploy's alembic step will no-op). Then a 19-agent Sonnet workflow
+      audit (5 dimensions, adversarial verify — 19 confirmed, 0 refuted)
+      + fixes: (1) SCHEDULER GATE — desktop_mode now runs NO background
+      schedulers (config.run_schedulers(), DESKTOP_RUN_SCHEDULERS=1
+      opt-out for standalone installs; tests/test_desktop_mode.py): two
+      instances polling one DB could double-send email/SMS/DMs since the
+      due-row scans have no cross-process claim (server-side hardening
+      with FOR UPDATE SKIP LOCKED left as a flagged follow-up — only
+      matters if the VPS ever runs >1 replica). (2) ELECTRON SHELL —
+      single-instance lock, dock-reactivate no longer double-spawns the
+      backend (was orphaning the first: the exact zombie class above),
+      spawn-error + unexpected-exit dialogs with a stderr tail (backend
+      death was invisible), setWindowOpenHandler routes target=_blank to
+      the system browser (was dead), and config.json gained a generic
+      "env" object merged into the backend env — closes the
+      passthrough-allowlist class (API_BASE_URL, TWILIO_*, AI keys…)
+      forever. (3) PYINSTALLER — anthropic/openai/google-genai are
+      imported lazily so the binary had NO AI SDKs; collect_all'd in
+      main.spec (+ multipart for Starlette form parsing); binary grew
+      ~9MB, presence verified via pyi-archive_viewer. (4) WEB-ORIGIN —
+      social sign-in buttons hidden on desktop (window.salescale
+      .isDesktop; the OAuth callback needs a web origin and dead-ends).
+      Cold-email unsubscribe/List-Unsubscribe URLs building from a
+      localhost api_base_url can't happen from desktop anymore (no
+      schedulers = no sends) and env.API_BASE_URL is set anyway. KNOWN
+      REMAINING (all flagged as task chips or user-side): SMS webhook URL
+      cards render localhost URLs on desktop (configure Twilio from the
+      web app); dynamic port + own-backend handshake chip; scheduler
+      claim hardening chip; APP_BASE_URL is UNSET ON THE VPS TOO — prod
+      password-reset/verify/invite email links point at localhost:5173
+      (user-side: add APP_BASE_URL=https://app.salescale.lol to the VPS
+      backend/.env and recreate). Tests 459 → 462, tsc clean, DMG rebuilt
+      (148MB) + contents verified (backend hash, new main.js, frontend
+      asar). NOT deployed (the scheduler-gate backend change is
+      desktop-only behavior; deploy bundles it with the pending commits).
 - [ ] Stripe live activation + entitlement flip (after 12–14, so real
       limits land everywhere in one pass)
 - [ ] Outreach module build (dev-mode) — go-live gated on Meta App

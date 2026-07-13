@@ -84,6 +84,18 @@ class Settings(BaseSettings):
     # (safe here because auth is Bearer-token only — no cookies to protect).
     desktop_mode: bool = False
 
+    # The desktop app typically points at the SAME database as a server
+    # deployment, and two live scheduler instances polling one DB can
+    # double-send outreach (the due-row scan has no cross-process claim), so
+    # desktop mode runs NO background schedulers by default — desktop is a
+    # control surface; the server owns the loops. Set DESKTOP_RUN_SCHEDULERS=1
+    # only for a standalone (own-DB) desktop install with no server
+    # counterpart to do the sending.
+    desktop_run_schedulers: bool = False
+
+    def run_schedulers(self) -> bool:
+        return not self.desktop_mode or self.desktop_run_schedulers
+
     # Platform super-admins (Salescale operators). Comma-separated emails.
     # Super-admin is derived from this allowlist, never granted via the API or
     # signup — the only way to become one is to be listed here (env-controlled).

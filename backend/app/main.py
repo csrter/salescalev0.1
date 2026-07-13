@@ -202,7 +202,7 @@ async def _outreach_scheduler():
     runs in a worker thread (sync SQLAlchemy) with its own session; failures
     are logged and never kill the loop. Disabled in tests (they tick
     synchronously via the service)."""
-    if not _settings.outreach_scheduler_enabled:
+    if not _settings.outreach_scheduler_enabled or not _settings.run_schedulers():
         return
     import asyncio
 
@@ -245,7 +245,7 @@ async def _email_outreach_scheduler():
           do here.
     Same pattern as the IG scheduler. Disabled in tests (they drive run_due /
     sync_account / run_warmup_tick synchronously)."""
-    if not _settings.email_outreach_scheduler_enabled:
+    if not _settings.email_outreach_scheduler_enabled or not _settings.run_schedulers():
         return
     import asyncio
 
