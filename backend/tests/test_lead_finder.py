@@ -1041,3 +1041,37 @@ def test_bulk_enrich_queues_scoped_contacts(lf_org, api, monkeypatch):
     )
     assert r.status_code == 404
     assert captured == {}
+
+
+def test_enrichment_job_recorded_and_status_endpoint(lf_org, api):
+    """enrich_and_verify writes an EnrichmentJob (created → per-contact
+    heartbeat → completed), and GET /api/crm/enrich/jobs serves it with the
+    status-card fields. Run synchronously with no provider keys — every
+    step no-ops quickly but the job lifecycle is identical."""
+    ids = []
+    for i in range(3):
+        r = api.post(
+            "/api/crm/contacts",
+            json={
+                "client_id": lf_org["client"],
+                "first_name": f"Job{i}",
+                "phone": f"480555300{i}",
+            },
+            headers=lf_org["headers"],
+        )
+        assert r.status_code == 201, r.text
+        ids.append(r.json()["id"])
+
+    lead_finder_svc.enrich_and_verify(lf_org["org"], ids)
+
+    r = api.get("/api/crm/enrich/jobs", headers=lf_org["headers"])
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["processing"] is False
+    job = body["jobs"][0]
+    assert job["status"] == "completed"
+    assert job["phase"] == "done"
+    assert (job["total"], job["processed"]) == (3, 3)
+    assert job["eta_seconds"] is None
+    assert job["finished_at"] is not None
+    assert job["elapsed_seconds"] >= 0

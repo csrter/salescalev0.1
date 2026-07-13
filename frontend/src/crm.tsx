@@ -39,6 +39,8 @@ import {
   runResearch,
   updateContact,
   enrichContacts,
+  getEnrichmentJobs,
+  type EnrichmentJob,
   verifyContacts,
   type ContactEditBody,
   type ContactList,
@@ -377,6 +379,8 @@ export function CrmView({
         onMoved={refresh}
         toast={toast}
       />
+
+      {isTeam && <EnrichmentStatusCard />}
 
       <LeadList
         contacts={contacts}
@@ -827,6 +831,107 @@ const SYS_COLUMNS: { key: string; label: string; get: (c: ContactRow) => string 
   },
 ];
 
+/** Cross-component nudge: the bulk "Enrich contact info" button fires this
+ * so the status card refetches immediately instead of waiting for a poll. */
+export const ENRICH_QUEUED_EVENT = "salescale:enrich-queued";
+
+function fmtDur(seconds: number): string {
+  const s = Math.max(0, Math.round(seconds));
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m ${s % 60}s`;
+  return `${Math.floor(m / 60)}h ${m % 60}m`;
+}
+
+const ENRICH_STATUS_TONE: Record<EnrichmentJob["status"], "ok" | "warn" | "danger" | "neutral"> = {
+  running: "ok",
+  completed: "neutral",
+  failed: "danger",
+  interrupted: "warn",
+};
+
+/** Enrichment status: whether a run is processing right now, live progress
+ * with a pace-based ETA, and recent history. Polls while a job is running;
+ * renders nothing until the org has ever enriched. */
+function EnrichmentStatusCard() {
+  const [jobs, setJobs] = useState<EnrichmentJob[] | null>(null);
+  const [processing, setProcessing] = useState(false);
+
+  const load = useCallback(() => {
+    getEnrichmentJobs()
+      .then((r) => {
+        setJobs(r.jobs);
+        setProcessing(r.processing);
+      })
+      .catch(() => {});
+  }, []);
+
+  useEffect(load, [load]);
+  useEffect(() => {
+    window.addEventListener(ENRICH_QUEUED_EVENT, load);
+    return () => window.removeEventListener(ENRICH_QUEUED_EVENT, load);
+  }, [load]);
+  // Live poll only while something is actually running.
+  useEffect(() => {
+    if (!processing) return;
+    const t = setInterval(load, 4000);
+    return () => clearInterval(t);
+  }, [processing, load]);
+
+  if (!jobs || jobs.length === 0) return null;
+  // A running job is always the hero, even if a newer run already finished.
+  const latest = jobs.find((j) => j.status === "running") ?? jobs[0];
+  const running = latest.status === "running";
+  const pct = latest.total > 0 ? Math.round((latest.processed / latest.total) * 100) : 0;
+  const history = jobs.filter((j) => j.id !== latest.id).slice(0, 4);
+
+  return (
+    <div className="glass-card crm-enrich-card">
+      <div className="crm-enrich-head">
+        <h4 className="crm-subhead crm-subhead--sm">Enrichment status</h4>
+        <Badge tone={ENRICH_STATUS_TONE[latest.status]}>
+          {running ? "processing" : latest.status}
+        </Badge>
+      </div>
+      {running ? (
+        <>
+          <div className="crm-enrich-bar" role="progressbar" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100}>
+            <div className="crm-enrich-bar-fill" style={{ width: `${pct}%` }} />
+          </div>
+          <p className="crm-enrich-line">
+            {latest.phase === "verifying"
+              ? `Verifying emails for ${latest.total} lead${latest.total === 1 ? "" : "s"}…`
+              : `Enriching lead ${Math.min(latest.processed + 1, latest.total)} of ${latest.total}…`}{" "}
+            {latest.eta_seconds != null
+              ? `about ${fmtDur(latest.eta_seconds)} remaining`
+              : "estimating time remaining…"}{" "}
+            ({fmtDur(latest.elapsed_seconds)} elapsed)
+          </p>
+        </>
+      ) : (
+        <p className="crm-enrich-line">
+          Last run: {latest.processed} of {latest.total} lead
+          {latest.total === 1 ? "" : "s"} in {fmtDur(latest.elapsed_seconds)}
+          {latest.status === "failed" && latest.error ? ` — ${latest.error}` : ""}
+          {latest.status === "interrupted"
+            ? " — stopped before finishing (re-run enrichment on the same leads to pick up where it left off)"
+            : ""}
+        </p>
+      )}
+      {history.length > 0 && (
+        <ul className="crm-enrich-history">
+          {history.map((j) => (
+            <li key={j.id}>
+              {new Date(j.created_at).toLocaleString()} · {j.processed}/{j.total} leads ·{" "}
+              {j.status} · {fmtDur(j.elapsed_seconds)}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 function LeadList({
   contacts,
   clientId,
@@ -1253,12 +1358,13 @@ function LeadList({
                   size="sm"
                   onClick={() => {
                     enrichContacts([...selected])
-                      .then((r) =>
+                      .then((r) => {
                         toast(
-                          `Enrichment queued for ${r.queued} lead${r.queued === 1 ? "" : "s"} — owner names, titles and mobile numbers fill in as the provider responds`,
+                          `Enrichment queued for ${r.queued} lead${r.queued === 1 ? "" : "s"} — progress in the Enrichment status card above`,
                           "ok",
-                        ),
-                      )
+                        );
+                        window.dispatchEvent(new Event(ENRICH_QUEUED_EVENT));
+                      })
                       .catch((e) => toast((e as Error).message, "error"));
                   }}
                 >

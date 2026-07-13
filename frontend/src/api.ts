@@ -1297,6 +1297,25 @@ export const enrichContacts = (contactIds: string[]) =>
     body: JSON.stringify({ contact_ids: contactIds }),
   });
 
+/** One enrichment run's progress record (the CRM status card). `status`
+ * "interrupted" is server-derived: a running job whose heartbeat went
+ * quiet (backend restarted mid-run). */
+export interface EnrichmentJob {
+  id: string;
+  status: "running" | "completed" | "failed" | "interrupted";
+  phase: "enriching" | "verifying" | "done";
+  total: number;
+  processed: number;
+  error: string | null;
+  created_at: string;
+  finished_at: string | null;
+  elapsed_seconds: number;
+  eta_seconds: number | null;
+}
+
+export const getEnrichmentJobs = () =>
+  api<{ jobs: EnrichmentJob[]; processing: boolean }>("/api/crm/enrich/jobs");
+
 export const verifyContacts = (contactIds: string[]) =>
   api<{
     verified: Record<string, { verification_status: VerificationStatus; verified_at: string | null }>;

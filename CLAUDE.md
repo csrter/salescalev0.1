@@ -1204,6 +1204,30 @@ live activation + the entitlement flip, the Outreach module build
       key was connected had no owner/mobile data and no way to get it.
       Fill-blanks-only as always. Tests 467 → 468. DEPLOYED to production
       (2026-07-13 UTC, c7762b2): health green, endpoint live + auth-gated.
+- [x] Enrichment status card (2026-07-13, same-day): enrichment was
+      fire-and-forget with zero visible state — now every enrich_and_verify
+      run (bulk re-enrich, Lead Finder import, CSV import) writes an
+      EnrichmentJob row (models/lead_finder.py, migration e4e04c133222:
+      status/phase/total/processed/updated_at heartbeat per contact —
+      per-contact commits also make the pipeline itself incremental, a
+      mid-run failure keeps completed contacts). GET /api/crm/enrich/jobs
+      (require_team) serves the last 10 runs with elapsed, pace-based
+      eta_seconds (elapsed/processed × remaining), and a server-derived
+      "interrupted" status when a running job's heartbeat is >180s old
+      (backend restarted mid-run). Frontend: EnrichmentStatusCard between
+      the board and lead list in crm.tsx (team-only, hidden until the org
+      has ever enriched) — Processing badge, progress bar, "Enriching lead
+      N of M… about Xm Ys remaining", verifying-phase line, failure reason,
+      history of prior runs; polls every 4s only while a job is running and
+      refetches instantly when the bulk Enrich button queues (window event
+      ENRICH_QUEUED_EVENT — no prop drilling). job.error keeps
+      type(e).__name__ when str(e) is empty (cryptography.InvalidToken
+      stringifies to "" — found live when alt2's scrubbed
+      TOKEN_ENCRYPTION_KEY couldn't decrypt stale IntegrationCredential
+      rows; cleared from dev-alt2.db). Tests 468 → 469. Verified live on
+      alt2: real 3-lead run (card appeared mid-flight then completed), a
+      simulated 20/80 job rendered the bar at 25% + "about 5m 10s
+      remaining" (ETA math verified), running-job-wins-hero display fix.
 - [ ] Stripe live activation + entitlement flip (after 12–14, so real
       limits land everywhere in one pass)
 - [ ] Outreach module build (dev-mode) — go-live gated on Meta App

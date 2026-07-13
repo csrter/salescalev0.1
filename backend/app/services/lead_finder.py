@@ -177,11 +177,13 @@ def enrich_and_verify(organization_id: str, contact_ids: List[str]) -> None:
     from fastapi import HTTPException
 
     from ..db import SessionLocal
+    from ..models.lead_finder import EnrichmentJob
     from . import email_verification, integration_creds
     from . import enrichment as enrichment_mod
     from .enrichment import discover_site_emails, provider_for
 
     db = SessionLocal()
+    job = None
     try:
         org = db.get(Organization, organization_id)
         if org is None:
@@ -196,12 +198,23 @@ def enrich_and_verify(organization_id: str, contact_ids: List[str]) -> None:
             .scalars()
             .all()
         )
+        # Progress record for the CRM's enrichment status card. Committed
+        # up front (and per contact below) so a concurrent request session
+        # sees live state; the job row survives a pipeline rollback.
+        job = EnrichmentJob(organization_id=organization_id, total=len(contacts))
+        db.add(job)
+        db.commit()
         hunter_key = integration_creds.resolve_key(db, organization_id, "hunter")
         provider = provider_for("hunter", hunter_key)
         apollo_key = integration_creds.resolve_key(db, organization_id, "apollo")
         profile_provider = enrichment_mod.profile_provider_for("apollo", apollo_key)
         now = dt.datetime.now(dt.timezone.utc).isoformat()
-        for c in contacts:
+        for idx, c in enumerate(contacts):
+            # Progress heartbeat: also commits the previous contact's
+            # fill-ins, so a mid-run failure keeps completed contacts whole.
+            job.processed = idx
+            job.updated_at = dt.datetime.now(dt.timezone.utc)
+            db.commit()
             website = (c.source_detail or {}).get("website")
             domain = normalize_domain(website)
             company = db.get(Company, c.company_id) if c.company_id else None
@@ -284,6 +297,9 @@ def enrich_and_verify(organization_id: str, contact_ids: List[str]) -> None:
                 # strictly unverified until Part C stamps a verdict.
                 c.email = candidates[0]["email"]
                 email_verification.reset_status(c)
+        job.processed = len(contacts)
+        job.phase = "verifying"
+        job.updated_at = dt.datetime.now(dt.timezone.utc)
         db.commit()
         try:
             email_verification.verify_contacts(db, org, contacts)
@@ -293,8 +309,24 @@ def enrich_and_verify(organization_id: str, contact_ids: List[str]) -> None:
             log.info(
                 "verification skipped for org %s: %s", organization_id, e.detail
             )
-    except Exception:
+        # A skipped verification (quota) is still a finished run — the
+        # enrichment half completed and the card shouldn't show it stuck.
+        job.status = "completed"
+        job.phase = "done"
+        job.finished_at = job.updated_at = dt.datetime.now(dt.timezone.utc)
+        db.commit()
+    except Exception as e:
         db.rollback()
         log.exception("lead finder enrich/verify pipeline failed")
+        if job is not None:
+            try:
+                job.status = "failed"
+                # Some exceptions str() to "" (e.g. cryptography's
+                # InvalidToken) — always keep at least the class name.
+                job.error = (str(e) or type(e).__name__)[:500]
+                job.finished_at = job.updated_at = dt.datetime.now(dt.timezone.utc)
+                db.commit()
+            except Exception:
+                db.rollback()
     finally:
         db.close()

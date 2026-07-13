@@ -17,7 +17,7 @@ a business into their CRM (their own data-entry action).
 import datetime as dt
 from typing import Optional
 
-from sqlalchemy import ForeignKey, Integer, String
+from sqlalchemy import DateTime, ForeignKey, Integer, String
 
 from ..db import Base
 from .base import created_at_column, id_column
@@ -69,3 +69,33 @@ class EmailVerificationRecord(Base):
     result: Mapped[str] = mapped_column(String(20), nullable=False)
     provider: Mapped[str] = mapped_column(String(40), nullable=False)
     created_at: Mapped[dt.datetime] = created_at_column()
+
+
+# EnrichmentJob.status values. `running` with a stale updated_at (backend
+# restarted mid-job) is surfaced as interrupted by the status API.
+ENRICH_JOB_STATUSES = ("running", "completed", "failed")
+
+
+class EnrichmentJob(Base):
+    """Progress record for one enrich_and_verify run (bulk re-enrich, Lead
+    Finder import, CSV import — the pipeline creates one for every run).
+    `processed` advances per contact so the CRM's enrichment status card can
+    show live progress and a pace-based ETA; a run's history stays as its
+    audit trail."""
+
+    __tablename__ = "enrichment_jobs"
+
+    id: Mapped[str] = id_column()
+    organization_id: Mapped[str] = mapped_column(
+        ForeignKey("organizations.id"), nullable=False, index=True
+    )
+    status: Mapped[str] = mapped_column(String(20), default="running", nullable=False)
+    # "enriching" (per-contact provider/site work) → "verifying" (the batch
+    # email-verification pass at the end) → "done".
+    phase: Mapped[str] = mapped_column(String(20), default="enriching", nullable=False)
+    total: Mapped[int] = mapped_column(Integer, nullable=False)
+    processed: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    error: Mapped[Optional[str]] = mapped_column(String(500))
+    created_at: Mapped[dt.datetime] = created_at_column()
+    updated_at: Mapped[Optional[dt.datetime]] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[Optional[dt.datetime]] = mapped_column(DateTime(timezone=True))

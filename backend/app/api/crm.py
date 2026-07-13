@@ -16,6 +16,7 @@ CRM writes never touch a live ad platform, so they are not staged changes
 (see test_manage_flow's structural allowlist).
 """
 
+import datetime as dt
 import json
 from typing import Dict, List, Optional
 
@@ -49,7 +50,7 @@ from ..models.crm import (
     PipelineStage,
     ResearchFieldDef,
 )
-from ..models.lead_finder import VERIFICATION_STATUSES
+from ..models.lead_finder import VERIFICATION_STATUSES, EnrichmentJob
 from ..schemas import (
     ACTIVITY_TYPES,
     ActivityCreateIn,
@@ -887,6 +888,68 @@ def enrich_contacts_bulk(
         [c.id for c in contacts],
     )
     return {"queued": len(contacts)}
+
+
+# Heartbeat threshold for declaring a running job interrupted: one contact's
+# enrichment worst-cases around 30s of network timeouts, so a heartbeat this
+# old means the process died mid-run (e.g. a deploy restarted the backend).
+_ENRICH_STALE_SECONDS = 180
+
+
+@router.get("/enrich/jobs")
+def enrichment_job_status(
+    user: User = Depends(require_team),
+    scope: TenantScope = Depends(get_scope),
+    db: Session = Depends(get_db),
+):
+    """Recent enrichment runs for the status card: live progress, a
+    pace-based ETA while running, and history. The pipeline heartbeats
+    `processed`/`updated_at` per contact (services/lead_finder.py)."""
+
+    def _aware(v: Optional[dt.datetime]) -> Optional[dt.datetime]:
+        if v is not None and v.tzinfo is None:
+            return v.replace(tzinfo=dt.timezone.utc)
+        return v
+
+    now = dt.datetime.now(dt.timezone.utc)
+    jobs = (
+        db.execute(
+            select(EnrichmentJob)
+            .where(EnrichmentJob.organization_id == scope.organization_id)
+            .order_by(EnrichmentJob.created_at.desc())
+            .limit(10)
+        )
+        .scalars()
+        .all()
+    )
+    out = []
+    for j in jobs:
+        started = _aware(j.created_at)
+        heartbeat = _aware(j.updated_at) or started
+        end = _aware(j.finished_at) or now
+        elapsed = max(0.0, (end - started).total_seconds())
+        stale = (
+            j.status == "running"
+            and (now - heartbeat).total_seconds() > _ENRICH_STALE_SECONDS
+        )
+        eta = None
+        if j.status == "running" and not stale and 0 < j.processed < j.total:
+            eta = round(elapsed / j.processed * (j.total - j.processed))
+        out.append(
+            {
+                "id": j.id,
+                "status": "interrupted" if stale else j.status,
+                "phase": j.phase,
+                "total": j.total,
+                "processed": j.processed,
+                "error": j.error,
+                "created_at": started.isoformat(),
+                "finished_at": _aware(j.finished_at).isoformat() if j.finished_at else None,
+                "elapsed_seconds": round(elapsed),
+                "eta_seconds": eta,
+            }
+        )
+    return {"jobs": out, "processing": any(job["status"] == "running" for job in out)}
 
 
 def _write_contact_delete_audit(db: Session, contact: Contact, user: User) -> None:
