@@ -781,6 +781,9 @@ class ContactOutTeam(ContactOutPublic):
     sms_opt_in: bool = False
     sms_opt_in_at: Optional[dt.datetime] = None
     sms_opt_in_source: Optional[str] = None
+    # AI research field answers (key -> {"value","confidence","source_url",
+    # "researched_at"}) — agency workflow data, never in the client portal.
+    research: Optional[Dict[str, Any]] = None
 
 
 class ContactCreateIn(BaseModel):
@@ -925,6 +928,41 @@ class CustomFieldDefinitionOut(BaseModel):
     sort_order: int
     archived_at: Optional[dt.datetime] = None
     created_at: dt.datetime
+
+
+# --- AI research fields ("Claygent-lite") ---
+
+
+class ResearchFieldIn(BaseModel):
+    key: Optional[str] = Field(default=None, max_length=60)
+    label: str = Field(min_length=1, max_length=120)
+    prompt: str = Field(min_length=1, max_length=2000)
+    max_words: int = Field(default=40, ge=1, le=200)
+
+
+class ResearchFieldPatch(BaseModel):
+    label: Optional[str] = Field(default=None, min_length=1, max_length=120)
+    prompt: Optional[str] = Field(default=None, min_length=1, max_length=2000)
+    max_words: Optional[int] = Field(default=None, ge=1, le=200)
+    archived: Optional[bool] = None
+
+
+class ResearchFieldOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    key: str
+    label: str
+    prompt: str
+    max_words: int
+    archived: bool
+    created_at: dt.datetime
+
+
+class ResearchRunIn(BaseModel):
+    contact_ids: List[str] = Field(min_length=1, max_length=200)
+    field_keys: Optional[List[str]] = None
+    force: bool = False
 
 
 # --- Phase 14: CSV import ---
@@ -1292,6 +1330,12 @@ class EmailCampaignIn(BaseModel):
     daily_cap: int = Field(default=50, ge=1, le=100000)
     open_tracking: bool = True
     exit_on_reply: bool = True
+    # QA gate (Feature B): when true, only enrollments explicitly approved
+    # via the audience preview/QA table are actually sent.
+    require_approval: bool = False
+    # AI writing controls (Feature C), threaded into generate_ai_snippet.
+    ai_tone: Optional[str] = Field(default=None, max_length=200)
+    ai_example: Optional[str] = Field(default=None, max_length=10000)
 
     @field_validator("send_days")
     @classmethod
@@ -1309,6 +1353,9 @@ class EmailCampaignPatch(BaseModel):
     daily_cap: Optional[int] = Field(default=None, ge=1, le=100000)
     open_tracking: Optional[bool] = None
     exit_on_reply: Optional[bool] = None
+    require_approval: Optional[bool] = None
+    ai_tone: Optional[str] = Field(default=None, max_length=200)
+    ai_example: Optional[str] = Field(default=None, max_length=10000)
 
     @field_validator("send_days")
     @classmethod
@@ -1347,6 +1394,43 @@ class EmailEnrollIn(BaseModel):
 class EmailPreviewIn(BaseModel):
     contact_id: str
     position: int = Field(ge=1)
+
+
+# --- audience preview + QA (Feature B) --------------------------------------
+
+
+class EmailPreviewBatchIn(BaseModel):
+    position: int = Field(default=1, ge=1)
+    limit: int = Field(default=25, ge=1, le=50)
+    offset: int = Field(default=0, ge=0)
+
+
+class EnrollmentOverrideIn(BaseModel):
+    position: int = Field(ge=1)
+    subject: Optional[str] = Field(default=None, max_length=500)
+    body: str = Field(min_length=1, max_length=100000)
+
+
+class CampaignQaIn(BaseModel):
+    enrollment_ids: List[str] = Field(min_length=1, max_length=1000)
+    action: str
+
+    @field_validator("action")
+    @classmethod
+    def _known_action(cls, v: str) -> str:
+        if v not in ("approve", "unapprove", "exclude"):
+            raise ValueError("action must be one of approve, unapprove, exclude")
+        return v
+
+
+# --- org outreach context (Feature C) ---------------------------------------
+
+
+class OrgOutreachContextIn(BaseModel):
+    company_description: Optional[str] = Field(default=None, max_length=2000)
+    icp: Optional[str] = Field(default=None, max_length=2000)
+    offer: Optional[str] = Field(default=None, max_length=2000)
+    tone_guide: Optional[str] = Field(default=None, max_length=2000)
 
 
 # --- SMS campaigns (campaign engine) ---------------------------------------

@@ -114,6 +114,11 @@ class Organization(Base):
     custom_domain_verified_at: Mapped[Optional[dt.datetime]] = mapped_column(
         DateTime(timezone=True)
     )
+    # Standing AI-writing context for cold outreach personalization/research
+    # (Feature C): {"company_description", "icp", "offer", "tone_guide"},
+    # each an optional string capped 2000 chars server-side. None means no
+    # org-level context is injected into grounding.
+    outreach_context: Mapped[Optional[dict]] = mapped_column(JSON)
     created_at: Mapped[dt.datetime] = created_at_column()
 
 

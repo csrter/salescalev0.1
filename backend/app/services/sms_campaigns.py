@@ -101,14 +101,15 @@ def segment_count(text: str) -> int:
     return -(-n // _SMS_MULTIPART_SEGMENT_LEN)  # ceil division
 
 
-def unknown_tokens(template: Optional[str], custom_keys=None) -> list:
+def unknown_tokens(template: Optional[str], custom_keys=None, research_keys=None) -> list:
     """Tokens in `template` that aren't in SMS_KNOWN_TOKENS (or a real
-    custom.<key> when `custom_keys` is given), plus #if/spin structural
-    errors. Delegates to email_personalize's shared implementation (same
-    {{#if}}/{{spin:}}/{{token|fallback}} grammar) parameterized on SMS's own,
-    narrower known-token set so the two modules never drift on syntax."""
+    custom.<key>/research.<key> when `custom_keys`/`research_keys` is given),
+    plus #if/spin structural errors. Delegates to email_personalize's shared
+    implementation (same {{#if}}/{{spin:}}/{{token|fallback}} grammar)
+    parameterized on SMS's own, narrower known-token set so the two modules
+    never drift on syntax."""
     return email_personalize._unknown_tokens_against(
-        template, SMS_KNOWN_TOKENS, custom_keys
+        template, SMS_KNOWN_TOKENS, custom_keys, research_keys
     )
 
 
@@ -168,6 +169,12 @@ def generate_ai_snippet(
         "org": {"name": org.name},
         "instructions": step.ai_instructions,
     }
+    if org.outreach_context:
+        # Org-level AI writing context (Feature C) — SMS gets the grounding
+        # injection same as email, but never the per-campaign tone/example
+        # (SMS campaigns don't carry those fields; a text is too short for a
+        # few-shot example to matter).
+        grounding["org_context"] = org.outreach_context
     try:
         ai_insights.check_allowance(db, org)  # entitlement + monthly cap
         res = ai_provider.resolve(db, org)  # provider + model + BYO/operator key

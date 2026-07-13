@@ -47,6 +47,7 @@ from ..models.crm import (
     Deal,
     Pipeline,
     PipelineStage,
+    ResearchFieldDef,
 )
 from ..models.lead_finder import VERIFICATION_STATUSES
 from ..schemas import (
@@ -71,6 +72,10 @@ from ..schemas import (
     DealOut,
     DealUpdateIn,
     QualificationIn,
+    ResearchFieldIn,
+    ResearchFieldOut,
+    ResearchFieldPatch,
+    ResearchRunIn,
     StageOut,
     StagesUpdateIn,
     VerifyContactsIn,
@@ -81,6 +86,7 @@ from ..services import custom_fields as custom_fields_svc
 from ..services import email_verification
 from ..services import entitlements, external_sync, metrics
 from ..services import lead_finder as lead_finder_svc
+from ..services import research as research_svc
 from ..services import sms_consent
 from ..models.base import utcnow
 
@@ -1320,6 +1326,206 @@ def update_task(
         task.completed_at = utcnow() if body.completed else None
     db.commit()
     return task
+
+
+# --- AI research fields ("Claygent-lite") -----------------------------------
+
+
+def _research_def_key(db: Session, org_id: str, label: str) -> str:
+    """Slugify + disambiguate within research_field_defs only — a separate
+    namespace from Phase 14 custom fields (task per CLAY_HANDOFF Feature A),
+    so collision with RESERVED_CONTACT_FIELD_KEYS or an existing custom-field
+    key is deliberately not checked here."""
+    taken = set(
+        db.execute(
+            select(ResearchFieldDef.key).where(
+                ResearchFieldDef.organization_id == org_id
+            )
+        ).scalars()
+    )
+    base = custom_fields_svc.slugify_key(label)
+    candidate = base
+    suffix = 2
+    while candidate in taken:
+        tail = f"_{suffix}"
+        candidate = f"{base[: 60 - len(tail)]}{tail}"
+        suffix += 1
+    return candidate
+
+
+def _research_def_or_404(db: Session, org_id: str, def_id: str) -> ResearchFieldDef:
+    d = db.get(ResearchFieldDef, def_id)
+    if d is None or d.organization_id != org_id:
+        raise HTTPException(404, "Not found")
+    return d
+
+
+@router.get("/research-fields", response_model=List[ResearchFieldOut])
+def list_research_fields(
+    scope: TenantScope = Depends(get_scope),
+    db: Session = Depends(get_db),
+    user: User = Depends(require_team),
+):
+    return list(
+        db.execute(
+            select(ResearchFieldDef)
+            .where(ResearchFieldDef.organization_id == scope.organization_id)
+            .order_by(ResearchFieldDef.created_at)
+        ).scalars()
+    )
+
+
+@router.post("/research-fields", status_code=201, response_model=ResearchFieldOut)
+def create_research_field(
+    body: ResearchFieldIn,
+    scope: TenantScope = Depends(get_scope),
+    db: Session = Depends(get_db),
+    user: User = Depends(require_admin),
+):
+    org = db.get(Organization, scope.organization_id)
+    entitlements.enforce_can_add_research_field(db, org)
+    key = (
+        custom_fields_svc.slugify_key(body.key)
+        if body.key
+        else _research_def_key(db, org.id, body.label)
+    )
+    dupe = db.execute(
+        select(ResearchFieldDef.id).where(
+            ResearchFieldDef.organization_id == org.id,
+            ResearchFieldDef.key == key,
+        )
+    ).scalar_one_or_none()
+    if dupe is not None:
+        raise HTTPException(409, f"A research field with key '{key}' already exists")
+    definition = ResearchFieldDef(
+        organization_id=org.id,
+        key=key,
+        label=body.label.strip(),
+        prompt=body.prompt.strip(),
+        max_words=body.max_words,
+    )
+    db.add(definition)
+    db.commit()
+    return definition
+
+
+@router.patch("/research-fields/{def_id}", response_model=ResearchFieldOut)
+def update_research_field(
+    def_id: str,
+    body: ResearchFieldPatch,
+    scope: TenantScope = Depends(get_scope),
+    db: Session = Depends(get_db),
+    user: User = Depends(require_admin),
+):
+    """Rename is label-only — key is immutable (same rule as custom fields)."""
+    d = _research_def_or_404(db, scope.organization_id, def_id)
+    if body.label is not None:
+        d.label = body.label.strip()
+    if body.prompt is not None:
+        d.prompt = body.prompt.strip()
+    if body.max_words is not None:
+        d.max_words = body.max_words
+    if body.archived is not None:
+        if body.archived is False and d.archived is True:
+            org = db.get(Organization, scope.organization_id)
+            entitlements.enforce_can_add_research_field(db, org)
+        d.archived = body.archived
+    db.commit()
+    return d
+
+
+@router.delete("/research-fields/{def_id}")
+def delete_research_field(
+    def_id: str,
+    background: BackgroundTasks,
+    scope: TenantScope = Depends(get_scope),
+    db: Session = Depends(get_db),
+    user: User = Depends(require_admin),
+):
+    """Hard delete: removes the definition and scrubs its key from every
+    contact's research JSON in a background job (copies the custom-fields
+    delete-scrub pattern)."""
+    d = _research_def_or_404(db, scope.organization_id, def_id)
+    org_id, key = d.organization_id, d.key
+    db.delete(d)
+    db.commit()
+    background.add_task(_scrub_research_key, org_id, key)
+    return {"deleted": True, "key": key, "scrub": "scheduled"}
+
+
+def _scrub_research_key(org_id: str, key: str) -> int:
+    """Remove `key` from every contact's research JSON in the org. Opens its
+    own session so it's safe to run as a background job after hard delete
+    (mirrors services.custom_fields.scrub_key)."""
+    from ..db import SessionLocal
+
+    db = SessionLocal()
+    touched = 0
+    try:
+        contacts = (
+            db.execute(
+                select(Contact).where(
+                    Contact.organization_id == org_id,
+                    Contact.research.is_not(None),
+                )
+            )
+            .scalars()
+            .all()
+        )
+        for c in contacts:
+            data = c.research or {}
+            if key in data:
+                new = {k: v for k, v in data.items() if k != key}
+                c.research = new or None
+                touched += 1
+        if touched:
+            db.commit()
+        return touched
+    finally:
+        db.close()
+
+
+@router.post("/research/run")
+def run_research(
+    body: ResearchRunIn,
+    background: BackgroundTasks,
+    scope: TenantScope = Depends(get_scope),
+    db: Session = Depends(get_db),
+    user: User = Depends(require_team),
+):
+    """Queue AI research for up to 200 contacts. Cross-org ids are silently
+    skipped by run_for_contacts; this endpoint returns a 202-style receipt
+    immediately and runs the batch in a FastAPI BackgroundTask."""
+    background.add_task(
+        _run_research_task,
+        scope.organization_id,
+        body.contact_ids,
+        body.field_keys,
+        body.force,
+    )
+    return {"queued": len(body.contact_ids)}
+
+
+def _run_research_task(
+    org_id: str,
+    contact_ids: List[str],
+    field_keys: Optional[List[str]],
+    force: bool,
+) -> dict:
+    """Background entry: opens its own session (the request's session closes
+    before this runs)."""
+    from ..db import SessionLocal
+
+    db = SessionLocal()
+    try:
+        org = db.get(Organization, org_id)
+        if org is None:
+            return {"processed": 0, "filled": 0, "skipped_cached": 0, "failed": 0}
+        return research_svc.run_for_contacts(
+            db, org, contact_ids, field_keys=field_keys, force=force
+        )
+    finally:
+        db.close()
 
 
 # --- External CRM sync: inbound webhook (public + per-client secret) ---

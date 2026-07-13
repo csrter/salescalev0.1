@@ -22,6 +22,8 @@ import {
 import {
   activateEmailCampaign,
   addEmailSuppression,
+  campaignQa,
+  clearEmailOverride,
   composeEmail,
   createEmailAccount,
   createEmailCampaign,
@@ -32,6 +34,7 @@ import {
   enrollEmailContacts,
   getEmailCampaign,
   getHouseClient,
+  getOrgOutreachContext,
   listContactLists,
   listCrmContactsForClient,
   listEmailAccounts,
@@ -43,9 +46,13 @@ import {
   markEmailThreadRead,
   archiveEmailCampaign,
   pauseEmailCampaign,
+  previewEmailBatch,
   previewEmailStep,
   replyEmailThread,
+  runResearch,
   saveEmailSteps,
+  setEmailOverride,
+  setOrgOutreachContext,
   testEmailAccount,
   unenrollEmail,
   updateEmailAccount,
@@ -58,6 +65,8 @@ import {
   type EmailEnrollment,
   type EmailMessage,
   type EmailPickContact,
+  type EmailPreviewRow,
+  type EmailQaAction,
   type EmailSmtpSecurity,
   type EmailStep,
   type EmailSuppression,
@@ -65,6 +74,7 @@ import {
   type EmailUsage,
   type EnrollReceipt,
   type ContactList,
+  type OrgOutreachContext,
 } from "./api";
 import { LineChart } from "./components/charts";
 import { DataTable, type Column } from "./components/DataTable";
@@ -133,7 +143,8 @@ const TOKENS_HINT = (
     <code>{"{{company_description}}"}</code>{" "}
     <code>{"{{company_revenue}}"}</code>{" "}
     <code>{"{{company_employees}}"}</code>{" "}
-    <code>{"{{custom.<key>}}"}</code>. Fallbacks like{" "}
+    <code>{"{{custom.<key>}}"}</code> <code>{"{{research.<key>}}"}</code>{" "}
+    (AI research fields, from CRM setup). Fallbacks like{" "}
     <code>{"{{first_name|there}}"}</code>, plus <code>{"{{ai_snippet}}"}</code>{" "}
     and <code>{"{{unsubscribe_url}}"}</code>. Conditionals{" "}
     <code>{"{{#if token}}...{{else}}...{{/if}}"}</code> and spintax{" "}
@@ -252,7 +263,9 @@ export function EmailOutreachView({ isAdmin }: { isAdmin: boolean }) {
         <UsageChip usage={usage} />
       </div>
 
-      {panel === "dashboard" && <DashboardPanel accounts={accounts} />}
+      {panel === "dashboard" && (
+        <DashboardPanel accounts={accounts} isAdmin={isAdmin} />
+      )}
       {panel === "campaigns" && isAdmin && (
         <CampaignsPanel accounts={accounts} />
       )}
@@ -292,7 +305,13 @@ function UsageChip({ usage }: { usage: EmailUsage | null }) {
 // 1. Dashboard
 // ==========================================================================
 
-function DashboardPanel({ accounts }: { accounts: EmailAccount[] }) {
+function DashboardPanel({
+  accounts,
+  isAdmin,
+}: {
+  accounts: EmailAccount[];
+  isAdmin: boolean;
+}) {
   const [campaignId, setCampaignId] = useState<string>("");
   const [days, setDays] = useState(30);
   const [campaigns, setCampaigns] = useState<EmailCampaign[]>([]);
@@ -486,6 +505,12 @@ function DashboardPanel({ accounts }: { accounts: EmailAccount[] }) {
         )}
       </Section>
 
+      {isAdmin && (
+        <Section title="AI writing context">
+          <OutreachContextCard />
+        </Section>
+      )}
+
       {accounts.length === 0 && (
         <div className="eml-redline">
           <Alert tone="info" title="No mailboxes yet">
@@ -504,6 +529,101 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
       <h3 className="eml-section-title">{title}</h3>
       {children}
     </section>
+  );
+}
+
+const OUTREACH_CONTEXT_FIELDS: {
+  key: keyof OrgOutreachContext;
+  label: string;
+  placeholder: string;
+}[] = [
+  {
+    key: "company_description",
+    label: "Company description",
+    placeholder: "What your agency does, in a sentence or two.",
+  },
+  {
+    key: "icp",
+    label: "Ideal customer profile",
+    placeholder: "Who you're reaching out to and why they'd care.",
+  },
+  {
+    key: "offer",
+    label: "Offer",
+    placeholder: "What you're proposing — the ask.",
+  },
+  {
+    key: "tone_guide",
+    label: "Tone guide",
+    placeholder: "How you want the AI to sound — plainspoken, formal, etc.",
+  },
+];
+
+/** Org-wide grounding for the {{ai_snippet}} model call and AI research
+ * fields — same shape/placement pattern as the SMS opt-in-default card
+ * (setOrgSmsOptInDefault): admin-visible, a single PUT full-replace. */
+function OutreachContextCard() {
+  const toast = useToast();
+  const [ctx, setCtx] = useState<OrgOutreachContext | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    getOrgOutreachContext().then(setCtx).catch(() => setCtx({
+      company_description: null,
+      icp: null,
+      offer: null,
+      tone_guide: null,
+    }));
+  }, []);
+
+  const save = async () => {
+    if (!ctx) return;
+    setBusy(true);
+    try {
+      const saved = await setOrgOutreachContext(ctx);
+      setCtx(saved);
+      toast("AI writing context saved", "ok");
+    } catch (e) {
+      toast(e instanceof Error ? e.message : "Save failed", "error");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (!ctx) {
+    return (
+      <GlassCard>
+        <SkeletonText lines={4} />
+      </GlassCard>
+    );
+  }
+
+  return (
+    <GlassCard>
+      <p className="eml-sub">
+        Grounds the AI snippet in campaign emails and the org's AI research
+        fields — every AI call for this org includes this context alongside
+        the contact's own CRM data. Never generated, never shared across
+        organizations.
+      </p>
+      <div className="eml-form">
+        {OUTREACH_CONTEXT_FIELDS.map((f) => (
+          <Field key={f.key} label={f.label} optional>
+            <textarea
+              rows={2}
+              value={ctx[f.key] ?? ""}
+              placeholder={f.placeholder}
+              onChange={(e) => setCtx({ ...ctx, [f.key]: e.target.value || null })}
+            />
+          </Field>
+        ))}
+        <div className="eml-step-add">
+          <Button variant="primary" size="sm" busy={busy} onClick={save}>
+            Save
+          </Button>
+        </div>
+      </div>
+    </GlassCard>
   );
 }
 
@@ -712,7 +832,7 @@ function CreateCampaignDialog({
 
 // --- campaign editor (config + steps + enroll + enrollments + preview) ---
 
-type EditorTab = "config" | "steps" | "audience";
+type EditorTab = "config" | "steps" | "audience" | "review";
 
 function CampaignEditor({
   campaignId,
@@ -871,6 +991,7 @@ function CampaignEditor({
                 { id: "config", label: "Config" },
                 { id: "steps", label: `Steps (${steps.length})` },
                 { id: "audience", label: `Audience (${detail.enrolled})` },
+                { id: "review", label: "Review" },
               ]}
               active={tab}
               onChange={(id) => setTab(id as EditorTab)}
@@ -910,6 +1031,15 @@ function CampaignEditor({
             <AudienceTab
               campaign={detail}
               onEnrollClick={() => setEnrolling(true)}
+              onToast={onToast}
+            />
+          )}
+
+          {tab === "review" && (
+            <ReviewTab
+              campaign={detail}
+              maxPosition={Math.max(1, steps.length)}
+              onPatchApproval={(v) => patchConfig({ require_approval: v })}
               onToast={onToast}
             />
           )}
@@ -1045,6 +1175,63 @@ function ConfigForm({
         />
         Open tracking (embeds a tracking pixel)
       </label>
+
+      <AiWritingSection detail={detail} onPatch={onPatch} />
+    </div>
+  );
+}
+
+/** Collapsed "AI writing" block on the campaign config — a per-campaign tone
+ * + few-shot example that grounds the {{ai_snippet}} model call alongside
+ * the org-wide "AI writing context" card on the Dashboard. */
+function AiWritingSection({
+  detail,
+  onPatch,
+}: {
+  detail: EmailCampaignDetail;
+  onPatch: (body: Parameters<typeof updateEmailCampaign>[1]) => void;
+}) {
+  const [open, setOpen] = useState(Boolean(detail.ai_tone || detail.ai_example));
+
+  if (!open) {
+    return (
+      <Button variant="link" size="sm" onClick={() => setOpen(true)}>
+        + AI writing
+      </Button>
+    );
+  }
+
+  return (
+    <div className="eml-fieldset">
+      <span className="field-label">AI writing</span>
+      <Field
+        label="AI tone"
+        optional
+        description="A short style note for the {{ai_snippet}} the model writes per contact."
+      >
+        <input
+          defaultValue={detail.ai_tone ?? ""}
+          placeholder="Warm, plainspoken, no hype"
+          onBlur={(e) => {
+            const v = e.target.value || null;
+            if (v !== detail.ai_tone) onPatch({ ai_tone: v });
+          }}
+        />
+      </Field>
+      <Field
+        label="Example email (few-shot)"
+        optional
+        description="An email in the voice you want — the model matches its style."
+      >
+        <textarea
+          rows={4}
+          defaultValue={detail.ai_example ?? ""}
+          onBlur={(e) => {
+            const v = e.target.value || null;
+            if (v !== detail.ai_example) onPatch({ ai_example: v });
+          }}
+        />
+      </Field>
     </div>
   );
 }
@@ -1649,6 +1836,402 @@ function SKIP_SUMMARY(
   const counts = new Map<EnrollReceipt["skipped"][number]["reason"], number>();
   for (const s of skipped) counts.set(s.reason, (counts.get(s.reason) ?? 0) + 1);
   return [...counts.entries()];
+}
+
+// ==========================================================================
+// 2b. Review — QA table: approve/edit/exclude a step's rendered sends before
+// they go out. Same render + AI-snippet spend as the real send, just earlier
+// and cached on the enrollment (services/email_personalize.render_full).
+// ==========================================================================
+
+const REVIEW_PAGE_SIZE = 25;
+
+const ISSUE_LABELS: Record<string, string> = {
+  leftover_tokens: "Unresolved token",
+  blank_body: "Blank body",
+  no_first_name: "No first name",
+};
+
+function issueLabel(issue: string): string {
+  if (issue.startsWith("not_sendable:")) {
+    return `Not sendable (${issue.slice("not_sendable:".length)})`;
+  }
+  return ISSUE_LABELS[issue] ?? issue;
+}
+
+function ReviewTab({
+  campaign,
+  maxPosition,
+  onPatchApproval,
+  onToast,
+}: {
+  campaign: EmailCampaignDetail;
+  maxPosition: number;
+  onPatchApproval: (v: boolean) => void;
+  onToast: (msg: string, tone?: "ok" | "error" | "info") => void;
+}) {
+  const [position, setPosition] = useState(1);
+  const [offset, setOffset] = useState(0);
+  const [data, setData] = useState<{ total: number; rows: EmailPreviewRow[] } | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [editingRow, setEditingRow] = useState<EmailPreviewRow | null>(null);
+  const [excludeRow, setExcludeRow] = useState<EmailPreviewRow | null>(null);
+  const [researching, setResearching] = useState(false);
+
+  const load = useCallback(() => {
+    setLoading(true);
+    previewEmailBatch(campaign.id, { position, limit: REVIEW_PAGE_SIZE, offset })
+      .then((d) => {
+        setData(d);
+        setSelected(new Set());
+      })
+      .catch((e) => onToast(e instanceof Error ? e.message : "Load failed", "error"))
+      .finally(() => setLoading(false));
+  }, [campaign.id, position, offset, onToast]);
+  useEffect(load, [load]);
+
+  const rows = data?.rows ?? [];
+  const allShownSelected = rows.length > 0 && rows.every((r) => selected.has(r.enrollment_id));
+
+  const toggleAllShown = (on: boolean) =>
+    setSelected((cur) => {
+      const next = new Set(cur);
+      for (const r of rows) {
+        if (on) next.add(r.enrollment_id);
+        else next.delete(r.enrollment_id);
+      }
+      return next;
+    });
+
+  const toggleOne = (id: string) =>
+    setSelected((cur) => {
+      const next = new Set(cur);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+
+  const doQa = async (ids: string[], action: EmailQaAction) => {
+    try {
+      await campaignQa(campaign.id, { enrollment_ids: ids, action });
+      onToast(
+        action === "approve" ? "Approved" : action === "unapprove" ? "Unapproved" : "Excluded",
+        "ok",
+      );
+      load();
+    } catch (e) {
+      onToast(e instanceof Error ? e.message : "Failed", "error");
+    } finally {
+      setExcludeRow(null);
+    }
+  };
+
+  const runResearchForPage = async () => {
+    const contactIds = [...new Set(rows.map((r) => r.contact.id))];
+    if (contactIds.length === 0) return;
+    setResearching(true);
+    try {
+      const r = await runResearch({ contact_ids: contactIds });
+      onToast(`Queued research for ${r.queued} lead${r.queued === 1 ? "" : "s"}`, "ok");
+    } catch (e) {
+      onToast(e instanceof Error ? e.message : "Research failed", "error");
+    } finally {
+      setResearching(false);
+    }
+  };
+
+  const columns: Column<EmailPreviewRow>[] = [
+    {
+      key: "select",
+      header: (
+        <input
+          type="checkbox"
+          aria-label="Select all shown"
+          checked={allShownSelected}
+          onChange={(e) => toggleAllShown(e.target.checked)}
+        />
+      ),
+      render: (r) => (
+        <input
+          type="checkbox"
+          aria-label={`Select ${contactLabel(r.contact)}`}
+          checked={selected.has(r.enrollment_id)}
+          onChange={() => toggleOne(r.enrollment_id)}
+        />
+      ),
+    },
+    {
+      key: "contact",
+      header: "Contact",
+      render: (r) => contactLabel(r.contact),
+      sortValue: (r) => contactLabel(r.contact),
+    },
+    { key: "subject", header: "Subject", render: (r) => r.subject || <em>(reply in thread)</em> },
+    {
+      key: "body",
+      header: "Body",
+      render: (r) => (
+        <span className="eml-review-snippet">
+          {r.body.length > 120 ? `${r.body.slice(0, 120)}…` : r.body}
+        </span>
+      ),
+    },
+    {
+      key: "overridden",
+      header: "",
+      render: (r) => (r.overridden ? <Badge tone="info">edited</Badge> : null),
+    },
+    {
+      key: "issues",
+      header: "Issues",
+      render: (r) => (
+        <span className="eml-review-issues">
+          {r.issues.map((i) => (
+            <Badge key={i} tone={i === "leftover_tokens" || i === "blank_body" ? "danger" : "warn"}>
+              {issueLabel(i)}
+            </Badge>
+          ))}
+        </span>
+      ),
+    },
+    {
+      key: "qa",
+      header: "QA",
+      render: (r) => (r.qa_status === "approved" ? <Badge tone="ok">approved</Badge> : null),
+    },
+    {
+      key: "manage",
+      header: "",
+      align: "right",
+      render: (r) => (
+        <div className="eml-review-actions">
+          {r.qa_status === "approved" ? (
+            <Button variant="ghost" size="sm" onClick={() => doQa([r.enrollment_id], "unapprove")}>
+              Unapprove
+            </Button>
+          ) : (
+            <Button variant="ghost" size="sm" onClick={() => doQa([r.enrollment_id], "approve")}>
+              Approve
+            </Button>
+          )}
+          <Button variant="ghost" size="sm" onClick={() => setEditingRow(r)}>
+            Edit
+          </Button>
+          <Button variant="danger-outline" size="sm" onClick={() => setExcludeRow(r)}>
+            Exclude
+          </Button>
+        </div>
+      ),
+    },
+  ];
+
+  return (
+    <div>
+      <p className="eml-sub">
+        Renders step {position} for every active enrollment before it sends —
+        approve, hand-edit, or exclude a lead. Rendering here uses the same
+        AI-snippet spend as the real send (cached on the enrollment), just
+        earlier.
+      </p>
+
+      <div className="eml-bar">
+        <Field label="Step">
+          <select
+            className="select eml-select"
+            value={position}
+            onChange={(e) => {
+              setPosition(Number(e.target.value));
+              setOffset(0);
+            }}
+          >
+            {Array.from({ length: maxPosition }, (_, i) => i + 1).map((p) => (
+              <option key={p} value={p}>
+                Step {p}
+              </option>
+            ))}
+          </select>
+        </Field>
+        <Button variant="ghost" busy={researching} onClick={runResearchForPage}>
+          Run AI research
+        </Button>
+        <Button variant="ghost" onClick={load}>
+          Refresh
+        </Button>
+        <Switch
+          className="eml-review-approval"
+          checked={campaign.require_approval}
+          onChange={onPatchApproval}
+          label="Require approval before sending"
+        />
+      </div>
+      <p className="eml-hint">
+        Only approved leads are sent when on — everyone else is held (not
+        skipped) until reviewed.
+      </p>
+
+      {selected.size > 0 && (
+        <div className="eml-review-bulk">
+          <span className="eml-review-count">{selected.size} selected</span>
+          <Button variant="primary" size="sm" onClick={() => doQa([...selected], "approve")}>
+            Approve selected
+          </Button>
+        </div>
+      )}
+
+      <DataTable
+        columns={columns}
+        rows={rows}
+        rowKey={(r) => r.enrollment_id}
+        loading={loading}
+        emptyMessage="No active enrollments to review at this step."
+      />
+
+      {data && data.total > REVIEW_PAGE_SIZE && (
+        <div className="eml-step-add">
+          <Button
+            variant="ghost"
+            size="sm"
+            disabled={offset === 0}
+            onClick={() => setOffset(Math.max(0, offset - REVIEW_PAGE_SIZE))}
+          >
+            Previous
+          </Button>
+          <span className="eml-hint">
+            {offset + 1}–{Math.min(offset + REVIEW_PAGE_SIZE, data.total)} of {data.total}
+          </span>
+          <Button
+            variant="ghost"
+            size="sm"
+            disabled={offset + REVIEW_PAGE_SIZE >= data.total}
+            onClick={() => setOffset(offset + REVIEW_PAGE_SIZE)}
+          >
+            Next
+          </Button>
+        </div>
+      )}
+
+      {editingRow && (
+        <ReviewOverrideDialog
+          row={editingRow}
+          position={position}
+          onClose={() => setEditingRow(null)}
+          onSaved={() => {
+            setEditingRow(null);
+            load();
+          }}
+          onToast={onToast}
+        />
+      )}
+
+      {excludeRow && (
+        <Dialog
+          open
+          onClose={() => setExcludeRow(null)}
+          title="Exclude this lead?"
+          size="sm"
+          footer={
+            <>
+              <Button variant="ghost" onClick={() => setExcludeRow(null)}>
+                Cancel
+              </Button>
+              <Button
+                variant="danger"
+                onClick={() => doQa([excludeRow.enrollment_id], "exclude")}
+              >
+                Exclude
+              </Button>
+            </>
+          }
+        >
+          <p>
+            {contactLabel(excludeRow.contact)} will exit this campaign (exit
+            reason: qa_excluded) and won't receive any further steps.
+          </p>
+        </Dialog>
+      )}
+    </div>
+  );
+}
+
+function ReviewOverrideDialog({
+  row,
+  position,
+  onClose,
+  onSaved,
+  onToast,
+}: {
+  row: EmailPreviewRow;
+  position: number;
+  onClose: () => void;
+  onSaved: () => void;
+  onToast: (msg: string, tone?: "ok" | "error" | "info") => void;
+}) {
+  const [subject, setSubject] = useState(row.subject);
+  const [body, setBody] = useState(row.body);
+  const [busy, setBusy] = useState(false);
+
+  const save = async () => {
+    if (!body.trim()) {
+      onToast("Body can't be blank", "error");
+      return;
+    }
+    setBusy(true);
+    try {
+      await setEmailOverride(row.enrollment_id, { position, subject: subject || null, body });
+      onToast("Override saved", "ok");
+      onSaved();
+    } catch (e) {
+      onToast(e instanceof Error ? e.message : "Save failed", "error");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const resetToTemplate = async () => {
+    setBusy(true);
+    try {
+      await clearEmailOverride(row.enrollment_id, position);
+      onToast("Reverted to template", "ok");
+      onSaved();
+    } catch (e) {
+      onToast(e instanceof Error ? e.message : "Reset failed", "error");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Dialog
+      open
+      onClose={onClose}
+      title={`Edit send — ${contactLabel(row.contact)}`}
+      footer={
+        <>
+          <Button variant="ghost" onClick={onClose}>
+            Cancel
+          </Button>
+          {row.overridden && (
+            <Button variant="danger-outline" busy={busy} onClick={resetToTemplate}>
+              Reset to template
+            </Button>
+          )}
+          <Button variant="primary" busy={busy} onClick={save}>
+            Save override
+          </Button>
+        </>
+      }
+    >
+      <div className="eml-form">
+        <Field label="Subject" optional>
+          <input value={subject} onChange={(e) => setSubject(e.target.value)} />
+        </Field>
+        <Field label="Body">
+          <textarea rows={10} value={body} onChange={(e) => setBody(e.target.value)} />
+        </Field>
+      </div>
+    </Dialog>
+  );
 }
 
 // ==========================================================================

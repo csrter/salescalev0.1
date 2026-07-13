@@ -157,6 +157,76 @@ def _extract_description(html: str) -> Optional[str]:
     return text[:500] or None
 
 
+def _strip_html(html: str) -> str:
+    """Crude but dependency-free HTML->text: drop script/style blocks, strip
+    tags, unescape entities, collapse whitespace. Good enough for grounding
+    text (not rendering) — mirrors the posture of _extract_description."""
+    import html as html_mod
+
+    text = re.sub(r"(?is)<(script|style)[^>]*>.*?</\1>", " ", html)
+    text = re.sub(r"(?s)<[^>]+>", " ", text)
+    text = html_mod.unescape(text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+_RESEARCH_TEXT_CAP = 6000
+
+
+def fetch_site_text(website: Optional[str]) -> Optional[str]:
+    """Plain-text content from the contact's/company's OWN site: homepage
+    plus "/about" (when robots-allowed), stripped to text, capped at
+    RESEARCH_TEXT_CAP chars combined. Same polite-crawler posture as
+    discover_site_emails/discover_site_description (robots.txt honored,
+    USER_AGENT, the lead_finder_crawl_enabled kill switch + timeout knobs) —
+    best-effort, never raises; returns None on any failure or when crawling
+    is disabled."""
+    settings = get_settings()
+    if not settings.lead_finder_crawl_enabled:
+        return None
+    domain = normalize_domain(website)
+    if not domain:
+        return None
+    base = f"https://{domain}"
+    timeout = settings.lead_finder_crawl_timeout_seconds
+
+    robots = urllib.robotparser.RobotFileParser()
+    try:
+        resp = httpx.get(
+            urljoin(base, "/robots.txt"),
+            headers={"User-Agent": USER_AGENT},
+            timeout=timeout,
+            follow_redirects=True,
+        )
+        robots.parse(resp.text.splitlines() if resp.status_code == 200 else [])
+    except httpx.HTTPError:
+        robots.parse([])
+
+    chunks: List[str] = []
+    for path in ["/", "/about"]:
+        if sum(len(c) for c in chunks) >= _RESEARCH_TEXT_CAP:
+            break
+        url = urljoin(base, path)
+        if not robots.can_fetch(USER_AGENT, url):
+            continue
+        try:
+            resp = httpx.get(
+                url,
+                headers={"User-Agent": USER_AGENT},
+                timeout=timeout,
+                follow_redirects=True,
+            )
+        except httpx.HTTPError:
+            continue
+        if resp.status_code != 200 or "text/html" not in resp.headers.get(
+            "content-type", "text/html"
+        ):
+            continue
+        chunks.append(_strip_html(resp.text[:500_000]))
+    if not chunks:
+        return None
+    return "\n\n".join(chunks)[:_RESEARCH_TEXT_CAP] or None
+
+
 def discover_site_description(website: str) -> Optional[str]:
     """The business's own one-line self-description: the homepage's meta /
     og:description tag. Same posture as email discovery — the business's own

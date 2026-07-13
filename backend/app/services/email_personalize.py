@@ -154,16 +154,23 @@ def _split_variants(inner: str) -> list:
     return parts
 
 
-def _is_known(name: str, known_tokens: frozenset, custom_keys) -> bool:
+def _is_known(
+    name: str, known_tokens: frozenset, custom_keys, research_keys=None
+) -> bool:
     if name in known_tokens:
         return True
     if name.startswith("custom.") and name[len("custom.") :]:
         return custom_keys is None or name[len("custom.") :] in custom_keys
+    if name.startswith("research.") and name[len("research.") :]:
+        return research_keys is None or name[len("research.") :] in research_keys
     return False
 
 
 def _unknown_tokens_against(
-    template: Optional[str], known_tokens: frozenset, custom_keys=None
+    template: Optional[str],
+    known_tokens: frozenset,
+    custom_keys=None,
+    research_keys=None,
 ) -> list:
     """Shared unknown_tokens implementation, parameterized on the caller's
     known-token set (email's KNOWN_TOKENS vs SMS's narrower SMS_KNOWN_TOKENS)
@@ -176,7 +183,7 @@ def _unknown_tokens_against(
     # #if opener tokens (checked against known_tokens same as plain tokens).
     for m in _IF_OPEN_RE.finditer(template):
         name = m.group(1)
-        if not _is_known(name, known_tokens, custom_keys) and name not in out:
+        if not _is_known(name, known_tokens, custom_keys, research_keys) and name not in out:
             out.append(name)
 
     # Plain {{token}}/{{token|fallback}} tokens — scanned with the #if/else/
@@ -187,7 +194,7 @@ def _unknown_tokens_against(
     )
     for m in _TOKEN_RE.finditer(stripped):
         name = m.group(1)
-        if not _is_known(name, known_tokens, custom_keys) and name not in out:
+        if not _is_known(name, known_tokens, custom_keys, research_keys) and name not in out:
             out.append(name)
 
     # Structural: every #if opener needs a matching {{/if}}.
@@ -202,12 +209,14 @@ def _unknown_tokens_against(
     return out
 
 
-def unknown_tokens(template: Optional[str], custom_keys=None) -> list:
+def unknown_tokens(
+    template: Optional[str], custom_keys=None, research_keys=None
+) -> list:
     """Tokens in `template` the renderer would drop: not in KNOWN_TOKENS and,
-    when `custom_keys` is given, custom.<key> whose key isn't a real field
-    definition. Also reports #if/spin structural errors. Order of first
-    appearance, deduped."""
-    return _unknown_tokens_against(template, KNOWN_TOKENS, custom_keys)
+    when `custom_keys`/`research_keys` are given, custom.<key>/research.<key>
+    whose key isn't a real field definition. Also reports #if/spin structural
+    errors. Order of first appearance, deduped."""
+    return _unknown_tokens_against(template, KNOWN_TOKENS, custom_keys, research_keys)
 
 
 def _cap_token_word(tok: str) -> str:
@@ -264,7 +273,8 @@ _AI_SYSTEM_PROMPT = (
     "achievements) that are not in GROUNDED_DATA; if a fact is missing, simply "
     "don't reference it. Do not add a greeting, a sign-off, a subject line, or "
     "quotation marks — this text is inserted into the middle of a template. "
-    "Keep it under 40 words, plain and human."
+    "Keep it under 40 words, plain and human. If TONE or EXAMPLE_EMAIL is "
+    "provided, match its voice."
 )
 
 
@@ -317,6 +327,11 @@ def _resolve_token(
         return contact.email
     if name.startswith("custom."):
         return (contact.custom_fields or {}).get(name[len("custom.") :])
+    if name.startswith("research."):
+        entry = (getattr(contact, "research", None) or {}).get(
+            name[len("research.") :]
+        )
+        return entry.get("value") if isinstance(entry, dict) else None
     return None
 
 
@@ -467,12 +482,23 @@ def clean_ai_snippet(text: Optional[str], max_words: int) -> str:
 
 
 def generate_ai_snippet(
-    db: Session, org: Organization, contact: Contact, step: EmailStep
+    db: Session,
+    org: Organization,
+    contact: Contact,
+    step: EmailStep,
+    campaign: Optional[EmailCampaign] = None,
 ) -> str:
     """One/two grounded sentences for this contact, or "" on any failure
     (unconfigured key, over the monthly AI cap, model/timeout error, or the
     output guard discarding an unsafe response). A send is never blocked on
-    AI — the template still goes out without the snippet."""
+    AI — the template still goes out without the snippet.
+
+    Grounding gains the org's standing outreach_context (when set) and the
+    contact's filled AI research fields (Feature A). When `campaign` carries
+    ai_tone/ai_example (Feature C), they're appended to the user content as
+    explicit labeled sections — never folded into GROUNDED_DATA, and never
+    touching the (cache-friendly, byte-stable) system prompt beyond its one
+    fixed "match TONE/EXAMPLE_EMAIL" sentence."""
     if not (step.ai_instructions or "").strip():
         return ""
     grounding = {
@@ -487,6 +513,15 @@ def generate_ai_snippet(
         "org": {"name": org.name},
         "instructions": step.ai_instructions,
     }
+    if org.outreach_context:
+        grounding["org_context"] = org.outreach_context
+    research = {
+        k: v.get("value")
+        for k, v in (getattr(contact, "research", None) or {}).items()
+        if isinstance(v, dict) and v.get("value")
+    }
+    if research:
+        grounding["research"] = research
     try:
         ai_insights.check_allowance(db, org)  # entitlement + monthly cap
         res = ai_provider.resolve(db, org)  # provider + model + BYO/operator key
@@ -494,6 +529,10 @@ def generate_ai_snippet(
             f"GROUNDED_DATA:\n{json.dumps(grounding, sort_keys=True, default=str)}\n\n"
             f"INSTRUCTIONS:\n{step.ai_instructions}"
         )
+        if campaign is not None and (campaign.ai_tone or "").strip():
+            user_content += f"\n\nTONE:\n{campaign.ai_tone}"
+        if campaign is not None and (campaign.ai_example or "").strip():
+            user_content += f"\n\nEXAMPLE_EMAIL:\n{campaign.ai_example}"
         with ai_provider.using(res):
             text, input_tokens, output_tokens = _call_model(_AI_SYSTEM_PROMPT, user_content)
         _record_usage(db, org, res.model, input_tokens, output_tokens)
@@ -512,6 +551,7 @@ def _cached_or_generate(
     contact: Contact,
     enrollment: Optional[EmailEnrollment],
     step: EmailStep,
+    campaign: Optional[EmailCampaign] = None,
 ) -> str:
     """Enrollment-cached snippet (ai_snippets: step_id -> text). Idempotent: a
     second render of the same enrollment/step reuses the cache and never
@@ -522,11 +562,11 @@ def _cached_or_generate(
         cache = dict(enrollment.ai_snippets or {})
         if step.id in cache:
             return cache[step.id] or ""
-        snippet = generate_ai_snippet(db, org, contact, step)
+        snippet = generate_ai_snippet(db, org, contact, step, campaign)
         cache[step.id] = snippet
         enrollment.ai_snippets = cache  # reassign so SQLAlchemy tracks the JSON
         return snippet
-    return generate_ai_snippet(db, org, contact, step)
+    return generate_ai_snippet(db, org, contact, step, campaign)
 
 
 def render_full(
@@ -542,5 +582,5 @@ def render_full(
     directly (preview); otherwise it is loaded from the enrollment."""
     if contact is None:
         contact = db.get(Contact, enrollment.contact_id)
-    snippet = _cached_or_generate(db, org, contact, enrollment, step)
+    snippet = _cached_or_generate(db, org, contact, enrollment, step, campaign)
     return render_step(db, org, contact, step, campaign, ai_snippet=snippet)

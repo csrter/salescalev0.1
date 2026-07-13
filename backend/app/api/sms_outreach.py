@@ -57,7 +57,7 @@ from ..schemas import (
 )
 from ..security import encrypt_secret
 from ..services import custom_fields as custom_fields_svc
-from ..services import entitlements, sms_campaigns, sms_consent, sms_send
+from ..services import entitlements, research as research_svc, sms_campaigns, sms_consent, sms_send
 
 router = APIRouter(prefix="/api/sms", tags=["sms-outreach"])
 
@@ -516,9 +516,10 @@ def set_steps(
     custom_keys = set(
         custom_fields_svc.definitions_by_key(db, campaign.organization_id)
     )
+    research_keys = research_svc.active_keys(db, campaign.organization_id)
     bad: list = []
     for s in body.steps:
-        for tok in sms_campaigns.unknown_tokens(s.body, custom_keys):
+        for tok in sms_campaigns.unknown_tokens(s.body, custom_keys, research_keys):
             if tok not in bad:
                 bad.append(tok)
     if bad:

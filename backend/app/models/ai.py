@@ -16,7 +16,7 @@ from ..db import Base
 from .base import created_at_column, id_column
 from sqlalchemy.orm import Mapped, mapped_column
 
-AI_FEATURES = {"explain", "summary", "outreach_personalize"}
+AI_FEATURES = {"explain", "summary", "outreach_personalize", "outreach_research"}
 
 
 class AiUsage(Base):

@@ -130,8 +130,9 @@ const TOKENS_HINT = (
     Personalization: <code>{"{{first_name}}"}</code>{" "}
     <code>{"{{last_name}}"}</code> <code>{"{{company}}"}</code>{" "}
     <code>{"{{city}}"}</code> <code>{"{{state}}"}</code>{" "}
-    <code>{"{{job_title}}"}</code> <code>{"{{custom.<key>}}"}</code>. Fallbacks
-    like <code>{"{{first_name|there}}"}</code>, plus{" "}
+    <code>{"{{job_title}}"}</code> <code>{"{{custom.<key>}}"}</code>{" "}
+    <code>{"{{research.<key>}}"}</code> (AI research fields, from CRM setup).
+    Fallbacks like <code>{"{{first_name|there}}"}</code>, plus{" "}
     <code>{"{{ai_snippet}}"}</code>. Conditionals{" "}
     <code>{"{{#if token}}...{{/if}}"}</code> and spintax{" "}
     <code>{"{{spin:a|b|c}}"}</code> also work.

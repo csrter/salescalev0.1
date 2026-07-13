@@ -39,6 +39,7 @@ TIER_LIMITS: dict[str, dict[str, int | None]] = {
         "clients": 5,
         "seats": 5,
         "custom_fields": 20,
+        "research_fields": 5,
         "lead_finder_searches": 40,
         "email_verifications": 250,
         "email_sends": 1000,
@@ -48,6 +49,7 @@ TIER_LIMITS: dict[str, dict[str, int | None]] = {
         "clients": 25,
         "seats": 15,
         "custom_fields": 50,
+        "research_fields": 15,
         "lead_finder_searches": 200,
         "email_verifications": 2000,
         "email_sends": 10000,
@@ -57,6 +59,7 @@ TIER_LIMITS: dict[str, dict[str, int | None]] = {
         "clients": None,
         "seats": None,
         "custom_fields": None,
+        "research_fields": None,
         "lead_finder_searches": 1000,
         "email_verifications": 10000,
         "email_sends": 100000,
@@ -166,6 +169,46 @@ def enforce_can_add_custom_field(db: Session, org: Organization) -> None:
         raise HTTPException(
             status.HTTP_402_PAYMENT_REQUIRED,
             f"Your {org.plan} plan allows {usage['limit']} active custom "
+            "fields. Archive one or upgrade to add more.",
+        )
+
+
+def research_field_limit(org: Organization) -> int:
+    """Effective cap on active AI research field definitions: the tier's
+    number, but never above the absolute hard ceiling (mirrors
+    custom_field_limit)."""
+    from .research import MAX_ACTIVE_RESEARCH_FIELDS
+
+    cap = _limits(org).get("research_fields")
+    if cap is None:
+        return MAX_ACTIVE_RESEARCH_FIELDS
+    return min(cap, MAX_ACTIVE_RESEARCH_FIELDS)
+
+
+def research_field_usage(db: Session, org: Organization) -> dict:
+    """Self-service "X of Y used" for AI research fields. Counts only active
+    (non-archived) definitions — archived ones don't consume the cap."""
+    from ..models.crm import ResearchFieldDef
+
+    used = db.execute(
+        select(func.count())
+        .select_from(ResearchFieldDef)
+        .where(
+            ResearchFieldDef.organization_id == org.id,
+            ResearchFieldDef.archived.is_(False),
+        )
+    ).scalar_one()
+    return {"used": used, "limit": research_field_limit(org)}
+
+
+def enforce_can_add_research_field(db: Session, org: Organization) -> None:
+    """402 when the org is at its active-research-field cap. Archiving frees
+    the cap; hard delete does too."""
+    usage = research_field_usage(db, org)
+    if usage["used"] >= usage["limit"]:
+        raise HTTPException(
+            status.HTTP_402_PAYMENT_REQUIRED,
+            f"Your {org.plan} plan allows {usage['limit']} active AI research "
             "fields. Archive one or upgrade to add more.",
         )
 

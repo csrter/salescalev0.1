@@ -48,23 +48,28 @@ from ..models.email_outreach import (
     EmailThread,
 )
 from ..schemas import (
+    CampaignQaIn,
     EmailAccountIn,
     EmailAccountPatch,
     EmailCampaignIn,
     EmailCampaignPatch,
     EmailComposeIn,
     EmailEnrollIn,
+    EmailPreviewBatchIn,
     EmailPreviewIn,
     EmailReplyIn,
     EmailStepsIn,
     EmailSuppressionIn,
+    EnrollmentOverrideIn,
 )
 from ..security import encrypt_secret
 from ..services import branding, email_campaigns, email_personalize, entitlements
 from ..services import custom_fields as custom_fields_svc
 from ..services import email_outreach_send as gateway
 from ..services import email_transport
+from ..services import email_verification
 from ..services import email_warmup
+from ..services import research as research_svc
 
 router = APIRouter(prefix="/api/email-outreach", tags=["email-outreach"])
 
@@ -662,6 +667,9 @@ def _campaign_out(db: Session, c: EmailCampaign, *, full: bool = False) -> dict:
         "daily_cap": c.daily_cap,
         "open_tracking": c.open_tracking,
         "exit_on_reply": c.exit_on_reply,
+        "require_approval": c.require_approval,
+        "ai_tone": c.ai_tone,
+        "ai_example": c.ai_example,
         "activated_at": c.activated_at.isoformat() if c.activated_at else None,
         "created_at": c.created_at.isoformat(),
         **_campaign_stats(db, c),
@@ -712,6 +720,9 @@ def create_campaign(
         daily_cap=body.daily_cap,
         open_tracking=body.open_tracking,
         exit_on_reply=body.exit_on_reply,
+        require_approval=body.require_approval,
+        ai_tone=body.ai_tone,
+        ai_example=body.ai_example,
     )
     db.add(campaign)
     db.commit()
@@ -774,12 +785,13 @@ def set_steps(
     custom_keys = set(
         custom_fields_svc.definitions_by_key(db, campaign.organization_id)
     )
+    research_keys = research_svc.active_keys(db, campaign.organization_id)
     bad: list = []
     for s in body.steps:
-        for tok in email_personalize.unknown_tokens(s.subject, custom_keys):
+        for tok in email_personalize.unknown_tokens(s.subject, custom_keys, research_keys):
             if tok not in bad:
                 bad.append(tok)
-        for tok in email_personalize.unknown_tokens(s.body, custom_keys):
+        for tok in email_personalize.unknown_tokens(s.body, custom_keys, research_keys):
             if tok not in bad:
                 bad.append(tok)
     if bad:
@@ -1019,6 +1031,189 @@ def preview_campaign(
         db, org, None, step, campaign, contact=contact
     )
     return {"subject": subject, "body": bodytext}
+
+
+# --- audience preview + QA table (Feature B) --------------------------------
+
+
+def _preview_issues(
+    db: Session, org: Organization, contact: Optional[Contact], subject, body
+) -> list:
+    if contact is None:
+        return ["not_sendable:not_found"]
+    issues: list = []
+    combined = (subject or "") + (body or "")
+    if "{{" in combined.replace("{{unsubscribe_url}}", ""):
+        issues.append("leftover_tokens")
+    if not (body or "").strip():
+        issues.append("blank_body")
+    if not (contact.first_name or "").strip():
+        issues.append("no_first_name")
+    if not contact.email:
+        issues.append("not_sendable:no_email")
+    elif gateway.is_suppressed(db, org.id, contact.email):
+        issues.append("not_sendable:suppressed")
+    else:
+        _ok, invalid, risky = email_verification.sendable([contact])
+        if invalid:
+            issues.append("not_sendable:invalid_email")
+        elif risky:
+            issues.append("not_sendable:risky")
+    return issues
+
+
+@router.post("/campaigns/{campaign_id}/preview-batch")
+def preview_batch(
+    campaign_id: str,
+    body: EmailPreviewBatchIn,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_team),
+    scope: TenantScope = Depends(get_scope),
+):
+    campaign = _scoped_get(db, scope, EmailCampaign, campaign_id)
+    step = db.execute(
+        select(EmailStep).where(
+            EmailStep.campaign_id == campaign.id,
+            EmailStep.position == body.position,
+        )
+    ).scalar_one_or_none()
+    if step is None:
+        raise HTTPException(404, "No step at that position")
+    org = db.get(Organization, scope.organization_id)
+
+    base_where = (
+        EmailEnrollment.campaign_id == campaign.id,
+        EmailEnrollment.status == ENROLL_ACTIVE,
+    )
+    total = _count(
+        db, select(func.count()).select_from(EmailEnrollment).where(*base_where)
+    )
+    rows = db.execute(
+        select(EmailEnrollment)
+        .where(*base_where)
+        .order_by(EmailEnrollment.created_at)
+        .limit(body.limit)
+        .offset(body.offset)
+    ).scalars().all()
+
+    contacts = {
+        c.id: c
+        for c in db.execute(
+            select(Contact).where(
+                Contact.id.in_([e.contact_id for e in rows] or [""])
+            )
+        ).scalars()
+    }
+    out_rows = []
+    for e in rows:
+        contact = contacts.get(e.contact_id)
+        override = (e.overrides or {}).get(step.id)
+        if override is not None:
+            subject = override.get("subject")
+            bodytext = override.get("body") or ""
+            overridden = True
+        else:
+            subject, bodytext = email_personalize.render_full(
+                db, org, e, step, campaign, contact=contact
+            )
+            overridden = False
+        out_rows.append(
+            {
+                "enrollment_id": e.id,
+                "contact": _contact_stub(contact),
+                "subject": subject,
+                "body": bodytext,
+                "overridden": overridden,
+                "qa_status": e.qa_status,
+                "issues": _preview_issues(db, org, contact, subject, bodytext),
+            }
+        )
+    db.commit()  # persist any newly generated+cached ai_snippets from render_full
+    return {"total": total, "rows": out_rows}
+
+
+def _step_at_position(db: Session, campaign_id: str, position: int) -> EmailStep:
+    step = db.execute(
+        select(EmailStep).where(
+            EmailStep.campaign_id == campaign_id,
+            EmailStep.position == position,
+        )
+    ).scalar_one_or_none()
+    if step is None:
+        raise HTTPException(404, "No step at that position")
+    return step
+
+
+@router.put("/enrollments/{enrollment_id}/override")
+def set_override(
+    enrollment_id: str,
+    body: EnrollmentOverrideIn,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_team),
+    scope: TenantScope = Depends(get_scope),
+):
+    enrollment = _scoped_get(db, scope, EmailEnrollment, enrollment_id)
+    if not body.body.strip():
+        raise HTTPException(422, "body must not be blank")
+    step = _step_at_position(db, enrollment.campaign_id, body.position)
+    overrides = dict(enrollment.overrides or {})
+    overrides[step.id] = {"subject": body.subject, "body": body.body}
+    enrollment.overrides = overrides
+    db.commit()
+    return {"status": "ok"}
+
+
+@router.delete("/enrollments/{enrollment_id}/override")
+def clear_override(
+    enrollment_id: str,
+    position: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_team),
+    scope: TenantScope = Depends(get_scope),
+):
+    enrollment = _scoped_get(db, scope, EmailEnrollment, enrollment_id)
+    step = _step_at_position(db, enrollment.campaign_id, position)
+    overrides = dict(enrollment.overrides or {})
+    overrides.pop(step.id, None)
+    enrollment.overrides = overrides or None
+    db.commit()
+    return {"status": "ok"}
+
+
+@router.post("/campaigns/{campaign_id}/qa")
+def campaign_qa(
+    campaign_id: str,
+    body: CampaignQaIn,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_team),
+    scope: TenantScope = Depends(get_scope),
+):
+    campaign = _scoped_get(db, scope, EmailCampaign, campaign_id)
+    rows = db.execute(
+        select(EmailEnrollment).where(
+            EmailEnrollment.campaign_id == campaign.id,
+            EmailEnrollment.id.in_(body.enrollment_ids),
+        )
+    ).scalars().all()
+    now = utcnow()
+    updated = 0
+    for e in rows:
+        if e.organization_id != scope.organization_id:
+            continue  # cross-org/foreign-campaign ids silently skipped
+        if body.action == "approve":
+            e.qa_status = "approved"
+            if e.next_run_at is None and e.status == ENROLL_ACTIVE:
+                valid_at = email_campaigns._next_valid_send_time(now, campaign)
+                e.next_run_at = valid_at or now
+            updated += 1
+        elif body.action == "unapprove":
+            e.qa_status = None
+            updated += 1
+        else:  # exclude
+            email_campaigns.exit_qa_excluded(db, e)
+            updated += 1
+    db.commit()
+    return {"updated": updated}
 
 
 # --- analytics + usage ------------------------------------------------------

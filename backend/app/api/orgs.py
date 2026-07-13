@@ -78,6 +78,7 @@ from ..schemas import (
     MembershipOut,
     OkResponse,
     OrganizationOut,
+    OrgOutreachContextIn,
     OrgRememberDeviceIn,
     OrgSmsOptInDefaultIn,
     OrgSecurityIn,
@@ -252,6 +253,30 @@ def set_sms_opt_in_default(
     org.sms_opt_in_default = body.sms_opt_in_default
     db.commit()
     return org
+
+
+@router.get("/me/outreach-context")
+def get_outreach_context(
+    user: User = Depends(require_team), db: Session = Depends(get_db)
+):
+    """Standing AI-writing context (Feature C): company_description/icp/
+    offer/tone_guide, injected into cold-email/SMS AI-snippet and research
+    grounding. Readable by any team role; only an admin may change it."""
+    org = db.get(Organization, user.organization_id)
+    return org.outreach_context or {}
+
+
+@router.put("/me/outreach-context")
+def set_outreach_context(
+    body: OrgOutreachContextIn,
+    user: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Full replace — the UI always sends the complete shape."""
+    org = db.get(Organization, user.organization_id)
+    org.outreach_context = body.model_dump(exclude_none=True) or None
+    db.commit()
+    return org.outreach_context or {}
 
 
 @router.get("/me/house-client")

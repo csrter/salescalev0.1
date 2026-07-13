@@ -223,6 +223,24 @@ export const setOrgSmsOptInDefault = (sms_opt_in_default: boolean) =>
     body: JSON.stringify({ sms_opt_in_default }),
   });
 
+// --- Org outreach context (grounds the AI snippet + AI research prompts) ---
+
+export interface OrgOutreachContext {
+  company_description: string | null;
+  icp: string | null;
+  offer: string | null;
+  tone_guide: string | null;
+}
+
+export const getOrgOutreachContext = () =>
+  api<OrgOutreachContext>("/api/orgs/me/outreach-context");
+
+export const setOrgOutreachContext = (body: Partial<OrgOutreachContext>) =>
+  api<OrgOutreachContext>("/api/orgs/me/outreach-context", {
+    method: "PUT",
+    body: JSON.stringify(body),
+  });
+
 /** The org's own "house" prospect pipeline lives on a hidden client that the
  * server gets-or-creates. Team-only; not returned by GET /api/clients. */
 export const getHouseClient = () =>
@@ -1355,6 +1373,61 @@ export const removeContactsFromList = (id: string, contactIds: string[]) =>
     body: JSON.stringify({ contact_ids: contactIds }),
   });
 
+// --- AI research fields ("Claygent-lite") ---
+// Org-defined research questions answered per-contact by the AI provider,
+// grounded ONLY in the contact/company's own CRM+enrichment facts and text
+// fetched from their own website (same polite-crawler posture as
+// enrichment.py) — never Meta surfaces, never free-generated. Values render
+// via the {{research.<key>}} template token alongside custom fields.
+
+export interface ResearchFieldDef {
+  id: string;
+  key: string;
+  label: string;
+  prompt: string;
+  max_words: number;
+  archived: boolean;
+}
+
+export const listResearchFields = () =>
+  api<ResearchFieldDef[]>("/api/crm/research-fields");
+
+export const createResearchField = (body: {
+  key?: string;
+  label: string;
+  prompt: string;
+  max_words?: number;
+}) =>
+  api<ResearchFieldDef>("/api/crm/research-fields", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+
+export const updateResearchField = (
+  id: string,
+  body: { label?: string; prompt?: string; max_words?: number; archived?: boolean }
+) =>
+  api<ResearchFieldDef>(`/api/crm/research-fields/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify(body),
+  });
+
+export const deleteResearchField = (id: string) =>
+  api<void>(`/api/crm/research-fields/${id}`, { method: "DELETE" });
+
+/** Queues background research for up to 200 contacts at once — returns
+ * immediately with a receipt; results land on each contact's research
+ * fields as the background task completes. */
+export const runResearch = (body: {
+  contact_ids: string[];
+  field_keys?: string[];
+  force?: boolean;
+}) =>
+  api<{ queued: number }>("/api/crm/research/run", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+
 // ==========================================================================
 // Cold-email outreach module (base /api/email-outreach).
 // A single mailbox → campaigns (multi-step sequences) → enrollments, plus a
@@ -1441,6 +1514,9 @@ export interface EmailCampaign {
   reply_rate: number | null;
   bounce_rate: number | null;
   unsubscribe_rate: number | null;
+  /** When on, an enrollment's next step is held (deferred, not skipped) until
+   * a team member approves it on the Review tab. */
+  require_approval: boolean;
   created_at: string;
 }
 
@@ -1461,6 +1537,10 @@ export interface EmailCampaignDetail extends EmailCampaign {
   daily_cap: number | null;
   open_tracking: boolean;
   steps: EmailStep[];
+  /** Short style/voice note for the AI snippet ("warm, plainspoken, no hype"). */
+  ai_tone: string | null;
+  /** Few-shot example email the AI snippet should match the voice of. */
+  ai_example: string | null;
 }
 
 export interface EmailCampaignBody {
@@ -1472,6 +1552,9 @@ export interface EmailCampaignBody {
   send_days?: number[];
   daily_cap?: number | null;
   open_tracking?: boolean;
+  require_approval?: boolean;
+  ai_tone?: string | null;
+  ai_example?: string | null;
 }
 
 export interface EmailEnrollment {
@@ -1643,6 +1726,73 @@ export const previewEmailStep = (id: string, contactId: string, position: number
   api<{ subject: string; body: string }>(`${EO}/campaigns/${id}/preview`, {
     method: "POST",
     body: JSON.stringify({ contact_id: contactId, position }),
+  });
+
+// --- QA / audience preview (Review tab) ---
+// Renders a whole step across every enrolled contact so a human can approve,
+// hand-edit, or exclude before anything sends — same render/AI-snippet spend
+// as the real send, just earlier and cached on the enrollment.
+
+export type EmailQaStatus = "approved" | null;
+
+export interface EmailPreviewRow {
+  enrollment_id: string;
+  contact: {
+    id: string;
+    first_name: string | null;
+    last_name: string | null;
+    email: string | null;
+    company_name: string | null;
+  };
+  subject: string;
+  body: string;
+  overridden: boolean;
+  qa_status: EmailQaStatus;
+  issues: string[];
+}
+
+export interface EmailPreviewBatch {
+  total: number;
+  rows: EmailPreviewRow[];
+}
+
+export const previewEmailBatch = (
+  campaignId: string,
+  params: { position?: number; limit?: number; offset?: number } = {}
+) =>
+  api<EmailPreviewBatch>(`${EO}/campaigns/${campaignId}/preview-batch`, {
+    method: "POST",
+    body: JSON.stringify({
+      position: params.position ?? 1,
+      limit: params.limit ?? 25,
+      offset: params.offset ?? 0,
+    }),
+  });
+
+export const setEmailOverride = (
+  enrollmentId: string,
+  body: { position: number; subject?: string | null; body: string }
+) =>
+  api<{ ok: boolean }>(`${EO}/enrollments/${enrollmentId}/override`, {
+    method: "PUT",
+    body: JSON.stringify(body),
+  });
+
+export const clearEmailOverride = (enrollmentId: string, position: number) =>
+  api<{ ok: boolean }>(
+    `${EO}/enrollments/${enrollmentId}/override?position=${position}`,
+    { method: "DELETE" }
+  );
+
+export type EmailQaAction = "approve" | "unapprove" | "exclude";
+
+export const campaignQa = (
+  campaignId: string,
+  body: { enrollment_ids: string[]; action: EmailQaAction }
+) =>
+  api<{ updated: number }>(`${EO}/campaigns/${campaignId}/qa`, {
+    method: "POST",
+    body: JSON.stringify(body),
   });
 
 // --- inbox ---

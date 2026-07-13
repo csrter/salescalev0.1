@@ -34,11 +34,14 @@ import {
   deleteContact,
   deleteContactList,
   listContactLists,
+  listResearchFields,
   renameContactList,
+  runResearch,
   updateContact,
   verifyContacts,
   type ContactEditBody,
   type ContactList,
+  type ResearchFieldDef,
   type Session,
   type VerificationStatus,
 } from "./api";
@@ -63,6 +66,7 @@ import {
   CustomFieldInputs,
   CustomFieldsPanel,
   FieldManager,
+  ResearchFieldManager,
   customFieldColumns,
   useCustomFieldDefs,
   type CustomFieldDef,
@@ -859,6 +863,7 @@ function LeadList({
   const [showManageLists, setShowManageLists] = useState(false);
   const [addingToList, setAddingToList] = useState(false);
   const [bulkEditing, setBulkEditing] = useState(false);
+  const [runningResearch, setRunningResearch] = useState(false);
   const [cols, setCols] = useState<string[]>([]);
   const [sysCols, setSysCols] = useState<string[]>([]);
   const [filters, setFilters] = useState<CfFilter[]>([]);
@@ -1239,6 +1244,9 @@ function LeadList({
                 <Button variant="ghost" size="sm" onClick={() => setAddingToList(true)}>
                   Add to list
                 </Button>
+                <Button variant="ghost" size="sm" onClick={() => setRunningResearch(true)}>
+                  Run AI research
+                </Button>
                 <Button
                   variant="danger-outline"
                   size="sm"
@@ -1304,7 +1312,123 @@ function LeadList({
           onDone={onCreated}
         />
       )}
+
+      {runningResearch && (
+        <RunResearchDialog
+          contactIds={selectedVisible}
+          onClose={() => setRunningResearch(false)}
+        />
+      )}
     </div>
+  );
+}
+
+/** Bulk-bar "Run AI research": pick which org research fields to fill (or
+ * run them all) across the selected leads, with an optional force re-run.
+ * The backend queues a background task — this dialog only reports how many
+ * were queued, not the results (those land on each contact as they finish). */
+function RunResearchDialog({
+  contactIds,
+  onClose,
+}: {
+  contactIds: string[];
+  onClose: () => void;
+}) {
+  const toast = useToast();
+  const [defs, setDefs] = useState<ResearchFieldDef[] | null>(null);
+  const [picked, setPicked] = useState<Set<string>>(new Set());
+  const [force, setForce] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    listResearchFields()
+      .then((d) => setDefs(d.filter((f) => !f.archived)))
+      .catch(() => setDefs([]));
+  }, []);
+
+  const toggle = (key: string) =>
+    setPicked((cur) => {
+      const next = new Set(cur);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+
+  const submit = async () => {
+    setBusy(true);
+    try {
+      const r = await runResearch({
+        contact_ids: contactIds,
+        field_keys: picked.size > 0 ? [...picked] : undefined,
+        force,
+      });
+      toast(`Queued research for ${r.queued} lead${r.queued === 1 ? "" : "s"}`, "ok");
+      onClose();
+    } catch (e) {
+      toast((e as Error).message, "error");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Dialog
+      open
+      onClose={onClose}
+      title={`Run AI research on ${contactIds.length} lead${contactIds.length === 1 ? "" : "s"}`}
+      size="sm"
+      footer={
+        <>
+          <Button variant="ghost" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button
+            variant="primary"
+            busy={busy}
+            disabled={defs !== null && defs.length === 0}
+            onClick={submit}
+          >
+            Run research
+          </Button>
+        </>
+      }
+    >
+      <div className="crm-form">
+        {defs === null && <p className="crm-muted">Loading research fields…</p>}
+        {defs !== null && defs.length === 0 && (
+          <Alert tone="info">
+            No AI research fields yet — add one in CRM setup first.
+          </Alert>
+        )}
+        {defs !== null && defs.length > 0 && (
+          <div className="crm-cf-multi" role="group" aria-label="Fields to research">
+            {defs.map((d) => (
+              <label key={d.id} className="crm-check">
+                <input
+                  type="checkbox"
+                  checked={picked.has(d.key)}
+                  onChange={() => toggle(d.key)}
+                />
+                <span>{d.label}</span>
+              </label>
+            ))}
+            <p className="crm-muted">
+              {picked.size === 0
+                ? "None checked = run all fields."
+                : `Running ${picked.size} selected field${picked.size === 1 ? "" : "s"}.`}
+            </p>
+          </div>
+        )}
+        <label className="crm-check">
+          <input
+            type="checkbox"
+            checked={force}
+            onChange={(e) => setForce(e.target.checked)}
+          />
+          <span>Re-run fields that already have a value</span>
+        </label>
+      </div>
+    </Dialog>
   );
 }
 
@@ -2788,6 +2912,7 @@ function SetupPanel({
       <StageEditor board={board} onChanged={onChanged} />
       <CriteriaEditor criteria={criteria} onChanged={onChanged} />
       <FieldManager onChanged={onFieldsChanged} />
+      <ResearchFieldManager />
       <LeadFormRouting clientId={clientId} />
       <ExternalSyncConfig clientId={clientId} />
     </div>

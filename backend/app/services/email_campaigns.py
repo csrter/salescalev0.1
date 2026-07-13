@@ -49,6 +49,7 @@ from ..models.email_outreach import (
     EXIT_BOUNCED,
     EXIT_ERROR,
     EXIT_MANUAL,
+    EXIT_QA_EXCLUDED,
     EXIT_RENDER_ERROR,
     EXIT_REPLIED,
     EXIT_UNSUBSCRIBED,
@@ -282,25 +283,49 @@ def process_enrollment(db: Session, enrollment: EmailEnrollment) -> None:
         enrollment.next_run_at = now + dt.timedelta(hours=1)
         return
 
+    # QA gate (Feature B): require_approval defers (not exits) any enrollment
+    # that hasn't been explicitly approved — a 1h re-check, same cadence as
+    # CAP_REACHED, so an approval made mid-window is picked up promptly.
+    if campaign.require_approval and enrollment.qa_status != "approved":
+        enrollment.next_run_at = now + dt.timedelta(hours=1)
+        return
+
     org = db.get(Organization, campaign.organization_id)
     contact = db.get(Contact, enrollment.contact_id)
-    subject, body = email_personalize.render_full(
-        db, org, enrollment, current, campaign, contact=contact
-    )
-    # Render guard: a blank body, or a leftover "{{" (an unclosed #if, or a
-    # typo the save-time 422 somehow missed) is deterministic — retrying
-    # won't fix it, so exit rather than defer. {{unsubscribe_url}} is the one
-    # allowed literal token; the gateway resolves it, not this engine.
-    if not (body or "").strip() or _has_leftover_braces(subject) or _has_leftover_braces(
-        body
-    ):
-        log.warning(
-            "email enrollment %s render guard tripped (blank body or leftover"
-            " template braces); exiting",
-            enrollment.id,
+    override = (enrollment.overrides or {}).get(current.id)
+    if override is not None:
+        # A human-edited override is used VERBATIM — no re-render, no AI call.
+        # It may legitimately still contain the literal {{unsubscribe_url}}
+        # token (the gateway resolves it), so only the blank-body guard
+        # applies; the leftover-brace guard is skipped by design.
+        subject, body = override.get("subject"), override.get("body") or ""
+        if not body.strip():
+            log.warning(
+                "email enrollment %s override render guard tripped (blank"
+                " body); exiting",
+                enrollment.id,
+            )
+            _end(enrollment, ENROLL_EXITED, EXIT_RENDER_ERROR)
+            return
+    else:
+        subject, body = email_personalize.render_full(
+            db, org, enrollment, current, campaign, contact=contact
         )
-        _end(enrollment, ENROLL_EXITED, EXIT_RENDER_ERROR)
-        return
+        # Render guard: a blank body, or a leftover "{{" (an unclosed #if, or
+        # a typo the save-time 422 somehow missed) is deterministic —
+        # retrying won't fix it, so exit rather than defer.
+        # {{unsubscribe_url}} is the one allowed literal token; the gateway
+        # resolves it, not this engine.
+        if not (body or "").strip() or _has_leftover_braces(
+            subject
+        ) or _has_leftover_braces(body):
+            log.warning(
+                "email enrollment %s render guard tripped (blank body or"
+                " leftover template braces); exiting",
+                enrollment.id,
+            )
+            _end(enrollment, ENROLL_EXITED, EXIT_RENDER_ERROR)
+            return
 
     in_reply = (
         _last_thread_message(db, enrollment.thread_id)
@@ -451,6 +476,12 @@ def exit_on_unsubscribe(db: Session, suppression: EmailSuppression) -> None:
 
 def exit_manual(db: Session, enrollment: EmailEnrollment) -> None:
     _end(enrollment, ENROLL_EXITED, EXIT_MANUAL)
+
+
+def exit_qa_excluded(db: Session, enrollment: EmailEnrollment) -> None:
+    """QA table (Feature B): a reviewer excluded this enrollment rather than
+    approving it."""
+    _end(enrollment, ENROLL_EXITED, EXIT_QA_EXCLUDED)
 
 
 # --- hook registration ------------------------------------------------------

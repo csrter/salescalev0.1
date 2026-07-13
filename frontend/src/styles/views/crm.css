@@ -600,6 +600,16 @@
   opacity: 0.65;
 }
 
+.crm-research-prompt {
+  flex: 1 1 100%;
+  margin: 0;
+  font-size: var(--text-sm);
+}
+
+.crm-research-edit {
+  flex: 1 1 100%;
+}
+
 .crm-cf-manage-main {
   display: flex;
   flex-wrap: wrap;

@@ -759,3 +759,41 @@
 .eml-wu-card .eml-warmup-meta .eml-wu-stage {
   flex: 1 1 100%;
 }
+
+/* ==========================================================================
+   Review tab — QA table (audience-preview + approve/edit/exclude)
+   ========================================================================== */
+
+.eml-review-approval {
+  margin-left: auto;
+}
+
+.eml-review-snippet {
+  color: var(--ink-soft);
+  font-size: var(--text-sm);
+}
+
+.eml-review-issues {
+  display: inline-flex;
+  gap: var(--space-1);
+  flex-wrap: wrap;
+}
+
+.eml-review-actions {
+  display: inline-flex;
+  gap: var(--space-1);
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.eml-review-bulk {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin-bottom: var(--space-3);
+}
+
+.eml-review-count {
+  font-size: var(--text-sm);
+  color: var(--ink-soft);
+}

@@ -141,6 +141,11 @@ class Contact(Base):
         DateTime(timezone=True)
     )
     sms_opt_in_source: Mapped[Optional[str]] = mapped_column(String(100))
+    # AI research fields (Claygent-lite): key -> {"value", "confidence",
+    # "source_url", "researched_at"}, keyed by ResearchFieldDef.key. Written
+    # via services/research.py only; reassign-whole-dict on write (same JSON-
+    # tracking rule as custom_fields). Team-only in API payloads.
+    research: Mapped[Optional[dict]] = mapped_column(JSON)
     created_at: Mapped[dt.datetime] = created_at_column()
 
 
@@ -178,6 +183,7 @@ RESERVED_CONTACT_FIELD_KEYS: frozenset[str] = frozenset(
         "candidate_emails",
         "external_crm_id",
         "custom_fields",
+        "research",
         "created_at",
         "tags",
         "attribution",
@@ -450,3 +456,30 @@ class CustomFieldDefinition(Base):
     updated_at: Mapped[Optional[dt.datetime]] = mapped_column(
         DateTime(timezone=True)
     )
+
+
+class ResearchFieldDef(Base):
+    """Per-Organization AI research field ("Claygent-lite"): a standing
+    question (`prompt`) answered per-contact by the AI provider, grounded
+    ONLY in the contact/company's own CRM+enrichment facts and text fetched
+    from the contact's/company's OWN website (services/research.py). Answers
+    live on Contact.research keyed by `key`, a separate namespace from
+    Phase 14 custom fields — collision with RESERVED_CONTACT_FIELD_KEYS or an
+    existing custom-field key is NOT required. Mirrors CustomFieldDefinition's
+    key-immutability rule (rename is label-only)."""
+
+    __tablename__ = "research_field_defs"
+    __table_args__ = (
+        UniqueConstraint("organization_id", "key", name="uq_research_field_org_key"),
+    )
+
+    id: Mapped[str] = id_column()
+    organization_id: Mapped[str] = mapped_column(
+        ForeignKey("organizations.id"), nullable=False, index=True
+    )
+    key: Mapped[str] = mapped_column(String(60), nullable=False)
+    label: Mapped[str] = mapped_column(String(120), nullable=False)
+    prompt: Mapped[str] = mapped_column(Text, nullable=False)
+    max_words: Mapped[int] = mapped_column(Integer, default=40, nullable=False)
+    archived: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    created_at: Mapped[dt.datetime] = created_at_column()

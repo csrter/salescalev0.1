@@ -1009,6 +1009,55 @@ live activation + the entitlement flip, the Outreach module build
       just now"), simulated a signed Twilio inbound reply (unread), then
       confirmed opening the Messages tab auto-called mark-read and
       persisted read_at server-side. DEPLOYED to production 2026-07-12.
+- [x] Clay-style personalization round 2 (research → write → QA; two Sonnet
+      agents vs pinned contract CLAY_HANDOFF, research pass on Clay's docs
+      first): (1) AI RESEARCH FIELDS ("Claygent-lite") — org-defined research
+      prompts (ResearchFieldDef, unique key per org, cap via entitlement stub
+      research_fields starter 5/pro 15/agency ∞, hard ceiling 20) answered
+      per-contact by services/research.py: ONE AI call per missing field,
+      grounded ONLY in CRM/enrichment facts + the contact's own website text
+      (enrichment.fetch_site_text — homepage + /about, robots-honored, same
+      crawler posture/kill switch, 6000-char cap; guardrail 6 holds). Answers
+      land on contacts.research JSON as {value, confidence, source_url,
+      researched_at} — cached (skip unless force), metered as AiUsage
+      feature="outreach_research", fail-open per field, TEAM-ONLY in
+      serialization. Rendered via {{research.<key>}} tokens in email AND SMS
+      templates (validated at step-save like custom.*), and fed into
+      ai_snippet grounding. API: /api/crm/research-fields CRUD (delete scrubs
+      the key from every contact, custom-fields pattern) + POST
+      /api/crm/research/run (≤200 ids, BackgroundTask). UI: manager card in
+      CRM setup next to FieldManager, "Run AI research" on the lead-list bulk
+      bar + in the campaign Review tab. (2) AUDIENCE PREVIEW + QA — Clay's
+      table-first QA plus the native approval flag Clay lacks: POST
+      /campaigns/{id}/preview-batch renders the step for every active
+      enrollment (paged ≤50; AI snippets generate once and CACHE on the
+      enrollment — same spend as sending, just earlier) with issues[] flags
+      (leftover_tokens/blank_body/no_first_name/not_sendable:<reason> incl.
+      suppression + verification); PUT/DELETE /enrollments/{id}/override
+      stores per-step {subject, body} the engine sends VERBATIM (literal
+      {{unsubscribe_url}} still resolved by the gateway; blank-body still
+      guarded); POST /campaigns/{id}/qa approve/unapprove/exclude (exclude =
+      exit_reason qa_excluded). EmailCampaign.require_approval: engine defers
+      unapproved enrollments +1h (held, never skipped); approving schedules
+      via _next_valid_send_time. UI: 4th "Review" tab in the campaign editor
+      (paged DataTable, issue/QA badges, per-row Approve/Edit/Exclude, bulk
+      approve, require-approval Switch). (3) ORG OUTREACH CONTEXT + AI
+      CONTROLS — Organization.outreach_context JSON (company_description/
+      icp/offer/tone_guide, 2000-char caps) via GET/PUT /api/orgs/me/
+      outreach-context (require_admin write), injected into email + SMS
+      snippet grounding and research grounding; EmailCampaign.ai_tone/
+      ai_example (few-shot) appended to the snippet prompt (email only).
+      UI: "AI writing context" card on the Email dashboard (admin-only),
+      collapsed "AI writing" section in campaign config. Migration
+      b2e6f1a9c4d7 (down_revision d1e5f3b7a924). Tests 441 → 456
+      (test_research.py rf_org, test_email_qa.py qa_org). Verified live on
+      alt2: field create → {{research.services_offered}} hint, bulk run
+      queued 200, context card PUT 200, Review tab rendered both enrollments
+      personalized ("Hi John O'Brien … Desert Air HVAC"), Approve badge,
+      hand-edit override round-trip ("Edited" badge), require-approval
+      Switch PATCH 200. NOT deployed yet. NOTE: alt2 has no AI key, so
+      research/snippet paths verified fail-open; prod needs ANTHROPIC_API_KEY
+      (or a BYO provider key) before research fields return values.
 - [ ] Stripe live activation + entitlement flip (after 12–14, so real
       limits land everywhere in one pass)
 - [ ] Outreach module build (dev-mode) — go-live gated on Meta App

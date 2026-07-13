@@ -13,7 +13,15 @@
  *  - CsvImportDialog           CSV import with column mapping + create-in-place
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { api, getSession } from "./api";
+import {
+  api,
+  getSession,
+  createResearchField,
+  deleteResearchField,
+  listResearchFields,
+  updateResearchField,
+  type ResearchFieldDef,
+} from "./api";
 import type { Column } from "./components/DataTable";
 import { Dialog } from "./components/Dialog";
 import { Alert, Badge, Button, Field } from "./components/ui";
@@ -886,6 +894,301 @@ function useCustomFieldDefsAll() {
     };
   }, [bump]);
   return { defs, reload };
+}
+
+// --- AI research fields ("Claygent-lite") ---
+// Org-defined research questions, answered per-contact by the AI provider —
+// grounded only in the contact's own CRM/enrichment facts and their own
+// website (never Meta surfaces, never free-generated). Mirrors FieldManager's
+// UX (list/create/edit/archive/delete) but has no options/reorder/visibility
+// concerns, since research values are always team-only.
+
+function ResearchFieldCreateForm({ onCreated }: { onCreated: () => void }) {
+  const [label, setLabel] = useState("");
+  const [prompt, setPrompt] = useState("");
+  const [maxWords, setMaxWords] = useState(40);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const submit = () => {
+    if (!label.trim() || !prompt.trim() || busy) return;
+    setBusy(true);
+    setError(null);
+    createResearchField({
+      label: label.trim(),
+      prompt: prompt.trim(),
+      max_words: maxWords,
+    })
+      .then(() => {
+        setLabel("");
+        setPrompt("");
+        setMaxWords(40);
+        onCreated();
+      })
+      .catch((e) => setError((e as Error).message))
+      .finally(() => setBusy(false));
+  };
+
+  return (
+    <div className="crm-form crm-cf-create">
+      <Field label="Field name">
+        <input
+          value={label}
+          placeholder="e.g. Fleet size"
+          onChange={(e) => setLabel(e.target.value)}
+        />
+      </Field>
+      <Field
+        label="Research prompt"
+        description="What should the AI look for? It only sees this contact/company's CRM data and their own website."
+      >
+        <textarea
+          rows={2}
+          value={prompt}
+          placeholder="How many service trucks does this business appear to run?"
+          onChange={(e) => setPrompt(e.target.value)}
+        />
+      </Field>
+      <Field label="Max words" optional>
+        <input
+          type="number"
+          min={1}
+          max={200}
+          value={maxWords}
+          onChange={(e) => setMaxWords(Number(e.target.value) || 40)}
+        />
+      </Field>
+      {error && (
+        <span className="crm-form-error" role="alert">
+          {error}
+        </span>
+      )}
+      <div className="crm-form-actions">
+        <Button
+          variant="primary"
+          size="sm"
+          busy={busy}
+          disabled={!label.trim() || !prompt.trim()}
+          onClick={submit}
+        >
+          <Plus size={14} /> Add research field
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+function ResearchFieldRow({
+  def,
+  onChanged,
+}: {
+  def: ResearchFieldDef;
+  onChanged: () => void;
+}) {
+  const toast = useToast();
+  const [editing, setEditing] = useState(false);
+  const [label, setLabel] = useState(def.label);
+  const [prompt, setPrompt] = useState(def.prompt);
+  const [maxWords, setMaxWords] = useState(def.max_words);
+  const [busy, setBusy] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  useEffect(() => {
+    setLabel(def.label);
+    setPrompt(def.prompt);
+    setMaxWords(def.max_words);
+  }, [def.label, def.prompt, def.max_words]);
+
+  const save = () => {
+    if (!label.trim() || !prompt.trim()) return;
+    setBusy(true);
+    updateResearchField(def.id, {
+      label: label.trim(),
+      prompt: prompt.trim(),
+      max_words: maxWords,
+    })
+      .then(() => {
+        setEditing(false);
+        onChanged();
+      })
+      .catch((e) => toast((e as Error).message, "error"))
+      .finally(() => setBusy(false));
+  };
+
+  const archive = (archived: boolean) =>
+    updateResearchField(def.id, { archived })
+      .then(onChanged)
+      .catch((e) => toast((e as Error).message, "error"));
+
+  const del = () =>
+    deleteResearchField(def.id)
+      .then(() => {
+        setConfirmDelete(false);
+        onChanged();
+        toast(`Deleted “${def.label}” and scrubbed its values`, "ok");
+      })
+      .catch((e) => toast((e as Error).message, "error"));
+
+  return (
+    <div className={`crm-cf-manage-row${def.archived ? " is-archived" : ""}`}>
+      <div className="crm-cf-manage-main">
+        {editing ? (
+          <input
+            className="crm-cf-label-input"
+            value={label}
+            onChange={(e) => setLabel(e.target.value)}
+            aria-label={`Rename ${def.label}`}
+          />
+        ) : (
+          <span className="crm-cf-label-input">{def.label}</span>
+        )}
+        <code className="crm-cf-key" title="Use in personalization as {{research.<key>}}">
+          {`{{research.${def.key}}}`}
+        </code>
+        {def.archived && <Badge tone="warn">archived</Badge>}
+      </div>
+
+      {editing ? (
+        <div className="crm-form crm-research-edit">
+          <Field label="Research prompt">
+            <textarea
+              rows={2}
+              value={prompt}
+              onChange={(e) => setPrompt(e.target.value)}
+            />
+          </Field>
+          <Field label="Max words" optional>
+            <input
+              type="number"
+              min={1}
+              max={200}
+              value={maxWords}
+              onChange={(e) => setMaxWords(Number(e.target.value) || 40)}
+            />
+          </Field>
+          <div className="crm-form-actions">
+            <Button variant="primary" size="sm" busy={busy} onClick={save}>
+              Save
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => {
+                setLabel(def.label);
+                setPrompt(def.prompt);
+                setMaxWords(def.max_words);
+                setEditing(false);
+              }}
+            >
+              Cancel
+            </Button>
+          </div>
+        </div>
+      ) : (
+        <>
+          <p className="crm-muted crm-research-prompt">{def.prompt}</p>
+          <div className="crm-cf-manage-controls">
+            <Button variant="ghost" size="sm" onClick={() => setEditing(true)}>
+              <Pencil size={13} /> Edit
+            </Button>
+            {def.archived ? (
+              <Button variant="ghost" size="sm" onClick={() => archive(false)}>
+                Restore
+              </Button>
+            ) : (
+              <Button variant="ghost" size="sm" onClick={() => archive(true)}>
+                Archive
+              </Button>
+            )}
+            <Button
+              variant="ghost"
+              size="sm"
+              aria-label={`Delete ${def.label}`}
+              onClick={() => setConfirmDelete(true)}
+            >
+              <Trash2 size={14} />
+            </Button>
+          </div>
+        </>
+      )}
+
+      {confirmDelete && (
+        <Dialog
+          open
+          onClose={() => setConfirmDelete(false)}
+          title={`Delete “${def.label}”?`}
+          size="sm"
+        >
+          <p>
+            This permanently deletes the research field and <strong>scrubs its
+            stored values from every contact</strong>. This can’t be undone. To
+            hide it but keep the data, archive it instead.
+          </p>
+          <div className="crm-form-actions" style={{ marginTop: "0.75rem" }}>
+            <Button variant="danger" size="sm" onClick={del}>
+              Delete &amp; scrub
+            </Button>
+            <Button variant="ghost" size="sm" onClick={() => setConfirmDelete(false)}>
+              Cancel
+            </Button>
+          </div>
+        </Dialog>
+      )}
+    </div>
+  );
+}
+
+/** CRM-setup block: org-defined AI research prompts, answered per-contact.
+ * Renders next to FieldManager in the setup panel. */
+export function ResearchFieldManager() {
+  const [defs, setDefs] = useState<ResearchFieldDef[]>([]);
+  const [showArchived, setShowArchived] = useState(false);
+
+  const refresh = useCallback(() => {
+    listResearchFields().then(setDefs).catch(() => {});
+  }, []);
+  useEffect(refresh, [refresh]);
+
+  const active = defs.filter((d) => !d.archived);
+  const archived = defs.filter((d) => d.archived);
+
+  return (
+    <div className="crm-setup-block">
+      <div className="crm-section-head">
+        <h5 className="crm-subhead crm-subhead--sm">
+          AI research fields <span className="crm-muted">(organization-wide)</span>
+        </h5>
+      </div>
+      <p className="crm-muted">
+        Org-defined research questions the AI answers per contact, grounded
+        only in that contact's CRM data and their own website — never
+        free-generated, never scraped from Meta. Use a field with{" "}
+        <code>{"{{research.<key>}}"}</code> in a campaign step.
+      </p>
+
+      <div className="crm-cf-manage-list">
+        {active.map((d) => (
+          <ResearchFieldRow key={d.id} def={d} onChanged={refresh} />
+        ))}
+        {active.length === 0 && (
+          <p className="crm-muted">No research fields yet. Add one below.</p>
+        )}
+      </div>
+
+      {archived.length > 0 && (
+        <div className="crm-cf-archived">
+          <Button variant="ghost" size="sm" onClick={() => setShowArchived((s) => !s)}>
+            {showArchived ? "Hide" : "Show"} archived ({archived.length})
+          </Button>
+          {showArchived &&
+            archived.map((d) => (
+              <ResearchFieldRow key={d.id} def={d} onChanged={refresh} />
+            ))}
+        </div>
+      )}
+
+      <ResearchFieldCreateForm onCreated={refresh} />
+    </div>
+  );
 }
 
 // --- CSV import ---

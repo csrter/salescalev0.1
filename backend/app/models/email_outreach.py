@@ -67,6 +67,9 @@ EXIT_UNSUBSCRIBED = "unsubscribed"
 EXIT_BOUNCED = "bounced"
 EXIT_MANUAL = "manual"
 EXIT_ERROR = "error"
+# QA table (Feature B): a reviewer explicitly excluded this enrollment from
+# sending rather than approving it.
+EXIT_QA_EXCLUDED = "qa_excluded"
 # A rendered send was deterministically unsendable (blank body, or a leftover
 # "{{" template artifact) — retrying changes nothing, so the engine exits
 # rather than defers (services/email_campaigns.py's render guard).
@@ -182,6 +185,18 @@ class EmailCampaign(Base):
     daily_cap: Mapped[int] = mapped_column(Integer, default=50, nullable=False)
     open_tracking: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     exit_on_reply: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    # QA gate (Feature B): when true, the engine defers any enrollment whose
+    # qa_status isn't "approved" instead of sending — a human reviews the
+    # audience preview and approves/excludes before the campaign actually
+    # sends.
+    require_approval: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="0", nullable=False
+    )
+    # AI writing controls (Feature C), threaded into generate_ai_snippet's
+    # user content as explicit labeled sections — never into the system
+    # prompt (which stays byte-stable for prompt caching).
+    ai_tone: Mapped[Optional[str]] = mapped_column(String(200))
+    ai_example: Mapped[Optional[str]] = mapped_column(Text)
     settings: Mapped[Optional[dict]] = mapped_column(JSON)
     activated_at: Mapped[Optional[dt.datetime]] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[dt.datetime] = created_at_column()
@@ -245,6 +260,13 @@ class EmailEnrollment(Base):
     )
     thread_id: Mapped[Optional[str]] = mapped_column(ForeignKey("email_threads.id"))
     ai_snippets: Mapped[Optional[dict]] = mapped_column(JSON)
+    # QA/preview (Feature B): step_id -> {"subject": str|None, "body": str} —
+    # a human-edited override, used VERBATIM by process_enrollment instead of
+    # render_full for that step. qa_status is "approved" or None; when the
+    # owning campaign has require_approval on, only "approved" enrollments
+    # are sent.
+    overrides: Mapped[Optional[dict]] = mapped_column(JSON)
+    qa_status: Mapped[Optional[str]] = mapped_column(String(20))
     replied_at: Mapped[Optional[dt.datetime]] = mapped_column(DateTime(timezone=True))
     enrolled_by: Mapped[Optional[str]] = mapped_column(String(36))
     ended_at: Mapped[Optional[dt.datetime]] = mapped_column(DateTime(timezone=True))
