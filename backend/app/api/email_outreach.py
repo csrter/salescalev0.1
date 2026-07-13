@@ -108,6 +108,7 @@ def _account_out(db: Session, a: EmailAccount) -> dict:
         "warmup_enabled": a.warmup_enabled,
         "warmup_started_at": a.warmup_started_at.isoformat() if a.warmup_started_at else None,
         "warmup_target_daily": a.warmup_target_daily,
+        "warmup_timezone": a.warmup_timezone,
         "signature": a.signature,
         "last_synced_at": a.last_synced_at.isoformat() if a.last_synced_at else None,
         "last_sync_error": a.last_sync_error,

@@ -1145,6 +1145,27 @@ live activation + the entitlement flip, the Outreach module build
       (148MB) + contents verified (backend hash, new main.js, frontend
       asar). NOT deployed (the scheduler-gate backend change is
       desktop-only behavior; deploy bundles it with the pending commits).
+- [x] Warmup timezone (2026-07-12, same-day): the warmup engine's
+      08:00–18:00 send window, weekend reduction, AND daily-budget midnight
+      now follow a per-mailbox IANA `warmup_timezone` (migration
+      924b1e025dc1, NULL = UTC = old behavior; org-configurable, no
+      tenant special-casing per guardrails). The fixed-UTC window was
+      1am–11am for a Phoenix org — synthetic mail in the local night reads
+      as scripted. Local midnight for the budget counter is load-bearing:
+      a Phoenix window is 15:00–01:00 UTC (straddles UTC midnight), and a
+      UTC-midnight reset would hand out a second daily budget mid-window.
+      Engine: email_warmup.account_local() (invalid zone degrades to UTC,
+      never stalls), per-sender window check inside run_warmup_tick
+      (window check moved from tick-level to account-level), local-date
+      hash picks. API: EmailAccountPatch.warmup_timezone (ZoneInfo-
+      validated, 422 on garbage), in _account_out. UI: timezone input per
+      mailbox on the Warmup tab (campaign-timezone input pattern). Tests
+      459→462→465 (test_desktop_mode.py 3 + warmup tz cases in
+      test_email_warmup.py incl. the straddle-midnight budget case).
+      Atlas Reach wants America/Phoenix on its three mailboxes —
+      set in the Warmup tab after the deploy (or SQL). NOT deployed yet;
+      NOTE: until deployed, prod's UTC window starts warmup at 1am
+      Phoenix.
 - [ ] Stripe live activation + entitlement flip (after 12–14, so real
       limits land everywhere in one pass)
 - [ ] Outreach module build (dev-mode) — go-live gated on Meta App

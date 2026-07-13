@@ -35,6 +35,7 @@ import datetime as dt
 import hashlib
 import logging
 from typing import List, Optional
+from zoneinfo import ZoneInfo
 
 from email.message import Message
 from email.utils import parseaddr
@@ -68,7 +69,10 @@ WARMUP_CEILING = 40
 # warmup running at 20% of your daily send volume" (Lemwarm).
 MAINTENANCE_RATIO = 0.20
 MAINTENANCE_FLOOR = 10
-# Sending window: 08:00–18:00 UTC, spread with ±25% jitter. Weekends run at
+# Sending window: 08:00–18:00 in the mailbox's own warmup_timezone (UTC when
+# unset), spread with ±25% jitter. A fixed-UTC window is 1am–11am for a
+# Phoenix org — synthetic mail in the middle of the local night reads as
+# scripted, which defeats the purpose. Weekends (also local-calendar) run at
 # reduced volume rather than stopping — a hard weekday/weekend cliff reads as
 # scripted (and a full stop "resets momentum"; Yahoo penalizes the pattern
 # hardest). Vendors converge on cutting 50–70% — we keep 40%.
@@ -194,12 +198,22 @@ def effective_daily_cap(
     return cap
 
 
+def account_local(account: EmailAccount, now: dt.datetime) -> dt.datetime:
+    """`now` in the mailbox's warmup timezone (UTC when unset or invalid —
+    a typo'd zone must degrade to the old behavior, never stall warmup)."""
+    tz_name = account.warmup_timezone or "UTC"
+    try:
+        return now.astimezone(ZoneInfo(tz_name))
+    except Exception:
+        return now
+
+
 def warmup_volume_today(account: EmailAccount, now: Optional[dt.datetime] = None) -> int:
     """How many synthetic warmup emails this mailbox should send today.
     5 → min(40, target) linearly over 28 days, then a maintenance trickle of
-    ~20% of the cold cap (floor 10) forever. Weekends run at WEEKEND_RATIO of
-    the weekday figure (never zero while warming — consistency is itself a
-    reputation signal)."""
+    ~20% of the cold cap (floor 10) forever. Weekends (in the mailbox's own
+    timezone) run at WEEKEND_RATIO of the weekday figure (never zero while
+    warming — consistency is itself a reputation signal)."""
     if not account.warmup_enabled or account.warmup_started_at is None:
         return 0
     now = now or utcnow()
@@ -218,7 +232,7 @@ def warmup_volume_today(account: EmailAccount, now: Optional[dt.datetime] = None
             account.daily_send_cap,
         )
         volume = min(ceiling, max(MAINTENANCE_FLOOR, round(MAINTENANCE_RATIO * full_cap)))
-    if now.weekday() >= 5:  # Sat/Sun — lighter, not silent
+    if account_local(account, now).weekday() >= 5:  # Sat/Sun — lighter, not silent
         volume = max(1, round(volume * WEEKEND_RATIO))
     return volume
 
@@ -342,10 +356,17 @@ def _pair(db: Session, sender: EmailAccount, peer: EmailAccount) -> EmailWarmupP
     return row
 
 
-def warmup_sends_today(db: Session, account: EmailAccount) -> int:
-    """Warmup sends (incl. auto-replies) from this mailbox since UTC midnight
-    — the counter run_warmup_tick paces against."""
-    midnight = utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+def warmup_sends_today(
+    db: Session, account: EmailAccount, now: Optional[dt.datetime] = None
+) -> int:
+    """Warmup sends (incl. auto-replies) from this mailbox since midnight in
+    the mailbox's own timezone — the counter run_warmup_tick paces against.
+    Local midnight matters: a non-UTC window can straddle UTC midnight (e.g.
+    Phoenix 08–18 is 15:00–01:00 UTC), and a UTC-midnight reset would hand
+    the account a second budget partway through its local sending day."""
+    local = account_local(account, now or utcnow())
+    midnight = local.replace(hour=0, minute=0, second=0, microsecond=0)
+    midnight = midnight.astimezone(dt.timezone.utc)
     return db.execute(
         select(func.count(EmailMessage.id)).where(
             EmailMessage.account_id == account.id,
@@ -371,21 +392,23 @@ def run_warmup_tick(
     db: Session, org_id: str, now: Optional[dt.datetime] = None
 ) -> dict:
     """One warmup pass for one org (called every ~60s by the scheduler): for
-    each warmup mailbox inside the send window, drip one email toward today's
-    ramped budget when past the jittered gap, rotating which peer receives
-    it. Weekends aren't gated here — warmup_volume_today already reduces the
-    weekend budget to WEEKEND_RATIO. Caller owns the commit. `now` is
-    injectable so tests can pin a time inside the window."""
+    each warmup mailbox inside its own LOCAL send window (warmup_timezone,
+    UTC when unset), drip one email toward today's ramped budget when past
+    the jittered gap, rotating which peer receives it. Weekends aren't gated
+    here — warmup_volume_today already reduces the weekend budget to
+    WEEKEND_RATIO. Caller owns the commit. `now` is injectable so tests can
+    pin a time inside the window."""
     accounts = _warmup_accounts(db, org_id)
     if len(accounts) < 2:
         return {"organization_id": org_id, "accounts": len(accounts), "sent": 0}
     now = now or utcnow()
-    if not (WINDOW_START_HOUR <= now.hour < WINDOW_END_HOUR):
-        return {"organization_id": org_id, "accounts": len(accounts), "sent": 0}
     sent = 0
     for sender in accounts:
+        local = account_local(sender, now)
+        if not (WINDOW_START_HOUR <= local.hour < WINDOW_END_HOUR):
+            continue
         budget = warmup_volume_today(sender, now)
-        done = warmup_sends_today(db, sender)
+        done = warmup_sends_today(db, sender, now)
         if done >= budget:
             continue
         pairs = [
@@ -394,20 +417,20 @@ def run_warmup_tick(
         last = max(
             (_aware(p.last_sent_at) for p in pairs if p.last_sent_at), default=None
         )
-        gap = _send_gap_seconds(budget, sender.id, now, done)
+        gap = _send_gap_seconds(budget, sender.id, local, done)
         if last is not None and (now - last).total_seconds() < gap:
             continue
         # Rotate the receiving peer so a 3+ mailbox pool doesn't collapse into
         # one tight reciprocal pair (which itself looks artificial).
         pair = pairs[done % len(pairs)]
         peer = next(a for a in accounts if a.id == pair.peer_account_id)
-        pick = _hash_pick(len(_WARMUP_BODIES), sender.id, now.date(), done)
+        pick = _hash_pick(len(_WARMUP_BODIES), sender.id, local.date(), done)
         code, _msg = gateway.send(
             db,
             sender,
             to_email=peer.from_email,
             subject=_WARMUP_SUBJECTS[
-                _hash_pick(len(_WARMUP_SUBJECTS), sender.id, now.date(), done, "s")
+                _hash_pick(len(_WARMUP_SUBJECTS), sender.id, local.date(), done, "s")
             ],
             body_text=_WARMUP_BODIES[pick],
             kind=KIND_WARMUP,

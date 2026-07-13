@@ -3199,6 +3199,37 @@ function WarmupPanel({
                         </Button>
                       )}
                   </div>
+
+                  <div className="eml-wu-target">
+                    <label htmlFor={`wu-tz-${a.id}`}>Warmup timezone</label>
+                    <input
+                      id={`wu-tz-${a.id}`}
+                      defaultValue={a.warmup_timezone ?? ""}
+                      placeholder="UTC (e.g. America/Phoenix)"
+                      onBlur={(e) => {
+                        const tz = e.target.value.trim() || null;
+                        if (tz === (a.warmup_timezone ?? null)) return;
+                        updateEmailAccount(a.id, { warmup_timezone: tz })
+                          .then(() => {
+                            toast(
+                              tz
+                                ? `Warmup window now 8am–6pm ${tz}`
+                                : "Warmup window back to UTC",
+                              "ok",
+                            );
+                            onChanged();
+                          })
+                          .catch((err) =>
+                            toast(
+                              err instanceof Error
+                                ? err.message
+                                : "Invalid timezone",
+                              "error",
+                            ),
+                          );
+                      }}
+                    />
+                  </div>
                 </>
               ) : (
                 <p className="eml-wu-off">

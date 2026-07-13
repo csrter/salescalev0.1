@@ -9,6 +9,7 @@ Transport is monkeypatched throughout — no live SMTP/IMAP.
 """
 
 import datetime as dt
+from email.utils import parseaddr
 
 import pytest
 from sqlalchemy import select
@@ -16,6 +17,7 @@ from sqlalchemy import select
 from app.db import SessionLocal
 from app.models.base import utcnow
 from app.models.email_outreach import (
+    KIND_WARMUP,
     EmailAccount,
     EmailEnrollment,
     EmailMessage,
@@ -605,3 +607,100 @@ def test_archive_endpoint_and_activate_guard(cc_org, api, probe_ok):
         headers=cc_org["headers"],
     )
     assert r.status_code == 409
+
+
+# --- warmup timezone (window/weekend/daily budget follow the mailbox zone) ----
+
+
+def test_account_local_zone_and_fallback():
+    a = _acct(warmup_timezone="America/Phoenix")
+    # 20:00 UTC Wednesday is 13:00 in Phoenix (UTC-7, no DST).
+    local = email_warmup.account_local(a, WEDNESDAY_NOON.replace(hour=20))
+    assert (local.hour, local.weekday()) == (13, 2)
+    # Unset and invalid zones degrade to UTC — never stall the engine.
+    for tz in (None, "Not/AZone"):
+        a.warmup_timezone = tz
+        assert email_warmup.account_local(a, WEDNESDAY_NOON).hour == 12
+
+
+def test_weekend_reduction_follows_local_calendar():
+    # Monday 02:00 UTC 2026-07-13 is still Sunday 19:00 in Phoenix.
+    monday_utc = dt.datetime(2026, 7, 13, 2, 0, tzinfo=dt.timezone.utc)
+    utc_acct = _acct(warmup_started_at=monday_utc - dt.timedelta(days=5))
+    phx_acct = _acct(
+        warmup_started_at=monday_utc - dt.timedelta(days=5),
+        warmup_timezone="America/Phoenix",
+    )
+    full = email_warmup.warmup_volume_today(utc_acct, monday_utc)
+    reduced = email_warmup.warmup_volume_today(phx_acct, monday_utc)
+    assert reduced == max(1, round(full * email_warmup.WEEKEND_RATIO))
+
+
+def test_tick_window_follows_account_timezone(cc_org, api, probe_ok, captured_sends):
+    p1 = _mk_account(cc_org, api, from_email="phx1@campaignco.com")
+    p2 = _mk_account(cc_org, api, from_email="phx2@campaignco.com")
+    for a in (p1, p2):
+        _enable_warmup(a["id"], days_ago=5)
+        r = api.patch(
+            f"/api/email-outreach/accounts/{a['id']}",
+            json={"warmup_timezone": "America/Phoenix"},
+            headers=cc_org["headers"],
+        )
+        assert r.status_code == 200, r.text
+        assert r.json()["warmup_timezone"] == "America/Phoenix"
+    # Garbage zones are rejected at the API boundary.
+    r = api.patch(
+        f"/api/email-outreach/accounts/{p1['id']}",
+        json={"warmup_timezone": "Mars/OlympusMons"},
+        headers=cc_org["headers"],
+    )
+    assert r.status_code == 422
+
+    db = SessionLocal()
+    try:
+        def _no_gap(budget, account_id, now, count):
+            return 0.0
+
+        orig = email_warmup._send_gap_seconds
+        email_warmup._send_gap_seconds = _no_gap
+        try:
+            # 10:00 UTC is inside the UTC window but 03:00 in Phoenix — the
+            # Phoenix mailboxes must sit this tick out (other, UTC-zoned
+            # accounts in this module's org are free to send).
+            before = len(captured_sends)
+            email_warmup.run_warmup_tick(db, cc_org["org"], now=WEDNESDAY_NOON.replace(hour=10))
+            phx = {"phx1@campaignco.com", "phx2@campaignco.com"}
+            froms = {parseaddr(m["From"])[1] for m in captured_sends[before:]}
+            assert not (froms & phx)
+            # 20:00 UTC is OUTSIDE the UTC window but 13:00 in Phoenix — now
+            # ONLY the Phoenix mailboxes may send.
+            before = len(captured_sends)
+            res = email_warmup.run_warmup_tick(db, cc_org["org"], now=WEDNESDAY_NOON.replace(hour=20))
+            new_froms = {parseaddr(m["From"])[1] for m in captured_sends[before:]}
+            assert res["sent"] >= 1
+            assert new_froms and new_froms <= phx
+        finally:
+            email_warmup._send_gap_seconds = orig
+        db.commit()
+
+        # Daily budget resets at LOCAL midnight: a Phoenix window (15:00–01:00
+        # UTC) straddles UTC midnight, and a UTC reset would hand out a second
+        # budget mid-day. A send at 23:30 UTC Wednesday (16:30 Phoenix) still
+        # counts "today" at 00:30 UTC Thursday (17:30 Phoenix, same local day).
+        acct = db.get(EmailAccount, p1["id"])
+        rows = (
+            db.query(EmailMessage)
+            .filter(EmailMessage.account_id == acct.id, EmailMessage.kind == KIND_WARMUP)
+            .all()
+        )
+        assert rows, "the 20:00 UTC tick above should have sent from phx1"
+        for m in rows:
+            m.created_at = dt.datetime(2026, 7, 8, 23, 30, tzinfo=dt.timezone.utc)
+        db.commit()
+        thu_0030_utc = dt.datetime(2026, 7, 9, 0, 30, tzinfo=dt.timezone.utc)
+        assert email_warmup.warmup_sends_today(db, acct, thu_0030_utc) >= 1
+        acct.warmup_timezone = None  # same instant under UTC = yesterday
+        assert email_warmup.warmup_sends_today(db, acct, thu_0030_utc) == 0
+        db.rollback()
+    finally:
+        db.close()

@@ -1283,12 +1283,26 @@ class EmailAccountPatch(BaseModel):
     # (the ramp clock); toggling off and back on restarts the ramp.
     warmup_enabled: Optional[bool] = None
     warmup_target_daily: Optional[int] = Field(default=None, ge=10, le=500)
+    # IANA zone the warmup window/weekends/daily budget follow (None = UTC).
+    warmup_timezone: Optional[str] = Field(default=None, max_length=64)
 
     @field_validator("smtp_security", "imap_security")
     @classmethod
     def _valid_security(cls, v):
         if v is not None and v not in ("ssl", "starttls"):
             raise ValueError("security must be 'ssl' or 'starttls'")
+        return v
+
+    @field_validator("warmup_timezone")
+    @classmethod
+    def _valid_warmup_timezone(cls, v):
+        if v is not None:
+            from zoneinfo import ZoneInfo
+
+            try:
+                ZoneInfo(v)
+            except Exception:
+                raise ValueError(f"unknown IANA timezone: {v!r}")
         return v
 
 

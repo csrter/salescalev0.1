@@ -1469,6 +1469,8 @@ export interface EmailAccount {
   warmup_enabled: boolean;
   warmup_started_at: string | null;
   warmup_target_daily: number;
+  /** IANA zone the warmup window/weekends follow; null = UTC. */
+  warmup_timezone: string | null;
   warmup_stage: string | null;
   /** Deterministic ramp maturity 0–100 (100 = fully warmed, maintenance). */
   warmup_progress: number;
@@ -1507,6 +1509,7 @@ export interface EmailAccountBody {
   daily_send_cap?: number;
   warmup_enabled?: boolean;
   warmup_target_daily?: number;
+  warmup_timezone?: string | null;
   signature?: string | null;
 }
 

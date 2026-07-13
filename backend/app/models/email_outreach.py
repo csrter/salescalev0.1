@@ -147,6 +147,9 @@ class EmailAccount(Base):
     warmup_target_daily: Mapped[int] = mapped_column(
         Integer, default=100, nullable=False
     )
+    # IANA zone the warmup engine's send window (08:00–18:00), weekend
+    # reduction, and daily-budget midnight are evaluated in. None = UTC.
+    warmup_timezone: Mapped[Optional[str]] = mapped_column(String(64))
     signature: Mapped[Optional[str]] = mapped_column(Text)
     # IMAP sync bookkeeping (services/email_outreach_sync.py).
     last_synced_at: Mapped[Optional[dt.datetime]] = mapped_column(
