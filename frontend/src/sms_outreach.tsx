@@ -135,7 +135,10 @@ const TOKENS_HINT = (
     Fallbacks like <code>{"{{first_name|there}}"}</code>, plus{" "}
     <code>{"{{ai_snippet}}"}</code>. Conditionals{" "}
     <code>{"{{#if token}}...{{/if}}"}</code> and spintax{" "}
-    <code>{"{{spin:a|b|c}}"}</code> also work.
+    <code>{"{{spin:a|b|c}}"}</code> also work. Failsafes: a lead with no
+    first name greets by its business name (proper-cased), and a missing{" "}
+    <code>{"{{city}}"}</code> is AI-inferred from the lead's own details and
+    saved to the contact.
   </>
 );
 

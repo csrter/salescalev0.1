@@ -1174,3 +1174,111 @@ def test_mark_read_cross_org_contact_404s(sc_org, api, team_headers):
         headers=team_headers,
     )
     assert r.status_code == 404
+
+
+# --- render failsafes (business-name greeting + AI city inference) -----------
+
+
+def test_sms_failsafe_business_name_greeting_and_ai_city(
+    sc_org, api, twilio_creds_ok, monkeypatch
+):
+    calls = {"n": 0}
+
+    def _fake_call(system, user_content, max_tokens=300):
+        calls["n"] += 1
+        assert "city" in system.lower()  # the city-failsafe prompt, not a snippet
+        assert "DESERT AIR HVAC LLC" in user_content  # grounded in the lead's facts
+        return "mesa", 8, 3
+
+    monkeypatch.setattr(email_personalize, "_call_model", _fake_call)
+    monkeypatch.setattr(
+        email_personalize.ai_insights, "check_allowance", lambda db, org: None
+    )
+
+    acct = _mk_account(sc_org, api, from_number="+14805550881")
+    camp = _mk_campaign(sc_org, api, acct["id"])
+    contact = _mk_contact(
+        sc_org,
+        api,
+        mobile_phone="4805559301",
+        first=None,
+        last=None,
+        phone="4805551000",  # create-check needs email/phone/name; leads have a business line
+        company_name="DESERT AIR HVAC LLC",
+        state="AZ",
+    )
+    _set_steps(
+        sc_org,
+        api,
+        camp["id"],
+        [{"position": 1, "body": "Hi {{first_name|there}} — great work in {{city}}!"}],
+    )
+    db = SessionLocal()
+    try:
+        c = db.get(Contact, contact)
+        step = (
+            db.execute(select(SmsStep).where(SmsStep.campaign_id == camp["id"]))
+            .scalars()
+            .first()
+        )
+        body = sms_campaigns.render_body(db, c, step)
+        # The business-name failsafe beats the explicit |there fallback (a
+        # named greeting is the point), with acronym-aware proper casing; the
+        # AI-inferred city is smart-cased into the body.
+        assert body == "Hi Desert Air HVAC LLC — great work in Mesa!"
+        # ...and persisted fill-blanks-only, so it's cached on the contact.
+        assert c.city == "Mesa"
+        db.commit()
+        body2 = sms_campaigns.render_body(db, c, step)
+        assert "Mesa" in body2
+        assert calls["n"] == 1  # second render reads the cached city, no re-bill
+    finally:
+        db.close()
+
+
+def test_sms_failsafe_fails_open(sc_org, api, twilio_creds_ok, monkeypatch):
+    monkeypatch.setattr(
+        email_personalize, "_call_model", lambda s, u, max_tokens=300: ("UNKNOWN", 5, 2)
+    )
+    monkeypatch.setattr(
+        email_personalize.ai_insights, "check_allowance", lambda db, org: None
+    )
+    acct = _mk_account(sc_org, api, from_number="+14805550882")
+    camp = _mk_campaign(sc_org, api, acct["id"])
+    contact = _mk_contact(
+        sc_org, api, mobile_phone="4805559302", first=None, last=None, phone="4805551001"
+    )  # no name AND no company
+    _set_steps(
+        sc_org,
+        api,
+        camp["id"],
+        [{"position": 1, "body": "Hi {{first_name|there}}, how is {{city|your area}}?"}],
+    )
+    db = SessionLocal()
+    try:
+        c = db.get(Contact, contact)
+        step = (
+            db.execute(select(SmsStep).where(SmsStep.campaign_id == camp["id"]))
+            .scalars()
+            .first()
+        )
+        # UNKNOWN from the model → city stays blank, template fallbacks apply,
+        # nothing crashes, nothing is written to the contact.
+        body = sms_campaigns.render_body(db, c, step)
+        assert body == "Hi there, how is your area?"
+        assert c.city is None
+
+        # A model exception is equally non-fatal.
+        def _boom(s, u, max_tokens=300):
+            raise RuntimeError("model timeout")
+
+        monkeypatch.setattr(email_personalize, "_call_model", _boom)
+        assert (
+            sms_campaigns.render_body(db, c, step)
+            == "Hi there, how is your area?"
+        )
+        # Garbage answers (digits, sentences) are discarded by the guard.
+        assert sms_campaigns._clean_city("call 480-555-1212") == ""
+        assert sms_campaigns._clean_city("It is probably Mesa, Arizona.") != "Mesa"
+    finally:
+        db.close()

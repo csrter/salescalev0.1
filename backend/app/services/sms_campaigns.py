@@ -38,6 +38,7 @@ Time & window rules (documented, internally consistent, mirrors email):
 import datetime as dt
 import json
 import logging
+import re
 from typing import List, Optional
 from zoneinfo import ZoneInfo
 
@@ -46,7 +47,7 @@ from sqlalchemy.orm import Session
 
 from ..models.base import utcnow
 from ..models.core import Organization
-from ..models.crm import Contact
+from ..models.crm import Company, Contact
 from ..models.sms_outreach import (
     SMS_ACCOUNT_ACTIVE,
     SMS_CAMPAIGN_ACTIVE,
@@ -113,14 +114,116 @@ def unknown_tokens(template: Optional[str], custom_keys=None, research_keys=None
     )
 
 
+# --- render failsafes ---------------------------------------------------------
+# A lead with no usable first_name greets by business name instead, and a
+# missing city is AI-inferred once from the lead's OWN facts (guardrail 7).
+# Both rescue sends that would otherwise exit render_empty; both fail open.
+
+# Business-name acronyms that word-casing would mangle ("DESERT AIR HVAC
+# LLC" must not become "Desert Air Hvac Llc"). Only true acronyms — Inc/Co/
+# Corp/Ltd are conventionally title-case and word-casing already gets them
+# right. Generic + the trade acronyms common in local-business names.
+_BIZ_ACRONYMS = frozenset(
+    {"llc", "llp", "lp", "pc", "pllc", "dba", "usa", "hvac", "ac", "a/c"}
+)
+
+_CITY_TOKEN_RE = re.compile(r"\{\{\s*(?:#if\s+)?city\b")
+
+_CITY_FAILSAFE_SYSTEM = (
+    "You determine the city where a business is located, using ONLY the "
+    "facts given (business name, website domain, phone numbers, state, and "
+    "the search query that found the business). You may reason from a US "
+    "phone area code or a city named inside the search query. Reply with "
+    "the city name ALONE — no state, no punctuation, no explanation. If the "
+    "facts do not clearly point to one city, reply exactly UNKNOWN."
+)
+
+
+def business_case(value: str) -> str:
+    """Proper-case a business name for use in a greeting: word-casing via the
+    shared _smart_case (mixed-case input passes through untouched), then
+    known suffixes/acronyms restored to uppercase."""
+    cased = email_personalize._smart_case("company", value.strip())
+    return re.sub(
+        r"[^\s\-]+",
+        lambda m: m.group(0).upper() if m.group(0).lower() in _BIZ_ACRONYMS else m.group(0),
+        cased,
+    )
+
+
+def _clean_city(text: Optional[str]) -> str:
+    """Output guard for the city-inference answer: one short line of plain
+    letters or nothing — a hedge, a sentence, or digits means the model
+    didn't actually know."""
+    v = (text or "").strip().strip("\"'").rstrip(".").strip()
+    if (
+        not v
+        or len(v) > 40
+        or "\n" in v
+        or any(ch.isdigit() for ch in v)
+        or v.upper() == "UNKNOWN"
+        or not re.fullmatch(r"[A-Za-z][A-Za-z .'\-]*", v)
+    ):
+        return ""
+    return email_personalize._smart_case("city", v)
+
+
+def infer_city_failsafe(db: Session, org: Organization, contact: Contact) -> str:
+    """One grounded AI call to determine the lead's city, or "" on any
+    failure (no key, over the monthly cap, model error, output guard). Same
+    fail-open posture as generate_ai_snippet — a send is never blocked on AI."""
+    company = None
+    if contact.company_id:
+        company = db.get(Company, contact.company_id)
+    grounding = {
+        "business_name": (company.name if company else None) or contact.first_name,
+        "website_domain": company.domain if company else None,
+        "business_phone": company.phone if company else None,
+        "contact_phone": contact.phone,
+        "contact_mobile": contact.mobile_phone,
+        "state": contact.state,
+        "search_query": (contact.source_detail or {}).get("query")
+        if isinstance(contact.source_detail, dict)
+        else None,
+    }
+    try:
+        ai_insights.check_allowance(db, org)
+        res = ai_provider.resolve(db, org)
+        user_content = f"FACTS:\n{json.dumps(grounding, sort_keys=True, default=str)}"
+        with ai_provider.using(res):
+            text, input_tokens, output_tokens = email_personalize._call_model(
+                _CITY_FAILSAFE_SYSTEM, user_content, max_tokens=16
+            )
+        email_personalize._record_usage(db, org, res.model, input_tokens, output_tokens)
+        city = _clean_city(text)
+        if not city:
+            log.info("sms city failsafe: no confident city for contact %s", contact.id)
+        return city
+    except Exception as e:  # never let AI failure stop a send
+        log.info("sms city failsafe skipped for contact %s: %s", contact.id, e)
+        return ""
+
+
 def render_body(db: Session, contact: Contact, step: SmsStep, *, ai_snippet: str = "") -> str:
     """Render one step's body for one contact. Reuses email_personalize's
     template substitution (casing normalization, #if/spin, the emptied-token
     tidy pass) so `{{first_name|there}}` etc. behave identically to email.
-    `ai_snippet` is the only extra token SMS injects."""
+    `ai_snippet` is the only extra token SMS injects, plus the failsafes:
+    a blank first_name renders as the proper-cased business name (beats any
+    |fallback — a named greeting is the point), and a blank city referenced
+    by the template is AI-inferred and written back fill-blanks-only so the
+    answer is cached on the contact (and visible/correctable in the CRM)."""
     facts = email_personalize._company_facts(db, contact)
+    extra = {"ai_snippet": ai_snippet}
+    if not (contact.first_name or "").strip() and (facts.get("company") or "").strip():
+        extra["first_name"] = business_case(facts["company"])
+    if _CITY_TOKEN_RE.search(step.body_template or "") and not (contact.city or "").strip():
+        org = db.get(Organization, contact.organization_id)
+        city = infer_city_failsafe(db, org, contact)
+        if city:
+            contact.city = city  # caller's commit persists the cache
     return email_personalize._render_template(
-        step.body_template or "", contact, facts, {"ai_snippet": ai_snippet}
+        step.body_template or "", contact, facts, extra
     )
 
 

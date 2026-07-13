@@ -1171,6 +1171,28 @@ live activation + the entitlement flip, the Outreach module build
       green, new routes auth-gated; all three Atlas Reach mailboxes set
       to America/Phoenix (user-approved SQL) — first warmup sends land
       8am–6pm Phoenix.
+- [x] SMS render failsafes (2026-07-13): a lead with no usable first_name
+      greets by its BUSINESS NAME instead (deterministic — no AI; beats any
+      explicit |fallback since a named greeting is the point), proper-cased
+      via the shared _smart_case plus an acronym guard (sms_campaigns.
+      business_case — "DESERT AIR HVAC LLC" → "Desert Air HVAC LLC"; only
+      true acronyms like LLC/HVAC/PLLC stay upper, Inc/Co stay title-case).
+      A blank {{city}} referenced by the template is AI-INFERRED once from
+      the lead's OWN facts (business name, website domain, phone area
+      codes, state, the Lead Finder search query — guardrail 7 holds;
+      sms_campaigns.infer_city_failsafe via the ai_provider dispatch,
+      metered through the existing _record_usage, max_tokens=16) and
+      written back fill-blanks-only to contacts.city so it's cached and
+      human-correctable in the CRM. Output guard _clean_city rejects
+      hedges/sentences/digits/UNKNOWN → field stays blank and the existing
+      render_empty/tidy guards apply; every AI failure fails open (no key,
+      cap, timeout — a send is never blocked on AI). Both hooks live in
+      sms_campaigns.render_body (the single choke point: engine sends AND
+      preview). No schema change, no new tokens. SMS step-editor hint
+      documents the failsafes. Tests 465 → 467 (failsafe render + fail-open
+      cases; note the module's earlier compliance-footer test owns
+      from_numbers +14805550301/302 — pick unused numbers, the sms_accounts
+      (org, from_number) unique index bites across the module-scoped DB).
 - [ ] Stripe live activation + entitlement flip (after 12–14, so real
       limits land everywhere in one pass)
 - [ ] Outreach module build (dev-mode) — go-live gated on Meta App
