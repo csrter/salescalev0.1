@@ -44,7 +44,10 @@ ExecStart=/usr/bin/autossh -M 0 -N \
 #         config sets a non-default port.
 # relay@CHANGE_ME_VPS_HOST = the restricted SSH user + host set up in
 #         README step 3 (NOT a normal login user — authorized_keys for this
-#         user is locked down to `restrict,permitlisten="localhost:12345"`).
+#         user is locked down to
+#         `no-agent-forwarding,no-X11-forwarding,no-pty,permitlisten="localhost:12345"`
+#         — NOT the `restrict` shorthand, which also blocks port forwarding
+#         itself on OpenSSH 9.6; see README for the confirmed gotcha).
 
 Restart=always
 RestartSec=5

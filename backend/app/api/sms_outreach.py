@@ -94,6 +94,7 @@ def _account_out(db: Session, a: SmsAccount) -> dict:
         "webhook_token": a.webhook_token,
         "relay_url": a.relay_url,
         "min_send_spacing_seconds": a.min_send_spacing_seconds,
+        "max_send_spacing_seconds": a.max_send_spacing_seconds,
         "channel_health": sms_send.channel_health(db, a),
         "created_at": a.created_at.isoformat(),
     }
@@ -116,6 +117,7 @@ class AccountIn(BaseModel):
     daily_send_cap: int = Field(default=200, ge=1, le=5000)
     relay_url: Optional[str] = Field(default=None, max_length=500)
     min_send_spacing_seconds: Optional[int] = Field(default=None, ge=0, le=3600)
+    max_send_spacing_seconds: Optional[int] = Field(default=None, ge=0, le=3600)
 
 
 class AccountPatch(BaseModel):
@@ -126,6 +128,7 @@ class AccountPatch(BaseModel):
     daily_send_cap: Optional[int] = Field(default=None, ge=1, le=5000)
     relay_url: Optional[str] = Field(default=None, max_length=500)
     min_send_spacing_seconds: Optional[int] = Field(default=None, ge=0, le=3600)
+    max_send_spacing_seconds: Optional[int] = Field(default=None, ge=0, le=3600)
 
 
 @router.get("/accounts")
@@ -173,6 +176,26 @@ def create_account(
             raise HTTPException(
                 422, "Provide a from number or a Messaging Service SID."
             )
+    if (
+        body.min_send_spacing_seconds is not None
+        and body.max_send_spacing_seconds is not None
+        and body.max_send_spacing_seconds < body.min_send_spacing_seconds
+    ):
+        raise HTTPException(422, "Max seconds between sends must be >= the minimum.")
+    # BlueBubbles sends through a real Mac/Apple ID — default to a conservative
+    # randomized pacing RANGE so it's not machine-gun-detectable out of the box
+    # (the operator can still set their own, incl. 0 to disable). Only applied
+    # when NEITHER bound is given — an explicit min with no max keeps the
+    # older floor*jitter behavior instead of silently gaining a range.
+    _spacing_min = body.min_send_spacing_seconds
+    _spacing_max = body.max_send_spacing_seconds
+    if (
+        body.provider == "bluebubbles"
+        and _spacing_min is None
+        and _spacing_max is None
+    ):
+        _spacing_min = sms_send.BLUEBUBBLES_DEFAULT_SPACING_MIN_SECONDS
+        _spacing_max = sms_send.BLUEBUBBLES_DEFAULT_SPACING_MAX_SECONDS
     account = SmsAccount(
         organization_id=scope.organization_id,
         name=body.name.strip(),
@@ -186,18 +209,8 @@ def create_account(
         messaging_service_sid=(body.messaging_service_sid or "").strip() or None,
         daily_send_cap=body.daily_send_cap,
         relay_url=(body.relay_url or "").strip() or None,
-        # BlueBubbles sends through a real Mac/Apple ID — default to a
-        # conservative, jittered spacing so it's not machine-gun-detectable
-        # out of the box (the operator can still set their own, incl. 0).
-        min_send_spacing_seconds=(
-            body.min_send_spacing_seconds
-            if body.min_send_spacing_seconds is not None
-            else (
-                sms_send.BLUEBUBBLES_DEFAULT_SPACING_SECONDS
-                if body.provider == "bluebubbles"
-                else None
-            )
-        ),
+        min_send_spacing_seconds=_spacing_min,
+        max_send_spacing_seconds=_spacing_max,
         # URL secret for unsigned-webhook providers (Sendblue, BlueBubbles);
         # minted for every account so a later provider switch never leaves a
         # gap.
@@ -234,6 +247,14 @@ def update_account(
         account.relay_url = body.relay_url.strip() or None
     if body.min_send_spacing_seconds is not None:
         account.min_send_spacing_seconds = body.min_send_spacing_seconds
+    if body.max_send_spacing_seconds is not None:
+        account.max_send_spacing_seconds = body.max_send_spacing_seconds
+    if (
+        account.min_send_spacing_seconds is not None
+        and account.max_send_spacing_seconds is not None
+        and account.max_send_spacing_seconds < account.min_send_spacing_seconds
+    ):
+        raise HTTPException(422, "Max seconds between sends must be >= the minimum.")
     db.commit()
     return _account_out(db, account)
 

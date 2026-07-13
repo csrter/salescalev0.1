@@ -152,16 +152,26 @@ this whole setup, because it's what turns "an SSH key that can log in" into
 "a key that can ONLY forward port 12345, nothing else":
 
 ```
-restrict,permitlisten="localhost:12345" ssh-ed25519 AAAA...your-public-key... mac-bluebubbles-relay-tunnel
+no-agent-forwarding,no-X11-forwarding,no-pty,permitlisten="localhost:12345" ssh-ed25519 AAAA...your-public-key... mac-bluebubbles-relay-tunnel
 ```
 
-- `restrict` (OpenSSH ≥ 7.8) turns off **everything** by default — no pty,
-  no shell, no X11 forwarding, no agent forwarding, no local (`-L`) or
-  dynamic (`-D`) forwarding, no other remote (`-R`) binds.
-- `permitlisten="localhost:12345"` re-enables exactly one thing: binding
-  port 12345 **on loopback only** via `-R`. Anything else this key tries to
-  do — opening a shell, forwarding a different port — is refused by sshd
-  itself, independent of anything in this repo.
+- `permitlisten="localhost:12345"` limits `-R` remote-forwarding requests to
+  binding **exactly** `localhost:12345` — matching the listen-host string
+  ssh(1) actually sends when the tunnel is opened as `-R 12345:localhost:1234`
+  (no explicit bind address). **Gotcha, confirmed against a live OpenSSH
+  9.6p1 server:** ssh sends the literal string `"localhost"` as the listen
+  host when none is given on the command line — this is NOT the same string
+  as `"127.0.0.1"`, and `permitlisten` does an exact match. Requesting
+  `-R 127.0.0.1:12345:...` (explicit bind host) or restricting with a bare
+  `permitlisten="12345"` (no host) both fail to match and get refused.
+- `no-agent-forwarding,no-X11-forwarding,no-pty` individually turn off
+  everything else this key could otherwise do — no shell, no agent hijack,
+  no X11. **Do NOT use the `restrict` shorthand here** — it also sets
+  `no-port-forwarding`, and on a live OpenSSH 9.6p1 test that blocked the
+  `-R` bind outright ("Server has disabled port forwarding") even with
+  `permitlisten` present; `permitlisten` narrows an *allowed* forward's
+  scope, it does not override a blanket `no-port-forwarding`. Listing the
+  restrictions individually (as above) is the pattern that actually works.
 
 ```bash
 sudo chmod 600 /home/relay/.ssh/authorized_keys
@@ -416,7 +426,7 @@ route — get the Docker network attachment right instead.
 - **Reverse tunnel, not an inbound port on the Mac.** The Mac dials out;
   nothing needs to be opened on its home router/NAT, and BlueBubbles' REST
   API is never bound to anything but `localhost` on the Mac itself.
-- **The SSH key can do exactly one thing.** `restrict,permitlisten=` locks
+- **The SSH key can do exactly one thing.** `no-agent-forwarding,no-X11-forwarding,no-pty,permitlisten=` locks
   the relay user's key to binding one loopback port over `-R` — no shell,
   no other forwards, no pty — enforced by sshd itself, not by anything in
   this app.

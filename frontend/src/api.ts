@@ -1936,6 +1936,8 @@ export interface SmsAccount {
   relay_url: string | null;
   /** Minimum seconds enforced between outbound sends on this account, any provider. */
   min_send_spacing_seconds: number | null;
+  /** Upper bound of the pacing range — with min, a uniform-random gap in [min, max] is used. */
+  max_send_spacing_seconds: number | null;
   status: SmsAccountStatus;
   error_detail: string | null;
   daily_send_cap: number;
@@ -1956,6 +1958,7 @@ export interface SmsAccountBody {
   messaging_service_sid?: string | null;
   relay_url?: string | null;
   min_send_spacing_seconds?: number | null;
+  max_send_spacing_seconds?: number | null;
   daily_send_cap?: number;
 }
 

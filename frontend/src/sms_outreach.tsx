@@ -2262,6 +2262,11 @@ function AccountDialog({
       ? String(existing.min_send_spacing_seconds)
       : "",
   );
+  const [maxSendSpacing, setMaxSendSpacing] = useState(
+    existing?.max_send_spacing_seconds != null
+      ? String(existing.max_send_spacing_seconds)
+      : "",
+  );
   const [dailyCap, setDailyCap] = useState(
     existing ? String(existing.daily_send_cap) : "200",
   );
@@ -2321,8 +2326,20 @@ function AccountDialog({
       relay_url: isBluebubbles ? relayUrl.trim() : null,
       min_send_spacing_seconds:
         isBluebubbles && minSendSpacing.trim() ? Number(minSendSpacing) : null,
+      max_send_spacing_seconds:
+        isBluebubbles && maxSendSpacing.trim() ? Number(maxSendSpacing) : null,
       daily_send_cap: Number(dailyCap),
     };
+    if (
+      isBluebubbles &&
+      minSendSpacing.trim() &&
+      maxSendSpacing.trim() &&
+      Number(maxSendSpacing) < Number(minSendSpacing)
+    ) {
+      toast("Max seconds between sends must be ≥ the minimum", "error");
+      setBusy(false);
+      return;
+    }
     if (authToken) base.auth_token = authToken;
     setBusy(true);
     try {
@@ -2460,19 +2477,30 @@ function AccountDialog({
         </div>
 
         {isBluebubbles && (
-          <Field
-            label="Min seconds between sends"
-            optional
-            description="Paces automated campaign sends so this Mac/Apple ID isn't flagged for machine-gun texting (gaps are randomized above this floor; live 1:1 replies are never throttled). Leave blank for the recommended 60s default; set 0 to disable."
-          >
-            <input
-              type="number"
-              min={0}
-              value={minSendSpacing}
-              onChange={(e) => setMinSendSpacing(e.target.value)}
-              placeholder="60"
-            />
-          </Field>
+          <div className="sms-form-row">
+            <Field
+              label="Min seconds between sends"
+              optional
+              description="Paces automated campaign sends so this Mac/Apple ID isn't flagged for machine-gun texting — each gap is a random point between Min and Max (live 1:1 replies are never throttled). Leave both blank for the recommended 20–45s range; set both to 0 to disable."
+            >
+              <input
+                type="number"
+                min={0}
+                value={minSendSpacing}
+                onChange={(e) => setMinSendSpacing(e.target.value)}
+                placeholder="20"
+              />
+            </Field>
+            <Field label="Max seconds between sends" optional>
+              <input
+                type="number"
+                min={0}
+                value={maxSendSpacing}
+                onChange={(e) => setMaxSendSpacing(e.target.value)}
+                placeholder="45"
+              />
+            </Field>
+          </div>
         )}
 
         <Field label="Daily send cap" optional>

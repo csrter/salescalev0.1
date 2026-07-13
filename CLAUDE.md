@@ -1305,6 +1305,45 @@ live activation + the entitlement flip, the Outreach module build
       user-side for the dev path: provision the relay VPS + DNS + SSH key,
       install BlueBubbles on a Mac, apply the relay configs, then connect
       the account in SMS → Accounts (provider BlueBubbles).
+- [x] iMessage relay actually stood up + real random pacing RANGE
+      (2026-07-13, same-day follow-up): the dev BlueBubbles path went from
+      "not deployed" to live end-to-end, reusing the existing prod VPS
+      (2.25.75.95) rather than a second box. DNS (imessage-relay.salescale.
+      lol → 2.25.75.95), autossh reverse tunnel (Mac :1234 → VPS loopback
+      127.0.0.1:12345, launchd-managed for auto-reconnect/reboot survival),
+      and a Traefik FILE-PROVIDER route added alongside the existing
+      docker-provider routes (auto-TLS via the same letsencrypt resolver) —
+      confirmed live end-to-end (https://imessage-relay.salescale.lol/api/
+      v1/ping reaches BlueBubbles on the Mac; api.salescale.lol health
+      unaffected). CONFIRMED SSH GOTCHA (corrected in the README + relay
+      configs): `restrict,permitlisten="127.0.0.1:12345"` does NOT work on
+      live OpenSSH 9.6 — ssh(1) sends the literal string "localhost" (not
+      "127.0.0.1") as the listen host when `-R` omits an explicit bind
+      address, and `restrict`'s bundled `no-port-forwarding` is NOT
+      overridden by `permitlisten` (server reports "Server has disabled
+      port forwarding" even with a matching permitlisten). Working pattern:
+      `-R 12345:localhost:1234` (bare port) paired with
+      `no-agent-forwarding,no-X11-forwarding,no-pty,permitlisten="localhost:12345"`
+      (explicit individual restrictions, NOT the `restrict` shorthand).
+      PACING CORRECTED (user-requested): the anti-detection guard was a
+      floor×1.0-1.8x-jitter model (60s default → 60-108s actual gaps,
+      unbounded upward drift) — changed to a literal uniform-random RANGE.
+      Migration a3d7c1f8e942 adds sms_accounts.max_send_spacing_seconds
+      (nullable); services/sms_send.next_spacing_time picks
+      random.uniform(min, max) when both bounds are set, falling back to
+      the old floor*jitter only when max is left null (backward-compat for
+      any account configured before the range existed). BlueBubbles default
+      at account creation (only when NEITHER bound is given) is now the
+      literal 20-45s window the user asked for
+      (BLUEBUBBLES_DEFAULT_SPACING_MIN/MAX_SECONDS), replacing the old 60s
+      floor constant. API: AccountIn/AccountPatch gained
+      max_send_spacing_seconds + a 422 if max < min. Frontend: a second
+      "Max seconds between sends" field alongside Min (sms-form-row
+      two-column layout, reusing the existing class). Tests 486 → 490 (max-
+      below-min 422, range-default assertion, sampled-gap-in-range check,
+      floor-fallback-when-max-unset regression). DEPLOYED to production
+      2026-07-13 (migrations f9a3c7e1b6d4 + a3d7c1f8e942 both applied
+      cleanly on the live Supabase DB in this session).
 - [ ] Stripe live activation + entitlement flip (after 12–14, so real
       limits land everywhere in one pass)
 - [ ] Outreach module build (dev-mode) — go-live gated on Meta App

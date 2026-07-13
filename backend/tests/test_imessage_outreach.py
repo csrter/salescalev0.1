@@ -213,18 +213,46 @@ def _always_open_campaign(db, account):
     return camp
 
 
-def test_bluebubbles_account_defaults_to_conservative_spacing(im_org, api, bb_creds_ok):
-    # not specified → defaults to the BlueBubbles anti-detection spacing
+def test_bluebubbles_account_defaults_to_conservative_spacing_range(im_org, api, bb_creds_ok):
+    # neither bound specified → defaults to the BlueBubbles anti-detection range
     acct = _mk_bb_account(im_org, api, from_number="+14805551040")
-    assert acct["min_send_spacing_seconds"] == gateway.BLUEBUBBLES_DEFAULT_SPACING_SECONDS
-    # explicit value (incl. 0 to opt out) is respected
-    acct0 = _mk_bb_account(im_org, api, from_number="+14805551041", min_send_spacing_seconds=0)
+    assert acct["min_send_spacing_seconds"] == gateway.BLUEBUBBLES_DEFAULT_SPACING_MIN_SECONDS
+    assert acct["max_send_spacing_seconds"] == gateway.BLUEBUBBLES_DEFAULT_SPACING_MAX_SECONDS
+    assert acct["min_send_spacing_seconds"] == 20
+    assert acct["max_send_spacing_seconds"] == 45
+    # explicit values (incl. 0 to opt out) are respected, not overridden by the default
+    acct0 = _mk_bb_account(
+        im_org, api, from_number="+14805551041",
+        min_send_spacing_seconds=0, max_send_spacing_seconds=0,
+    )
     assert acct0["min_send_spacing_seconds"] == 0
+    assert acct0["max_send_spacing_seconds"] == 0
 
 
-def test_campaign_send_defers_on_spacing_with_jitter(im_org, api, bb_creds_ok, captured_bb):
+def test_bluebubbles_account_rejects_max_below_min(im_org, api, bb_creds_ok):
+    r = api.post(
+        "/api/sms/accounts",
+        json={
+            "name": "Bad Range",
+            "provider": "bluebubbles",
+            "auth_token": "bluebubbles-server-password-123",
+            "relay_url": "https://imessage-relay.example.com",
+            "from_number": "+14805551043",
+            "min_send_spacing_seconds": 45,
+            "max_send_spacing_seconds": 20,
+        },
+        headers=im_org["headers"],
+    )
+    assert r.status_code == 422
+
+
+def test_campaign_send_defers_within_configured_range(im_org, api, bb_creds_ok, captured_bb):
+    """With both min and max set, a deferred send's reschedule target is a
+    uniform-random point strictly inside [min, max] — the literal 20-45s-style
+    range behavior, not the older floor*jitter fallback."""
     acct = _mk_bb_account(
-        im_org, api, from_number="+14805551004", min_send_spacing_seconds=300
+        im_org, api, from_number="+14805551004",
+        min_send_spacing_seconds=20, max_send_spacing_seconds=45,
     )
     _mk_contact(im_org, api, mobile_phone="+14805559004")
     db = SessionLocal()
@@ -236,17 +264,38 @@ def test_campaign_send_defers_on_spacing_with_jitter(im_org, api, bb_creds_ok, c
         camp = _always_open_campaign(db, account)
         first, _ = gateway.send(db, account, contact, "one", campaign=camp, org_name="iMessage Co")
         second, second_row = gateway.send(db, account, contact, "two", campaign=camp, org_name="iMessage Co")
-        # the engine's reschedule target sits within [1.0x, 1.8x] the spacing
-        nxt = gateway.next_spacing_time(db, account)
+        # sample several reschedule picks — every one must land in [20, 45]
         now = utcnow()
+        gaps = [
+            (gateway.next_spacing_time(db, account) - now).total_seconds()
+            for _ in range(20)
+        ]
         db.commit()
     finally:
         db.close()
     assert first == gateway.SENT
     assert second == gateway.SPACING and second_row is None
     assert len(captured_bb) == 1  # the deferred send never hit the provider
+    assert all(20 - 2 <= g <= 45 + 2 for g in gaps)
+    assert len(set(round(g) for g in gaps)) > 1  # actually randomized, not a fixed value
+
+
+def test_spacing_falls_back_to_floor_jitter_when_max_unset(im_org, api, bb_creds_ok):
+    """An account with only min set (no max) keeps the older floor*1.0-1.8x
+    jitter behavior — backward compatible with pre-range configurations."""
+    acct = _mk_bb_account(
+        im_org, api, from_number="+14805551044", min_send_spacing_seconds=300
+    )
+    assert acct["max_send_spacing_seconds"] is None
+    db = SessionLocal()
+    try:
+        account = db.get(SmsAccount, acct["id"])
+        nxt = gateway.next_spacing_time(db, account)
+        now = utcnow()
+    finally:
+        db.close()
     gap = (nxt - now).total_seconds()
-    assert 300 * 1.0 - 5 <= gap <= 300 * 1.8 + 5  # jittered, human-irregular
+    assert 300 * 1.0 - 5 <= gap <= 300 * 1.8 + 5
 
 
 def test_manual_send_is_never_throttled(im_org, api, bb_creds_ok, captured_bb):

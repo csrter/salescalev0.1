@@ -67,10 +67,11 @@ OUTSIDE_WINDOW = "window"
 SPACING = "spacing"  # deferred by the per-account min-spacing throttle
 
 # BlueBubbles sends go through a real Mac + Apple ID, so an account gets a
-# conservative default spacing (jittered up in next_spacing_time) unless the
-# operator sets their own — a personal iMessage sender machine-gunning texts
-# is the fastest way to get the Apple ID flagged. Applied at account creation.
-BLUEBUBBLES_DEFAULT_SPACING_SECONDS = 60
+# conservative default pacing RANGE unless the operator sets their own — a
+# personal iMessage sender machine-gunning texts is the fastest way to get
+# the Apple ID flagged. Applied at account creation (both ends of the range).
+BLUEBUBBLES_DEFAULT_SPACING_MIN_SECONDS = 20
+BLUEBUBBLES_DEFAULT_SPACING_MAX_SECONDS = 45
 
 _TWILIO_OPTED_OUT_CODE = "21610"
 _STOP_FOOTER = "Reply STOP to opt out"
@@ -148,19 +149,29 @@ def _last_out_created_at(
 def next_spacing_time(
     db: Session, account: SmsAccount, *, now: Optional[dt.datetime] = None
 ) -> dt.datetime:
-    """When a spacing-deferred campaign send should next be attempted: the last
-    send time plus the configured spacing scaled by a random 1.0–1.8× jitter,
-    so consecutive iMessages land at a human-irregular cadence rather than a
-    fixed, obviously-scripted interval. Always strictly in the future."""
+    """When a spacing-deferred campaign send should next be attempted, so
+    consecutive iMessages land at a human-irregular cadence rather than a
+    fixed, obviously-scripted interval. Always strictly in the future.
+
+    When BOTH min and max are configured (max > min), the gap is a uniform
+    random point in [min, max] seconds — a real randomized range (e.g. the
+    BlueBubbles default: anywhere from 20 to 45 seconds, picked fresh each
+    time). With only min set, falls back to the older floor*1.0-1.8x jitter
+    for backward compatibility with accounts configured before the range."""
     ref = now or utcnow()
-    spacing = account.min_send_spacing_seconds or 0
+    spacing_min = account.min_send_spacing_seconds or 0
+    spacing_max = account.max_send_spacing_seconds
     last = _last_out_created_at(db, account)
-    gap = spacing * random.uniform(1.0, 1.8)
+    if spacing_max and spacing_max > spacing_min:
+        gap = random.uniform(spacing_min, spacing_max)
+    else:
+        gap = spacing_min * random.uniform(1.0, 1.8)
     target = (last or ref) + dt.timedelta(seconds=gap)
     if target <= ref:
         # last + gap already passed (slow tick) — still keep a jittered gap off
         # `now` so we never fire two sends in the same instant.
-        target = ref + dt.timedelta(seconds=random.uniform(spacing * 0.5, spacing) + 1)
+        floor = spacing_min or 1
+        target = ref + dt.timedelta(seconds=random.uniform(floor * 0.5, floor) + 1)
     return target
 
 

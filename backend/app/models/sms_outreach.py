@@ -125,6 +125,12 @@ class SmsAccount(Base):
     # gateway (services/sms_send.send) for ANY provider — null/0 = off. Mainly
     # useful for BlueBubbles' single-device send rate.
     min_send_spacing_seconds: Mapped[Optional[int]] = mapped_column(Integer)
+    # Upper bound of the pacing range. When set alongside min (max > min), a
+    # deferred send is rescheduled to a UNIFORM RANDOM point in
+    # [min, max] seconds (services/sms_send.next_spacing_time) — a real
+    # randomized range rather than a floor scaled by a fixed jitter factor.
+    # Null falls back to the older floor*1.0-1.8x jitter behavior.
+    max_send_spacing_seconds: Mapped[Optional[int]] = mapped_column(Integer)
     created_at: Mapped[dt.datetime] = created_at_column()
 
 
