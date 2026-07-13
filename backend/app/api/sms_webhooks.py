@@ -44,7 +44,7 @@ from ..models.sms_outreach import (
     SmsMessage,
 )
 from ..security import decrypt_secret
-from ..services import sms_consent
+from ..services import crm, sms_consent
 
 log = logging.getLogger("salescale.sms_outreach")
 
@@ -111,14 +111,37 @@ def _process_inbound(
     body: str,
     provider_sid: Optional[str],
     forced_stop: bool = False,
+    create_missing: bool = False,
+    service: Optional[str] = None,
 ) -> None:
     """Provider-agnostic inbound handling: record the message, and on STOP
     suppress + exit all enrollments org-wide; on a real (non-HELP) reply exit
     exit_on_reply campaigns. `forced_stop` lets a provider that flags opt-out
-    structurally (Sendblue's opted_out=true) short-circuit keyword matching."""
+    structurally (Sendblue's opted_out=true) short-circuit keyword matching.
+
+    `create_missing` (used by the iMessage/BlueBubbles webhook — an
+    unsolicited iMessage is often the FIRST contact we have with a number, so
+    there's no existing lead to attach it to) creates a minimal Contact under
+    the org's house CRM when no contact matches the sender. This is never
+    TCPA consent — sms_opt_in stays at its default False — and nothing gets
+    auto-enrolled; it just makes the inbound thread visible in the CRM.
+    `service` (iMessage/SMS/RCS) is recorded on the row for channel-health
+    reporting (an iMessage-capable provider falling back to green/SMS)."""
     from_number = sms_consent.normalize_phone(from_raw) or ""
     lowered = body.lower().strip(" .!")
     contacts = _contacts_for_number(db, account.organization_id, from_number)
+
+    if not contacts and create_missing and from_number:
+        house_client = crm.get_or_create_house_client(db, account.organization_id)
+        new_contact = Contact(
+            organization_id=account.organization_id,
+            client_id=house_client.id,
+            phone=from_number,
+            source=f"imessage:{account.provider}",
+        )
+        db.add(new_contact)
+        db.flush()
+        contacts = [new_contact]
 
     db.add(
         SmsMessage(
@@ -132,6 +155,7 @@ def _process_inbound(
             body=body,
             status=SMS_MSG_RECEIVED,
             provider_sid=provider_sid,
+            service=service,
         )
     )
 

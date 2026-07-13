@@ -117,6 +117,14 @@ class SmsAccount(Base):
     # token is generated for every account regardless (secrets.token_urlsafe)
     # and compared via hmac.compare_digest in the webhook routes.
     webhook_token: Mapped[Optional[str]] = mapped_column(String(64))
+    # BlueBubbles (self-hosted iMessage, dev/prototype provider) VPS relay
+    # base URL — e.g. https://relay.example.com. auth_token_encrypted carries
+    # the BlueBubbles server password for this provider.
+    relay_url: Mapped[Optional[str]] = mapped_column(String(500))
+    # Minimum seconds between outbound sends on this account, enforced in the
+    # gateway (services/sms_send.send) for ANY provider — null/0 = off. Mainly
+    # useful for BlueBubbles' single-device send rate.
+    min_send_spacing_seconds: Mapped[Optional[int]] = mapped_column(Integer)
     created_at: Mapped[dt.datetime] = created_at_column()
 
 
@@ -268,6 +276,12 @@ class SmsMessage(Base):
     error_code: Mapped[Optional[str]] = mapped_column(String(20))
     error_detail: Mapped[Optional[str]] = mapped_column(Text)
     read_at: Mapped[Optional[dt.datetime]] = mapped_column(DateTime(timezone=True))
+    # Transport actually used for this message — "iMessage"/"SMS"/"RCS".
+    # Populated by status webhooks (Sendblue's `service` field / BlueBubbles'
+    # updated-message), not at send time. An iMessage-capable provider
+    # (sendblue/bluebubbles) reporting "SMS" here is the green-bubble
+    # downgrade signal channel_health watches for.
+    service: Mapped[Optional[str]] = mapped_column(String(20))
     created_at: Mapped[dt.datetime] = created_at_column()
 
 

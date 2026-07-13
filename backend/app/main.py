@@ -28,6 +28,7 @@ from .api import (
     dashboard,
     email_outreach,
     email_outreach_public,
+    imessage_webhooks,
     integrations,
     lead_finder,
     lead_webhooks,
@@ -129,6 +130,7 @@ app.include_router(lead_webhooks.router)
 app.include_router(outreach_webhooks.router)
 app.include_router(email_outreach_public.router)
 app.include_router(sms_webhooks.router)
+app.include_router(imessage_webhooks.router)
 app.include_router(branding.router)
 
 # App-data routers — hard-gated by the org 2FA policy (mfa_gate is a no-op for

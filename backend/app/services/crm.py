@@ -18,7 +18,9 @@ plain qualified yes/no.
 
 from typing import Dict, List, Optional, Tuple
 
+from fastapi import HTTPException
 from sqlalchemy import delete, func, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..models.attribution import LandingEvent
@@ -97,6 +99,62 @@ def get_or_create_pipeline(db: Session, client: Client) -> Pipeline:
         )
     db.flush()
     return pipeline
+
+
+def get_or_create_house_client(db: Session, organization_id: str) -> Client:
+    """The agency's own prospect pipeline — one synthetic Client row per org
+    (flagged is_house). Mirrors the get-or-create in api/orgs.get_house_client
+    (GET /api/orgs/me/house-client) so callers outside that route — e.g. the
+    iMessage/SMS inbound webhook's new-lead fallback — can resolve/create the
+    same row without duplicating the race-safe logic."""
+    # first() not one-or-none, same rigor as get_or_create_pipeline above: the
+    # partial unique index caps it at one per org, but "get or create" picks
+    # the earliest deterministically rather than assuming exactly one row.
+    client = (
+        db.execute(
+            select(Client)
+            .where(
+                Client.organization_id == organization_id,
+                Client.is_house.is_(True),
+            )
+            .order_by(Client.created_at)
+            .limit(1)
+        )
+        .scalars()
+        .first()
+    )
+    if client is not None:
+        return client
+    client = Client(
+        organization_id=organization_id,
+        name="House",
+        status="active",
+        is_house=True,
+    )
+    db.add(client)
+    try:
+        db.commit()
+    except IntegrityError:
+        # Two callers raced to create the house client at once — the partial
+        # unique index let exactly one create through, so read that winner
+        # back instead of surfacing a 500.
+        db.rollback()
+        client = (
+            db.execute(
+                select(Client)
+                .where(
+                    Client.organization_id == organization_id,
+                    Client.is_house.is_(True),
+                )
+                .order_by(Client.created_at)
+                .limit(1)
+            )
+            .scalars()
+            .first()
+        )
+        if client is None:  # pragma: no cover — index fired, row must exist
+            raise HTTPException(500, "House client creation raced")
+    return client
 
 
 def stages_for(db: Session, pipeline: Pipeline) -> List[PipelineStage]:

@@ -1,0 +1,60 @@
+# =============================================================================
+# THIS UNIT IS FOR REFERENCE ONLY / A LINUX TUNNEL HOST.
+#
+# BlueBubbles Server itself only runs on macOS (it drives Messages.app via
+# the Private API), and macOS does not use systemd — it uses launchd. For
+# the actual tunnel FROM the Mac running BlueBubbles, use
+# com.salescale.bluebubbles-tunnel.plist in this same directory, loaded via
+# launchctl, not this file.
+#
+# Keep this systemd unit around only in case the tunnel is ever initiated
+# from a Linux jump box instead of directly from the Mac (e.g. the Mac talks
+# to a local Linux box on the same LAN over a private tunnel, and THAT box
+# is what actually holds the long-lived reverse SSH session to the VPS —
+# an unusual topology, not the default one described in the README).
+# =============================================================================
+
+[Unit]
+Description=autossh reverse tunnel — BlueBubbles REST API -> Salescale iMessage relay VPS
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=CHANGE_ME_local_user
+Environment=AUTOSSH_GATETIME=0
+# Disable autossh's own monitoring port (-M 0) and rely on ssh's own
+# keepalive + ExitOnForwardFailure instead — simpler, no extra port to
+# firewall, and avoids autossh's monitor-port occasionally getting stuck
+# behind restrictive egress rules.
+Environment=AUTOSSH_POLL=30
+ExecStart=/usr/bin/autossh -M 0 -N \
+  -o "ServerAliveInterval=30" \
+  -o "ServerAliveCountMax=3" \
+  -o "ExitOnForwardFailure=yes" \
+  -o "StrictHostKeyChecking=accept-new" \
+  -o "BatchMode=yes" \
+  -i /CHANGE_ME/path/to/id_ed25519_bluebubbles_relay \
+  -R 12345:localhost:1234 \
+  relay@CHANGE_ME_VPS_HOST
+# 12345 = the loopback port Caddy proxies to on the relay VPS (Caddyfile).
+# 1234  = BlueBubbles Server's default local REST API port on the Mac/host
+#         actually running BlueBubbles. Change only if BlueBubbles' own
+#         config sets a non-default port.
+# relay@CHANGE_ME_VPS_HOST = the restricted SSH user + host set up in
+#         README step 3 (NOT a normal login user — authorized_keys for this
+#         user is locked down to `restrict,permitlisten="localhost:12345"`).
+
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+
+# --- Install (Linux host only) ---
+#   sudo cp autossh-bluebubbles.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now autossh-bluebubbles.service
+#   systemctl status autossh-bluebubbles.service
+#   journalctl -u autossh-bluebubbles.service -f

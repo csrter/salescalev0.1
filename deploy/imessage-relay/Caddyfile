@@ -1,0 +1,78 @@
+# Caddyfile — Salescale <-> BlueBubbles iMessage VPS relay (Workstream R)
+#
+# Runs on the relay host (a small dedicated VPS is recommended — see
+# deploy/imessage-relay/README.md "Choosing the relay host" — but this also
+# works on the main Salescale VPS if you wire around the existing Traefik
+# instance, also documented in the README).
+#
+# What this does: terminates public HTTPS for the relay subdomain (Caddy's
+# automatic Let's Encrypt, zero config beyond the domain name) and forwards
+# every request to a LOOPBACK port that only exists because a reverse SSH
+# tunnel (autossh, opened FROM the BlueBubbles Mac — see
+# autossh-bluebubbles.service / com.salescale.bluebubbles-tunnel.plist in
+# this same directory) is bound there. Nothing on this box ever dials out to
+# the Mac; the Mac dials in, and this loopback port is where its tunnel lands.
+#
+# BlueBubbles' own REST API auth is a `?password=...` query param the CALLER
+# (Salescale's backend, services/sms_send.py::_bluebubbles_send /
+# _verify_bluebubbles) already attaches to every request — so this Caddyfile
+# does not need to add auth of its own for the send/ping path. Caddy is a
+# dumb TLS-terminating pipe here, which is exactly what a relay should be.
+
+# CHANGE ME: the relay's public subdomain. Must have an A record pointing at
+# this host's public IP before Caddy's first start (HTTP-01 needs port 80
+# reachable) — see README step 2.
+imessage-relay.atlasreach.io {
+	# CHANGE ME: must match the port autossh binds on THIS host via
+	# `-R 12345:localhost:1234` (see autossh-bluebubbles.service /
+	# com.salescale.bluebubbles-tunnel.plist). 127.0.0.1 only — never proxy
+	# to a non-loopback address here, the whole point of the tunnel is that
+	# BlueBubbles' REST API is never bound to anything public, on the Mac
+	# or on this relay.
+	reverse_proxy 127.0.0.1:12345
+
+	# Reasonable defaults for a low-traffic internal API relay.
+	encode gzip
+	log {
+		output file /var/log/caddy/imessage-relay.log {
+			roll_size 10mb
+			roll_keep 5
+		}
+	}
+}
+
+# ---------------------------------------------------------------------------
+# OPTIONAL — inbound webhook-through-relay (disabled by default; see README
+# "Inbound webhooks" for why this is normally NOT needed: BlueBubbles on the
+# Mac has a direct public path to Salescale's API and doesn't need to route
+# through this relay for the inbound leg at all).
+#
+# If you'd rather have BlueBubbles POST its webhook to THIS relay instead of
+# directly to Salescale (e.g. to keep one single outbound destination
+# configured in BlueBubbles, or to inject a header Salescale's webhook route
+# expects), uncomment the block below and point BlueBubbles' webhook URL at
+# https://imessage-relay.<yourdomain>/salescale-webhook instead of Salescale's
+# API directly. Caddy then re-adds the shared secret as a header on the way
+# out, so the secret lives in exactly one place (this file) rather than also
+# being typed into BlueBubbles' own webhook config UI.
+#
+# CHANGE ME (both the upstream URL and the secret) before uncommenting, and
+# read the README section on the current backend webhook-route gap first —
+# as of this writing there is no dedicated BlueBubbles inbound-webhook route
+# in the Salescale backend (only Twilio-signed and Sendblue-token routes
+# exist under /api/sms/webhooks/), so there may be nothing listening on the
+# other end yet.
+#
+# imessage-relay.atlasreach.io {
+# 	handle /salescale-webhook/* {
+# 		uri strip_prefix /salescale-webhook
+# 		reverse_proxy https://api.salescale.lol {
+# 			header_up X-Salescale-Webhook-Secret "CHANGE ME: the SMS account's webhook_token"
+# 			header_up Host {upstream_hostport}
+# 		}
+# 	}
+# 	handle {
+# 		reverse_proxy 127.0.0.1:12345
+# 	}
+# }
+# ---------------------------------------------------------------------------

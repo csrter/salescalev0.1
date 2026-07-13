@@ -92,6 +92,9 @@ def _account_out(db: Session, a: SmsAccount) -> dict:
         # pastes the tokened URL into the provider dashboard, so it must be
         # readable here (admin/team-gated routes only).
         "webhook_token": a.webhook_token,
+        "relay_url": a.relay_url,
+        "min_send_spacing_seconds": a.min_send_spacing_seconds,
+        "channel_health": sms_send.channel_health(db, a),
         "created_at": a.created_at.isoformat(),
     }
 
@@ -103,12 +106,16 @@ class AccountIn(BaseModel):
     name: str = Field(min_length=1, max_length=200)
     # twilio: account_sid = Account SID, auth_token = Auth Token.
     # sendblue: account_sid = API Key ID, auth_token = API Secret Key.
-    provider: str = Field(default="twilio", pattern="^(twilio|sendblue)$")
-    account_sid: str = Field(min_length=8, max_length=64)
+    # bluebubbles: account_sid unused (defaults to "bluebubbles"), auth_token
+    # = the BlueBubbles server password, relay_url = the VPS relay base URL.
+    provider: str = Field(default="twilio", pattern="^(twilio|sendblue|bluebubbles)$")
+    account_sid: Optional[str] = Field(default=None, max_length=64)
     auth_token: str = Field(min_length=8, max_length=200)
     from_number: Optional[str] = Field(default=None, max_length=20)
     messaging_service_sid: Optional[str] = Field(default=None, max_length=64)
     daily_send_cap: int = Field(default=200, ge=1, le=5000)
+    relay_url: Optional[str] = Field(default=None, max_length=500)
+    min_send_spacing_seconds: Optional[int] = Field(default=None, ge=0, le=3600)
 
 
 class AccountPatch(BaseModel):
@@ -117,6 +124,8 @@ class AccountPatch(BaseModel):
     from_number: Optional[str] = Field(default=None, max_length=20)
     messaging_service_sid: Optional[str] = Field(default=None, max_length=64)
     daily_send_cap: Optional[int] = Field(default=None, ge=1, le=5000)
+    relay_url: Optional[str] = Field(default=None, max_length=500)
+    min_send_spacing_seconds: Optional[int] = Field(default=None, ge=0, le=3600)
 
 
 @router.get("/accounts")
@@ -140,7 +149,16 @@ def create_account(
     scope: TenantScope = Depends(get_scope),
     db: Session = Depends(get_db),
 ):
-    if body.provider == "sendblue":
+    if body.provider == "bluebubbles":
+        if not body.relay_url:
+            raise HTTPException(422, "Provide the BlueBubbles relay URL.")
+        if not body.from_number:
+            raise HTTPException(422, "Provide the iMessage sending number/handle.")
+        if body.messaging_service_sid:
+            raise HTTPException(422, "Messaging Service SID is a Twilio concept.")
+    elif body.provider == "sendblue":
+        if not body.account_sid:
+            raise HTTPException(422, "Provide the Account SID / API Key ID.")
         if not body.from_number:
             raise HTTPException(422, "Provide your Sendblue sending number.")
         if body.messaging_service_sid:
@@ -148,21 +166,30 @@ def create_account(
                 422, "Messaging Service SID is a Twilio concept — not used "
                 "with Sendblue."
             )
-    elif not body.from_number and not body.messaging_service_sid:
-        raise HTTPException(
-            422, "Provide a from number or a Messaging Service SID."
-        )
+    else:
+        if not body.account_sid:
+            raise HTTPException(422, "Provide the Account SID / API Key ID.")
+        if not body.from_number and not body.messaging_service_sid:
+            raise HTTPException(
+                422, "Provide a from number or a Messaging Service SID."
+            )
     account = SmsAccount(
         organization_id=scope.organization_id,
         name=body.name.strip(),
         provider=body.provider,
-        account_sid=body.account_sid.strip(),
+        # bluebubbles has no meaningful account_sid — the non-null column is
+        # satisfied with a placeholder; auth_token carries the server
+        # password for that provider instead.
+        account_sid=(body.account_sid or "bluebubbles").strip(),
         auth_token_encrypted=encrypt_secret(body.auth_token.strip()),
         from_number=sms_consent.normalize_phone(body.from_number),
         messaging_service_sid=(body.messaging_service_sid or "").strip() or None,
         daily_send_cap=body.daily_send_cap,
-        # URL secret for unsigned-webhook providers (Sendblue); minted for
-        # every account so a later provider switch never leaves a gap.
+        relay_url=(body.relay_url or "").strip() or None,
+        min_send_spacing_seconds=body.min_send_spacing_seconds,
+        # URL secret for unsigned-webhook providers (Sendblue, BlueBubbles);
+        # minted for every account so a later provider switch never leaves a
+        # gap.
         webhook_token=secrets.token_urlsafe(24),
     )
     ok, detail = sms_send.verify_credentials(account)
@@ -192,6 +219,10 @@ def update_account(
         account.messaging_service_sid = body.messaging_service_sid.strip() or None
     if body.daily_send_cap is not None:
         account.daily_send_cap = body.daily_send_cap
+    if body.relay_url is not None:
+        account.relay_url = body.relay_url.strip() or None
+    if body.min_send_spacing_seconds is not None:
+        account.min_send_spacing_seconds = body.min_send_spacing_seconds
     db.commit()
     return _account_out(db, account)
 

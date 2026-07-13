@@ -1250,6 +1250,54 @@ live activation + the entitlement flip, the Outreach module build
       production (2026-07-13 UTC, 572f338), and the 32 stranded prod
       enrollments re-armed with user approval (CPA x31 due 16:00 UTC =
       9am Phoenix, test2 x1 due 18:00 UTC) — verified scheduled.
+- [x] iMessage channel — BlueBubbles provider (dev) + Sendblue (prod)
+      (2026-07-13): iMessage added as a THIRD provider ("bluebubbles") in
+      the existing SMS Outreach module, next to twilio/sendblue — NOT a
+      new module/engine/tables (Sendblue already sent iMessage; this adds
+      the self-hosted BlueBubbles dev/prototype path + finishes channel
+      health for both). Extend-don't-redesign: zero engine changes, no new
+      tables, no RLS changes (isolation stays the app-layer TenantScope on
+      the already-org-scoped sms_* tables). Migration f9a3c7e1b6d4 adds 3
+      nullable columns: sms_accounts.relay_url + min_send_spacing_seconds,
+      sms_messages.service. services/sms_send.py: _bluebubbles_send (POST
+      {relay}/api/v1/message/text?password=, chatGuid iMessage;-;<e164>,
+      returns data.guid) + _verify_bluebubbles (GET /api/v1/ping) wired
+      into _provider_send/verify_credentials ahead of the twilio default;
+      a provider-agnostic min-spacing guard in the gateway send() (survives
+      a bluebubbles→sendblue swap; a violation defers via the standard
+      CAP_REACHED backoff — coarse by design; naive/aware datetime coerced
+      so it can't 500 on SQLite vs Postgres); and channel_health(db,account)
+      → {status: healthy|degraded|blocked, ...} from account status + a
+      25-row outbound sample (green-bubble/SMS fallback = degraded via the
+      new service column; ≥50% failed = blocked). NEW api/imessage_webhooks
+      .py (registered in main.py): POST /api/webhooks/imessage/bluebubbles/
+      {account_id} — shared-secret auth (X-Salescale-Webhook-Secret header,
+      injected by the VPS relay, OR ?secret= query since BlueBubbles' own
+      webhook config can only set a static URL), normalizes BlueBubbles'
+      {type:new-message|updated-message} payload, ignores isFromMe echoes,
+      threads inbound to CRM by phone with HOUSE-CRM new-lead fallback
+      (sms_opt_in stays False — inbound is not consent), STOP suppresses,
+      updated-message → delivered/read; plus /api/webhooks/imessage/
+      sendblue/{inbound,status}/{account_id}/{token} thin aliases that
+      delegate to the canonical sms_webhooks handlers (status alias also
+      captures service/was_downgraded). sms_webhooks._process_inbound gained
+      optional create_missing/service params (defaults keep Twilio/Sendblue
+      behavior identical); services/crm.get_or_create_house_client extracted
+      (race-safe, mirrors api/orgs GET /house-client). Frontend
+      (sms_outreach.tsx + api.ts): "BlueBubbles (dev)" provider in the
+      Accounts dialog (Relay URL / Server password / iMessage number / min
+      seconds; account_sid sent null), a channel-health badge on account
+      cards, and the bluebubbles inbound-webhook URL card. VPS relay
+      (deploy/imessage-relay/): Caddyfile (auto-TLS, reverse_proxy to the
+      reverse-SSH tunnel port), launchd plist (Mac) + systemd unit (Linux)
+      for autossh, firewall.sh (ufw allowlist 443 → Salescale backend IP),
+      and a README runbook for the user-side manual steps. Tests 471 → 486
+      (test_imessage_outreach.py, own im_org fixture, _bluebubbles_send
+      monkeypatched). tsc clean. NOT deployed (no live BlueBubbles server /
+      relay yet — Sendblue iMessage already works in prod today). Remaining
+      user-side for the dev path: provision the relay VPS + DNS + SSH key,
+      install BlueBubbles on a Mac, apply the relay configs, then connect
+      the account in SMS → Accounts (provider BlueBubbles).
 - [ ] Stripe live activation + entitlement flip (after 12–14, so real
       limits land everywhere in one pass)
 - [ ] Outreach module build (dev-mode) — go-live gated on Meta App

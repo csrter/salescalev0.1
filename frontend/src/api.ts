@@ -1911,7 +1911,19 @@ export const listSmsCrmContactsForClient = (clientId: string) =>
 
 export type SmsAccountStatus = "active" | "error";
 
-export type SmsProvider = "twilio" | "sendblue";
+export type SmsProvider = "twilio" | "sendblue" | "bluebubbles";
+
+/** Recent-send-sampled health signal (last 25 outbound messages). See
+ * services/sms_send.channel_health on the backend. */
+export interface SmsChannelHealth {
+  status: "healthy" | "degraded" | "blocked";
+  sent: number;
+  delivered: number;
+  failed: number;
+  downgraded: number;
+  sampled: number;
+  detail: string;
+}
 
 export interface SmsAccount {
   id: string;
@@ -1920,23 +1932,30 @@ export interface SmsAccount {
   account_sid: string;
   from_number: string | null;
   messaging_service_sid: string | null;
+  /** BlueBubbles VPS relay base URL (self-hosted, dev/prototype path). */
+  relay_url: string | null;
+  /** Minimum seconds enforced between outbound sends on this account, any provider. */
+  min_send_spacing_seconds: number | null;
   status: SmsAccountStatus;
   error_detail: string | null;
   daily_send_cap: number;
   sends_today: number;
-  /** URL secret for providers without request signing (Sendblue). */
+  /** URL secret for providers without request signing (Sendblue, BlueBubbles). */
   webhook_token: string | null;
+  channel_health: SmsChannelHealth | null;
   created_at: string;
 }
 
 export interface SmsAccountBody {
   name?: string;
   provider?: SmsProvider;
-  account_sid?: string;
+  account_sid?: string | null;
   /** Only sent to rotate the auth token / secret (write-only, never returned). */
   auth_token?: string;
   from_number?: string | null;
   messaging_service_sid?: string | null;
+  relay_url?: string | null;
+  min_send_spacing_seconds?: number | null;
   daily_send_cap?: number;
 }
 
@@ -2082,7 +2101,12 @@ const SO = "/api/sms";
 // --- accounts ---
 export const listSmsAccounts = () => api<SmsAccount[]>(`${SO}/accounts`);
 export const createSmsAccount = (
-  body: SmsAccountBody & { name: string; account_sid: string; auth_token: string },
+  body: SmsAccountBody & {
+    name: string;
+    /** Optional/null for bluebubbles — the backend fills a placeholder SID. */
+    account_sid?: string | null;
+    auth_token: string;
+  },
 ) => api<SmsAccount>(`${SO}/accounts`, { method: "POST", body: JSON.stringify(body) });
 export const updateSmsAccount = (id: string, body: SmsAccountBody) =>
   api<SmsAccount>(`${SO}/accounts/${id}`, { method: "PATCH", body: JSON.stringify(body) });
@@ -2175,6 +2199,15 @@ export function smsWebhookUrls(account: {
   provider: SmsProvider;
   webhook_token: string | null;
 }): { inbound: string; status: string } {
+  if (account.provider === "bluebubbles") {
+    // BlueBubbles posts both new-message and updated-message events to the
+    // SAME inbound URL; auth is a shared secret (header or ?secret=), not a
+    // second status endpoint.
+    return {
+      inbound: `${API_BASE}/api/webhooks/imessage/bluebubbles/${account.id}`,
+      status: `${API_BASE}/api/webhooks/imessage/bluebubbles/${account.id}`,
+    };
+  }
   if (account.provider === "sendblue") {
     // Sendblue webhooks carry no documented signature header, so the
     // per-account token in the URL path is the authenticity check.

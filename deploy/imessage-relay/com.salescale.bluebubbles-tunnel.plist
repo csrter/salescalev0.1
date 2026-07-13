@@ -1,0 +1,82 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  THIS IS THE FILE TO USE ON THE MAC running BlueBubbles Server. macOS uses
+  launchd, not systemd — autossh-bluebubbles.service (the sibling file in
+  this directory) is reference-only / for a Linux tunnel host, NOT for this
+  Mac. See README.md step 6 for install instructions.
+
+  What it does: keeps a reverse SSH tunnel open FROM this Mac TO the relay
+  VPS, forwarding the VPS's loopback port 12345 to this Mac's
+  localhost:1234 (BlueBubbles Server's REST API). launchd's KeepAlive
+  restarts autossh if it ever exits (network drop, sleep/wake, VPS reboot);
+  ExitOnForwardFailure + ServerAliveInterval below make ssh itself notice a
+  dead connection quickly instead of hanging silently, so KeepAlive gets a
+  chance to act.
+
+  CHANGE ME markers below: autossh path (Homebrew differs on Apple
+  Silicon vs Intel), your Mac username, the SSH private key path, and the
+  VPS host/user from README step 3.
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.salescale.bluebubbles-tunnel</string>
+
+	<key>ProgramArguments</key>
+	<array>
+		<!-- CHANGE ME: /opt/homebrew/bin/autossh on Apple Silicon,
+		     /usr/local/bin/autossh on Intel Macs. `which autossh` after
+		     `brew install autossh` to confirm. -->
+		<string>/opt/homebrew/bin/autossh</string>
+		<string>-M</string>
+		<string>0</string>
+		<string>-N</string>
+		<string>-o</string>
+		<string>ServerAliveInterval=30</string>
+		<string>-o</string>
+		<string>ServerAliveCountMax=3</string>
+		<string>-o</string>
+		<string>ExitOnForwardFailure=yes</string>
+		<string>-o</string>
+		<string>StrictHostKeyChecking=accept-new</string>
+		<string>-o</string>
+		<string>BatchMode=yes</string>
+		<string>-i</string>
+		<!-- CHANGE ME: path to the restricted private key from README step 3 -->
+		<string>/Users/CHANGE_ME/.ssh/id_ed25519_bluebubbles_relay</string>
+		<string>-R</string>
+		<!-- 12345 must match the Caddyfile's reverse_proxy port; 1234 is
+		     BlueBubbles Server's default local REST API port. -->
+		<string>12345:localhost:1234</string>
+		<!-- CHANGE ME: the restricted relay user + VPS hostname from
+		     README step 3 -->
+		<string>relay@CHANGE_ME_VPS_HOST</string>
+	</array>
+
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>AUTOSSH_GATETIME</key>
+		<string>0</string>
+		<key>AUTOSSH_POLL</key>
+		<string>30</string>
+	</dict>
+
+	<!-- Start on load (login/boot) and keep it running forever. -->
+	<key>RunAtLoad</key>
+	<true/>
+	<key>KeepAlive</key>
+	<true/>
+	<!-- Don't respawn tighter than every 10s if it's crash-looping. -->
+	<key>ThrottleInterval</key>
+	<integer>10</integer>
+
+	<!-- CHANGE ME: replace CHANGE_ME with your macOS username in both paths
+	     below (~ is not expanded by launchd). Create the Logs dir if it
+	     doesn't already exist: mkdir -p ~/Library/Logs -->
+	<key>StandardOutPath</key>
+	<string>/Users/CHANGE_ME/Library/Logs/bluebubbles-tunnel.log</string>
+	<key>StandardErrorPath</key>
+	<string>/Users/CHANGE_ME/Library/Logs/bluebubbles-tunnel.err.log</string>
+</dict>
+</plist>

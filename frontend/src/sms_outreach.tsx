@@ -2071,8 +2071,25 @@ function AccountsPanel({
                     <div className="sms-account-name">
                       {a.name}{" "}
                       <Badge tone="neutral">
-                        {a.provider === "sendblue" ? "Sendblue" : "Twilio"}
-                      </Badge>
+                        {a.provider === "bluebubbles"
+                          ? "BlueBubbles"
+                          : a.provider === "sendblue"
+                            ? "Sendblue"
+                            : "Twilio"}
+                      </Badge>{" "}
+                      {a.channel_health && (
+                        <Badge
+                          tone={
+                            a.channel_health.status === "healthy"
+                              ? "ok"
+                              : a.channel_health.status === "degraded"
+                                ? "warn"
+                                : "danger"
+                          }
+                        >
+                          {a.channel_health.status}
+                        </Badge>
+                      )}
                     </div>
                     <div className="sms-account-number">
                       {a.from_number || a.messaging_service_sid || "—"}
@@ -2095,7 +2112,13 @@ function AccountsPanel({
 
                 <div className="sms-webhooks">
                   <p className="sms-hint">
-                    {a.provider === "sendblue" ? (
+                    {a.provider === "bluebubbles" ? (
+                      <>
+                        Point your BlueBubbles VPS relay's webhook at this one
+                        URL — it carries both inbound messages and
+                        delivery/read updates.
+                      </>
+                    ) : a.provider === "sendblue" ? (
                       <>
                         Add these as webhooks in your Sendblue dashboard (the
                         URL already carries this account's secret token).
@@ -2109,8 +2132,23 @@ function AccountsPanel({
                     <strong>Inbound is required</strong> — without it, STOP/HELP
                     replies never reach us and opt-outs can't be honored.
                   </p>
-                  <WebhookRow label="Inbound" url={webhooks.inbound} />
-                  <WebhookRow label="Status" url={webhooks.status} />
+                  {a.provider === "bluebubbles" ? (
+                    <>
+                      <WebhookRow label="Inbound webhook" url={webhooks.inbound} />
+                      <WebhookRow label="Secret" url={a.webhook_token ?? ""} />
+                      <p className="sms-hint">
+                        Send it as header{" "}
+                        <code>X-Salescale-Webhook-Secret: &lt;secret&gt;</code>{" "}
+                        (the VPS relay injects it) — or append{" "}
+                        <code>?secret=&lt;secret&gt;</code> to the URL.
+                      </p>
+                    </>
+                  ) : (
+                    <>
+                      <WebhookRow label="Inbound" url={webhooks.inbound} />
+                      <WebhookRow label="Status" url={webhooks.status} />
+                    </>
+                  )}
                 </div>
 
                 {tested[a.id] && <div className="sms-test-result">{tested[a.id]}</div>}
@@ -2218,6 +2256,12 @@ function AccountDialog({
   const [messagingServiceSid, setMessagingServiceSid] = useState(
     existing?.messaging_service_sid ?? "",
   );
+  const [relayUrl, setRelayUrl] = useState(existing?.relay_url ?? "");
+  const [minSendSpacing, setMinSendSpacing] = useState(
+    existing?.min_send_spacing_seconds != null
+      ? String(existing.min_send_spacing_seconds)
+      : "",
+  );
   const [dailyCap, setDailyCap] = useState(
     existing ? String(existing.daily_send_cap) : "200",
   );
@@ -2225,23 +2269,43 @@ function AccountDialog({
 
   const isEdit = Boolean(existing);
   const isSendblue = provider === "sendblue";
+  const isBluebubbles = provider === "bluebubbles";
   // Provider changes only at create time; editing keeps the stored provider.
   const sidLabel = isSendblue ? "API Key ID" : "Account SID";
-  const secretLabel = isSendblue ? "API Secret Key" : "Auth token";
+  const secretLabel = isBluebubbles
+    ? "Server password"
+    : isSendblue
+      ? "API Secret Key"
+      : "Auth token";
 
   const save = async () => {
-    if (!name.trim() || !accountSid.trim()) {
-      toast(`Name and ${sidLabel} are required`, "error");
+    if (!name.trim()) {
+      toast("A label is required", "error");
       return;
     }
-    if (isSendblue) {
-      if (!fromNumber.trim()) {
-        toast("A Sendblue sending number is required", "error");
+    if (isBluebubbles) {
+      if (!relayUrl.trim()) {
+        toast("A BlueBubbles relay URL is required", "error");
         return;
       }
-    } else if (!fromNumber.trim() && !messagingServiceSid.trim()) {
-      toast("Provide a from number or a Messaging Service SID", "error");
-      return;
+      if (!fromNumber.trim()) {
+        toast("An iMessage sending number is required", "error");
+        return;
+      }
+    } else {
+      if (!accountSid.trim()) {
+        toast(`${sidLabel} is required`, "error");
+        return;
+      }
+      if (isSendblue) {
+        if (!fromNumber.trim()) {
+          toast("A Sendblue sending number is required", "error");
+          return;
+        }
+      } else if (!fromNumber.trim() && !messagingServiceSid.trim()) {
+        toast("Provide a from number or a Messaging Service SID", "error");
+        return;
+      }
     }
     if (!isEdit && !authToken) {
       toast(`A ${secretLabel} is required to connect`, "error");
@@ -2249,11 +2313,14 @@ function AccountDialog({
     }
     const base: SmsAccountBody = {
       name: name.trim(),
-      account_sid: accountSid.trim(),
+      // BlueBubbles has no meaningful SID — the backend fills a placeholder.
+      account_sid: isBluebubbles ? null : accountSid.trim(),
       from_number: fromNumber.trim() || null,
-      messaging_service_sid: isSendblue
-        ? null
-        : messagingServiceSid.trim() || null,
+      messaging_service_sid:
+        isBluebubbles || isSendblue ? null : messagingServiceSid.trim() || null,
+      relay_url: isBluebubbles ? relayUrl.trim() : null,
+      min_send_spacing_seconds:
+        isBluebubbles && minSendSpacing.trim() ? Number(minSendSpacing) : null,
       daily_send_cap: Number(dailyCap),
     };
     if (authToken) base.auth_token = authToken;
@@ -2265,9 +2332,12 @@ function AccountDialog({
           ...base,
           provider,
           name: name.trim(),
-          account_sid: accountSid.trim(),
           auth_token: authToken,
-        } as SmsAccountBody & { name: string; account_sid: string; auth_token: string });
+        } as SmsAccountBody & {
+          name: string;
+          account_sid?: string | null;
+          auth_token: string;
+        });
       toast(isEdit ? "Number updated" : "Number connected", "ok");
       onSaved();
     } catch (e) {
@@ -2287,7 +2357,7 @@ function AccountDialog({
       title={
         isEdit
           ? `Edit ${existing!.name}`
-          : `Connect ${isSendblue ? "Sendblue" : "Twilio"}`
+          : `Connect ${isBluebubbles ? "BlueBubbles" : isSendblue ? "Sendblue" : "Twilio"}`
       }
       footer={
         <>
@@ -2308,6 +2378,7 @@ function AccountDialog({
               options={[
                 { value: "twilio", label: "Twilio (SMS)" },
                 { value: "sendblue", label: "Sendblue (iMessage/SMS)" },
+                { value: "bluebubbles", label: "BlueBubbles (dev)" },
               ]}
               value={provider}
               onChange={(v) => setProvider(v as SmsProvider)}
@@ -2317,13 +2388,26 @@ function AccountDialog({
         <Field label="Label">
           <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Atlas primary" />
         </Field>
-        <Field label={sidLabel}>
-          <input
-            value={accountSid}
-            onChange={(e) => setAccountSid(e.target.value)}
-            placeholder={isSendblue ? "your Sendblue API Key ID" : "ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"}
-          />
-        </Field>
+        {isBluebubbles ? (
+          <Field
+            label="Relay URL"
+            description="Self-hosted BlueBubbles via your VPS relay — dev/prototype path."
+          >
+            <input
+              value={relayUrl}
+              onChange={(e) => setRelayUrl(e.target.value)}
+              placeholder="https://relay.example.com"
+            />
+          </Field>
+        ) : (
+          <Field label={sidLabel}>
+            <input
+              value={accountSid}
+              onChange={(e) => setAccountSid(e.target.value)}
+              placeholder={isSendblue ? "your Sendblue API Key ID" : "ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"}
+            />
+          </Field>
+        )}
         <Field
           label={secretLabel}
           description={isEdit ? "Leave blank to keep the current secret." : undefined}
@@ -2340,9 +2424,15 @@ function AccountDialog({
           <span className="field-label">Send from</span>
           <div className="sms-form-row">
             <Field
-              label={isSendblue ? "Sendblue number" : "From number"}
+              label={
+                isBluebubbles
+                  ? "iMessage number"
+                  : isSendblue
+                    ? "Sendblue number"
+                    : "From number"
+              }
               description="A sending number in E.164 format."
-              optional={!isSendblue}
+              optional={!isSendblue && !isBluebubbles}
             >
               <input
                 value={fromNumber}
@@ -2350,7 +2440,7 @@ function AccountDialog({
                 placeholder="+15555550123"
               />
             </Field>
-            {!isSendblue && (
+            {!isSendblue && !isBluebubbles && (
               <Field label="Messaging Service SID" optional>
                 <input
                   value={messagingServiceSid}
@@ -2361,11 +2451,29 @@ function AccountDialog({
             )}
           </div>
           <p className="sms-hint">
-            {isSendblue
-              ? "Sendblue assigns you a dedicated number — enter it here."
-              : "Provide either a from number or a Messaging Service SID."}
+            {isBluebubbles
+              ? "The iMessage-registered number this relay sends from."
+              : isSendblue
+                ? "Sendblue assigns you a dedicated number — enter it here."
+                : "Provide either a from number or a Messaging Service SID."}
           </p>
         </div>
+
+        {isBluebubbles && (
+          <Field
+            label="Min seconds between sends"
+            optional
+            description="Enforced in the send gateway for this account — leave blank for no minimum."
+          >
+            <input
+              type="number"
+              min={0}
+              value={minSendSpacing}
+              onChange={(e) => setMinSendSpacing(e.target.value)}
+              placeholder="e.g. 30"
+            />
+          </Field>
+        )}
 
         <Field label="Daily send cap" optional>
           <input
@@ -2376,7 +2484,14 @@ function AccountDialog({
           />
         </Field>
 
-        {isSendblue ? (
+        {isBluebubbles ? (
+          <Alert tone="warn" title="Consent still required">
+            BlueBubbles sends over iMessage and does not auto-handle STOP —
+            Salescale records opt-outs from inbound replies, so the inbound
+            webhook below is mandatory. TCPA consent rules apply exactly as
+            they do for SMS: only opted-in contacts are ever messaged.
+          </Alert>
+        ) : isSendblue ? (
           <Alert tone="warn" title="Consent still required">
             Sendblue sends over iMessage/SMS and does not auto-handle STOP —
             Salescale records opt-outs from inbound replies, so the inbound

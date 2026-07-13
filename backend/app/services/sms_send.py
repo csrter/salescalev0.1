@@ -26,6 +26,7 @@ ledger converges with Twilio Advanced Opt-Out's.
 
 import datetime as dt
 import logging
+import uuid
 from typing import Optional, Tuple
 from zoneinfo import ZoneInfo
 
@@ -40,7 +41,9 @@ from ..models.sms_outreach import (
     SMS_ACCOUNT_ACTIVE,
     SMS_DIR_OUT,
     SMS_KIND_CAMPAIGN,
+    SMS_MSG_DELIVERED,
     SMS_MSG_FAILED,
+    SMS_MSG_READ,
     SMS_MSG_SENT,
     SMS_SUPPRESS_CARRIER,
     SmsAccount,
@@ -277,9 +280,73 @@ def _verify_sendblue(account: SmsAccount) -> Tuple[bool, str]:
     return False, f"Sendblue HTTP {resp.status_code}"
 
 
+# --- BlueBubbles transport (self-hosted iMessage, dev/prototype provider;
+# thin httpx client against the org's own VPS relay) ---
+
+
+def _bluebubbles_send(
+    account: SmsAccount, to_number: str, body: str
+) -> Tuple[str, Optional[str], Optional[str]]:
+    """One POST {relay}/api/v1/message/text. Returns (message guid,
+    error_code, error_detail). Raises SmsProviderError on a network-level
+    failure talking to the relay."""
+    base = (account.relay_url or "").rstrip("/")
+    if not base:
+        return "", "config", "No relay URL configured"
+    pw = decrypt_secret(account.auth_token_encrypted or "")
+    data = {
+        "chatGuid": f"iMessage;-;{to_number}",
+        "tempGuid": str(uuid.uuid4()),
+        "message": body,
+        "method": "private-api",
+    }
+    try:
+        resp = httpx.post(
+            f"{base}/api/v1/message/text",
+            params={"password": pw},
+            json=data,
+            timeout=20,
+        )
+    except httpx.HTTPError as e:
+        raise SmsProviderError(f"BlueBubbles is unreachable: {e}")
+    payload = {}
+    try:
+        payload = resp.json()
+    except Exception:
+        pass
+    if resp.status_code // 100 == 2:
+        d = payload.get("data") or {}
+        return d.get("guid") or data["tempGuid"], None, None
+    return (
+        "",
+        str(payload.get("status") or resp.status_code),
+        payload.get("message") or f"BlueBubbles HTTP {resp.status_code}",
+    )
+
+
+def _verify_bluebubbles(account: SmsAccount) -> Tuple[bool, str]:
+    """Cheap probe: GET {relay}/api/v1/ping — a 2xx means the relay is
+    reachable and the server password is accepted."""
+    base = (account.relay_url or "").rstrip("/")
+    if not base:
+        return False, "No relay URL configured."
+    pw = decrypt_secret(account.auth_token_encrypted or "")
+    try:
+        resp = httpx.get(f"{base}/api/v1/ping", params={"password": pw}, timeout=15)
+    except httpx.HTTPError as e:
+        return False, f"BlueBubbles is unreachable: {e}"
+    if resp.status_code // 100 == 2:
+        return True, "ok"
+    if resp.status_code in (401, 403):
+        return False, "BlueBubbles rejected the server password."
+    return False, f"BlueBubbles HTTP {resp.status_code}"
+
+
 def _provider_send(
     account: SmsAccount, to_number: str, body: str
 ) -> Tuple[str, Optional[str], Optional[str]]:
+    if account.provider == "bluebubbles":
+        return _bluebubbles_send(account, to_number, body)
     if account.provider == "sendblue":
         return _sendblue_send(account, to_number, body)
     return _twilio_send(account, to_number, body)
@@ -306,9 +373,98 @@ def _verify_twilio(account: SmsAccount) -> Tuple[bool, str]:
 def verify_credentials(account: SmsAccount) -> Tuple[bool, str]:
     """Provider-dispatched credential probe. Returns (ok, detail). Never
     raises — used by the connect/test endpoint."""
+    if account.provider == "bluebubbles":
+        return _verify_bluebubbles(account)
     if account.provider == "sendblue":
         return _verify_sendblue(account)
     return _verify_twilio(account)
+
+
+# --- channel health (account-level, all providers) ---
+
+_CHANNEL_HEALTH_SAMPLE = 25
+
+
+def channel_health(db: Session, account: SmsAccount) -> dict:
+    """Rolls up the account's last 25 outbound sends into a single status —
+    "healthy" | "degraded" | "blocked" — plus the raw counts driving it.
+    `downgraded` is the green-bubble signal: an iMessage-capable provider
+    (sendblue/bluebubbles) whose status webhook reported the message actually
+    went out as SMS."""
+    if account.status != SMS_ACCOUNT_ACTIVE:
+        return {
+            "status": "blocked",
+            "sent": 0,
+            "delivered": 0,
+            "failed": 0,
+            "downgraded": 0,
+            "sampled": 0,
+            "detail": account.error_detail or "Account not active",
+        }
+    rows = db.execute(
+        select(SmsMessage.status, SmsMessage.service)
+        .where(
+            SmsMessage.account_id == account.id,
+            SmsMessage.direction == SMS_DIR_OUT,
+        )
+        .order_by(SmsMessage.created_at.desc())
+        .limit(_CHANNEL_HEALTH_SAMPLE)
+    ).all()
+    sampled = len(rows)
+    sent = sum(1 for status, _ in rows if status == SMS_MSG_SENT)
+    delivered = sum(
+        1 for status, _ in rows if status in (SMS_MSG_DELIVERED, SMS_MSG_READ)
+    )
+    failed = sum(1 for status, _ in rows if status == SMS_MSG_FAILED)
+    downgraded = sum(
+        1 for _, service in rows if service and service.upper() == "SMS"
+    )
+    imessage_capable = account.provider in ("sendblue", "bluebubbles")
+
+    if sampled == 0:
+        return {
+            "status": "healthy",
+            "sent": sent,
+            "delivered": delivered,
+            "failed": failed,
+            "downgraded": downgraded,
+            "sampled": sampled,
+            "detail": "No recent sends",
+        }
+    if sampled and failed / sampled >= 0.5:
+        return {
+            "status": "blocked",
+            "sent": sent,
+            "delivered": delivered,
+            "failed": failed,
+            "downgraded": downgraded,
+            "sampled": sampled,
+            "detail": "High recent failure rate",
+        }
+    if failed > 0 or (imessage_capable and downgraded > 0):
+        reasons = []
+        if imessage_capable and downgraded > 0:
+            reasons.append("messages falling back to SMS")
+        if failed > 0:
+            reasons.append("recent send failures")
+        return {
+            "status": "degraded",
+            "sent": sent,
+            "delivered": delivered,
+            "failed": failed,
+            "downgraded": downgraded,
+            "sampled": sampled,
+            "detail": " and ".join(reasons).capitalize(),
+        }
+    return {
+        "status": "healthy",
+        "sent": sent,
+        "delivered": delivered,
+        "failed": failed,
+        "downgraded": downgraded,
+        "sampled": sampled,
+        "detail": "Sending normally",
+    }
 
 
 # --- THE gateway ---
@@ -346,6 +502,32 @@ def send(
         return CAP_REACHED, None
     if campaign is not None and campaign_sends_today(db, campaign) >= campaign.daily_cap:
         return CAP_REACHED, None
+
+    # Minimum spacing between sends on this account (mainly for BlueBubbles'
+    # single-device send rate, but provider-agnostic by design). Enforced
+    # here in the gateway — the one adapter-agnostic layer — so it survives a
+    # provider swap. A violation defers via the engine's standard CAP_REACHED
+    # backoff (retried next cycle); coarse by design for the dev path.
+    spacing = account.min_send_spacing_seconds or 0
+    if spacing > 0:
+        last = db.execute(
+            select(SmsMessage.created_at)
+            .where(
+                SmsMessage.account_id == account.id,
+                SmsMessage.direction == SMS_DIR_OUT,
+            )
+            .order_by(SmsMessage.created_at.desc())
+            .limit(1)
+        ).scalar_one_or_none()
+        ref = now or utcnow()
+        if last is not None:
+            # SQLite (dev/test) returns naive datetimes even for
+            # DateTime(timezone=True); Postgres returns aware. Normalize so the
+            # subtraction can't raise on either backend.
+            if last.tzinfo is None:
+                last = last.replace(tzinfo=dt.timezone.utc)
+            if (ref - last).total_seconds() < spacing:
+                return CAP_REACHED, None
 
     final_body = apply_compliance_suffix(
         body,
