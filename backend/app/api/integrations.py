@@ -20,7 +20,7 @@ from ..models.base import utcnow
 from ..models.core import User
 from ..models.integrations import IntegrationCredential
 from ..security import encrypt_secret
-from ..services import integration_creds
+from ..services import ai_provider, integration_creds
 
 router = APIRouter(prefix="/api/integrations", tags=["integrations"])
 
@@ -109,6 +109,29 @@ def list_redirect_uris(user: User = Depends(require_admin)):
             uri=f"{s.api_base_url}/api/auth/oauth/meta/callback",
         ),
     ]
+
+
+AI_KEY_PROVIDERS = ("anthropic", "openai", "gemini")
+
+
+@router.get("/ai-provider")
+def ai_provider_status(
+    user: User = Depends(require_admin), db: Session = Depends(get_db)
+):
+    """The operator-selected active AI provider plus this org's BYO-key status
+    for each. Keys themselves are write-only (stored via the shared
+    /api/lead-finder/providers endpoints, owner-only for AI providers)."""
+    providers = []
+    for p in AI_KEY_PROVIDERS:
+        src = integration_creds.key_source(db, user.organization_id, p)
+        providers.append(
+            {"provider": p, "configured": src != "none", "source": src}
+        )
+    return {
+        "active": ai_provider.active_provider(),
+        "model": ai_provider.active_model(),
+        "providers": providers,
+    }
 
 
 @router.get("", response_model=List[IntegrationStatusOut])

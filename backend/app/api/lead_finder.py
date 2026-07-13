@@ -23,7 +23,7 @@ from sqlalchemy.orm import Session
 from ..db import get_db
 from ..deps import TenantScope, get_scope, require_admin, require_team
 from ..models.base import utcnow
-from ..models.core import Client, Organization, User
+from ..models.core import ROLE_OWNER, Client, Organization, User
 from ..models.integrations import IntegrationCredential
 from ..models.lead_finder import LeadFinderSearch
 from ..ratelimit import enforce_bucket
@@ -236,6 +236,17 @@ def usage(user: User = Depends(require_team), db: Session = Depends(get_db)):
 # --- BYO provider keys (google_places, hunter, zerobounce) ---
 
 _PROVIDERS = tuple(integration_creds.KEY_PROVIDERS)
+# AI-provider keys authenticate spend on the org's whole AI surface (insights,
+# personalization, research), so writing/removing them is owner-only; the
+# lead-data providers stay admin-manageable as before.
+_OWNER_ONLY_PROVIDERS = {"anthropic", "openai", "gemini"}
+
+
+def _require_owner_for(provider: str, user: User) -> None:
+    if provider in _OWNER_ONLY_PROVIDERS and user.role != ROLE_OWNER:
+        raise HTTPException(
+            403, "Only the organization owner can manage AI provider keys"
+        )
 
 
 def _provider_status(db: Session, org_id: str, provider: str) -> ProviderStatusOut:
@@ -261,6 +272,7 @@ def set_provider_key(
     — same posture as /api/integrations."""
     if provider not in _PROVIDERS:
         raise HTTPException(404, "Unknown provider")
+    _require_owner_for(provider, user)
     row = db.execute(
         select(IntegrationCredential).where(
             IntegrationCredential.organization_id == user.organization_id,
@@ -286,6 +298,7 @@ def delete_provider_key(
 ):
     if provider not in _PROVIDERS:
         raise HTTPException(404, "Unknown provider")
+    _require_owner_for(provider, user)
     row = db.execute(
         select(IntegrationCredential).where(
             IntegrationCredential.organization_id == user.organization_id,

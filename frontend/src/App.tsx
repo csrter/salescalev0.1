@@ -527,7 +527,7 @@ export default function App() {
                     onGoToBilling={() => navigate("billing")}
                   />
                 )}
-                {tab === "integrations" && isAdmin && <Integrations />}
+                {tab === "integrations" && isAdmin && <Integrations isOwner={isOwner} />}
                 {tab === "billing" && isOwner && <Billing session={session} />}
                 {tab === "branding" && isAdmin && <BrandingSettings />}
                 {tab === "security" && <TwoFactorSettings session={session} />}

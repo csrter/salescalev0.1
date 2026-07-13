@@ -1276,6 +1276,18 @@ export const deleteLeadProviderKey = (provider: string) =>
     method: "DELETE",
   });
 
+/** Active AI provider (operator-selected) + this org's BYO-key status for
+ * each. Key writes go through setLeadProviderKey/deleteLeadProviderKey and
+ * are owner-only for the AI providers (server-enforced). */
+export interface AiProviderStatus {
+  active: "anthropic" | "openai" | "gemini";
+  model: string;
+  providers: LeadProviderStatus[];
+}
+
+export const getAiProviderStatus = () =>
+  api<AiProviderStatus>("/api/integrations/ai-provider");
+
 export const verifyContacts = (contactIds: string[]) =>
   api<{
     verified: Record<string, { verification_status: VerificationStatus; verified_at: string | null }>;

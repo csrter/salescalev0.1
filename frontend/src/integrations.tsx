@@ -10,11 +10,15 @@
 import { useCallback, useEffect, useState } from "react";
 import {
   deleteIntegration,
+  deleteLeadProviderKey,
+  getAiProviderStatus,
   getPlatforms,
   getRedirectUris,
   listIntegrations,
   setGoogleCreds,
+  setLeadProviderKey,
   setMetaCreds,
+  type AiProviderStatus,
   type IntegrationStatus,
   type Platform,
   type RedirectUri,
@@ -41,7 +45,7 @@ const STATUS: Record<
   none: { label: "Not configured", tone: "neutral" },
 };
 
-export function Integrations() {
+export function Integrations({ isOwner }: { isOwner: boolean }) {
   const [statuses, setStatuses] = useState<IntegrationStatus[]>([]);
   const [platforms, setPlatforms] = useState<Platform[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -73,6 +77,7 @@ export function Integrations() {
       </header>
       {error && <Alert tone="danger">{error}</Alert>}
       <RedirectUrisCard />
+      <AiProviderKeysCard isOwner={isOwner} />
       {platforms === null ? (
         <SkeletonText lines={4} />
       ) : (
@@ -98,6 +103,171 @@ export function Integrations() {
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+const AI_PROVIDER_LABELS: Record<string, string> = {
+  anthropic: "Anthropic (Claude)",
+  openai: "OpenAI",
+  gemini: "Google Gemini",
+};
+
+/** BYO AI-provider key: powers AI insights, {{ai_snippet}} personalization and
+ * AI research fields. The active provider is operator-selected; the org's own
+ * key (when set) is used before the platform's. Owner-only writes —
+ * server-enforced, the UI mirrors it. */
+function AiProviderKeysCard({ isOwner }: { isOwner: boolean }) {
+  const [status, setStatus] = useState<AiProviderStatus | null>(null);
+  const [editing, setEditing] = useState<string | null>(null);
+  const [key, setKey] = useState("");
+  const [busy, setBusy] = useState(false);
+  const toast = useToast();
+
+  const refresh = useCallback(
+    () => getAiProviderStatus().then(setStatus).catch(() => setStatus(null)),
+    []
+  );
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
+  if (status === null) return null;
+  const active = status.providers.find((p) => p.provider === status.active);
+
+  const save = async () => {
+    if (!editing) return;
+    setBusy(true);
+    try {
+      await setLeadProviderKey(editing, key.trim());
+      toast(`${AI_PROVIDER_LABELS[editing]} key saved`, "ok");
+      setEditing(null);
+      setKey("");
+      await refresh();
+    } catch (e) {
+      toast((e as Error).message, "error");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const clear = async (provider: string) => {
+    setBusy(true);
+    try {
+      await deleteLeadProviderKey(provider);
+      toast(`${AI_PROVIDER_LABELS[provider]} key removed`, "info");
+      await refresh();
+    } catch (e) {
+      toast((e as Error).message, "error");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="card mg-integration">
+      <div className="mg-integration-head">
+        <div className="mg-integration-title">
+          <h3 className="mg-redirects-title">AI provider</h3>
+          <p className="mg-sub">
+            Powers AI insights, email/SMS personalization and AI research
+            fields. Active provider: {AI_PROVIDER_LABELS[status.active]} (
+            {status.model}) — your own key is used when set, otherwise the
+            platform's. Keys are stored encrypted and never shown again.
+          </p>
+        </div>
+        {active?.source === "organization" ? (
+          <Badge tone="ok">Your key</Badge>
+        ) : active?.configured ? (
+          <Badge tone="info">Platform key</Badge>
+        ) : (
+          <Badge tone="warn">No key — AI features off</Badge>
+        )}
+      </div>
+      {!isOwner && (
+        <p className="mg-sub">
+          Only the organization owner can add or remove AI provider keys.
+        </p>
+      )}
+      <ul className="mg-ai-provider-list">
+        {status.providers.map((p) => (
+          <li key={p.provider} className="mg-ai-provider-row">
+            <span className="mg-ai-provider-name">
+              {AI_PROVIDER_LABELS[p.provider]}
+              {p.provider === status.active && <Badge tone="info">active</Badge>}
+              {p.source === "organization" ? (
+                <Badge tone="ok">your key</Badge>
+              ) : p.configured ? (
+                <Badge tone="neutral">platform key</Badge>
+              ) : (
+                <Badge tone="neutral">not configured</Badge>
+              )}
+            </span>
+            {isOwner &&
+              (editing === p.provider ? (
+                <form
+                  className="mg-ai-provider-edit"
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    void save();
+                  }}
+                >
+                  <input
+                    type="password"
+                    value={key}
+                    onChange={(e) => setKey(e.target.value)}
+                    placeholder={`${AI_PROVIDER_LABELS[p.provider]} API key`}
+                    aria-label={`${AI_PROVIDER_LABELS[p.provider]} API key`}
+                    autoFocus
+                  />
+                  <Button
+                    type="submit"
+                    size="sm"
+                    busy={busy}
+                    disabled={key.trim().length < 8}
+                  >
+                    Save
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    disabled={busy}
+                    onClick={() => {
+                      setEditing(null);
+                      setKey("");
+                    }}
+                  >
+                    Cancel
+                  </Button>
+                </form>
+              ) : (
+                <div className="mg-ai-provider-actions">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => {
+                      setEditing(p.provider);
+                      setKey("");
+                    }}
+                  >
+                    {p.source === "organization" ? "Replace key" : "Add key"}
+                  </Button>
+                  {p.source === "organization" && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      disabled={busy}
+                      onClick={() => void clear(p.provider)}
+                    >
+                      Remove
+                    </Button>
+                  )}
+                </div>
+              ))}
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }

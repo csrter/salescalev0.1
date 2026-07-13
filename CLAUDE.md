@@ -1058,6 +1058,25 @@ live activation + the entitlement flip, the Outreach module build
       Switch PATCH 200. NOT deployed yet. NOTE: alt2 has no AI key, so
       research/snippet paths verified fail-open; prod needs ANTHROPIC_API_KEY
       (or a BYO provider key) before research fields return values.
+- [x] AI provider key in Integrations (same-day follow-up): the BYO AI keys
+      (anthropic/openai/gemini — endpoints existed since multi-provider AI,
+      no UI did) now have an "AI provider" card on the Integrations page:
+      active provider + model, per-provider status badges (Your key /
+      Platform key / Not configured), and a prominent "No key — AI features
+      off" warning badge when nothing resolves. Key writes are OWNER-ONLY,
+      enforced server-side (_require_owner_for in api/lead_finder.py's
+      shared PUT/DELETE /providers endpoints — lead-data providers stay
+      admin-manageable); non-owner admins see statuses read-only. New GET
+      /api/integrations/ai-provider (require_admin) returns
+      {active, model, providers[]} via ai_provider.active_provider/
+      active_model + integration_creds.key_source. Frontend:
+      AiProviderKeysCard in integrations.tsx (mirrors the Lead Finder
+      provider-row pattern), Integrations gained isOwner prop (App.tsx),
+      .mg-ai-provider-* styles in manage.css. Tests 456 → 459
+      (owner save/status/remove round-trip; admin 403 on all three AI
+      providers but still 200 on google_places). Verified live on alt2:
+      card renders "No Key — AI Features Off", owner Add key → PUT 200 →
+      "Your Key" badges, Remove → back to warning state. NOT deployed yet.
 - [ ] Stripe live activation + entitlement flip (after 12–14, so real
       limits land everywhere in one pass)
 - [ ] Outreach module build (dev-mode) — go-live gated on Meta App

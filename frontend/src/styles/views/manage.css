@@ -287,3 +287,49 @@
   font-size: var(--text-xs);
   margin-right: auto;
 }
+
+/* ---- AI provider keys card (Integrations) ---------------------------------- */
+
+.mg-ai-provider-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.mg-ai-provider-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  padding: var(--space-2) 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.mg-ai-provider-row:last-child {
+  border-bottom: none;
+}
+
+.mg-ai-provider-name {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-sm);
+  color: var(--ink);
+}
+
+.mg-ai-provider-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.mg-ai-provider-edit {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.mg-ai-provider-edit input {
+  min-width: 16rem;
+}

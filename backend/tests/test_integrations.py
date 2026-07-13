@@ -120,3 +120,114 @@ def test_redirect_uris_listed_for_admin(api, team_headers, member_headers):
         api.get("/api/integrations/redirect-uris", headers=member_headers).status_code
         == 403
     )
+
+
+# --- BYO AI-provider keys (Integrations tab, owner-only writes) --------------
+
+
+def _admin_headers(api):
+    """A non-owner ADMIN in the seeded org — enough to reach the provider-key
+    endpoints (require_admin) but not to manage AI keys (owner-only)."""
+    from app.models.core import User
+    from app.models.team import OrganizationMembership
+    from app.security import hash_password
+
+    email = "ai-admin@atlasreach.com"
+    db = SessionLocal()
+    if db.query(User).filter(User.email == email).first() is None:
+        org_id = (
+            db.query(User).filter(User.email == "owner@atlasreach.com").one()
+        ).organization_id
+        admin = User(
+            organization_id=org_id,
+            email=email,
+            hashed_password=hash_password("ai-admin-pass"),
+            full_name="AI Admin",
+            role="admin",
+        )
+        db.add(admin)
+        db.flush()
+        db.add(
+            OrganizationMembership(
+                organization_id=org_id, user_id=admin.id, role="admin"
+            )
+        )
+        db.commit()
+    db.close()
+    resp = api.post(
+        "/api/auth/login", json={"email": email, "password": "ai-admin-pass"}
+    )
+    assert resp.status_code == 200, resp.text
+    return {"Authorization": f"Bearer {resp.json()['access_token']}"}
+
+
+def test_ai_provider_status_lists_all_three(api, team_headers):
+    r = api.get("/api/integrations/ai-provider", headers=team_headers)
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert data["active"] in ("anthropic", "openai", "gemini")
+    assert data["model"]
+    assert {p["provider"] for p in data["providers"]} == {
+        "anthropic",
+        "openai",
+        "gemini",
+    }
+    for p in data["providers"]:
+        assert set(p) == {"provider", "configured", "source"}
+
+
+def test_owner_manages_ai_key_and_status_reflects_it(api, team_headers):
+    r = api.put(
+        "/api/lead-finder/providers/anthropic",
+        headers=team_headers,
+        json={"api_key": "sk-ant-test-abcdef123456"},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["source"] == "organization"
+
+    data = api.get(
+        "/api/integrations/ai-provider", headers=team_headers
+    ).json()
+    anthropic = next(
+        p for p in data["providers"] if p["provider"] == "anthropic"
+    )
+    assert anthropic["configured"] is True
+    assert anthropic["source"] == "organization"
+
+    r = api.delete(
+        "/api/lead-finder/providers/anthropic", headers=team_headers
+    )
+    assert r.status_code == 200
+    assert r.json()["source"] != "organization"
+
+
+def test_ai_keys_are_owner_only_but_lead_keys_stay_admin(api, team_headers):
+    admin = _admin_headers(api)
+
+    # Non-owner admin: AI provider keys refused, server-side.
+    for provider in ("anthropic", "openai", "gemini"):
+        r = api.put(
+            f"/api/lead-finder/providers/{provider}",
+            headers=admin,
+            json={"api_key": "sk-should-be-refused"},
+        )
+        assert r.status_code == 403, (provider, r.text)
+    assert (
+        api.delete("/api/lead-finder/providers/anthropic", headers=admin).status_code
+        == 403
+    )
+
+    # ...but lead-data providers are unchanged (admin-manageable).
+    r = api.put(
+        "/api/lead-finder/providers/google_places",
+        headers=admin,
+        json={"api_key": "places-admin-key-123"},
+    )
+    assert r.status_code == 200, r.text
+    # Clean up so the shared seeded org's key state doesn't leak downstream.
+    assert (
+        api.delete(
+            "/api/lead-finder/providers/google_places", headers=team_headers
+        ).status_code
+        == 200
+    )
