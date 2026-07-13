@@ -91,6 +91,38 @@ if _settings.jwt_secret == "dev-only-secret-change-me":
 # (`GET /path -> 200`), so we don't add a duplicate middleware. Sentry (above)
 # captures exceptions with request context.
 
+_unhandled_log = logging.getLogger("salescale.unhandled")
+
+
+@app.middleware("http")
+async def _catch_unhandled_exceptions(request, call_next):
+    """Any exception a router doesn't handle itself must still come back
+    with a normal, CORS-safe response — never a bare crash. This has to be
+    HTTP middleware registered HERE, BEFORE app.add_middleware(CORSMiddleware,
+    ...) below, not an app.add_exception_handler(Exception, ...) handler:
+    Starlette special-cases a handler keyed on the base Exception class into
+    ServerErrorMiddleware, which wraps OUTSIDE every user middleware
+    including CORSMiddleware — so a response built there never flows back
+    through CORS and the browser reports an opaque network/CORS error
+    instead of showing the real 500 (confirmed live: exactly this, on CSV
+    import — the FastAPI-level fix alone did not resolve it). Middleware
+    registered before CORSMiddleware ends up wrapped BY it instead, so a
+    response built here still gets Access-Control-Allow-Origin attached
+    normally on the way out."""
+    try:
+        return await call_next(request)
+    except Exception:
+        from fastapi.responses import JSONResponse
+
+        _unhandled_log.exception(
+            "Unhandled exception in %s %s", request.method, request.url.path
+        )
+        return JSONResponse(
+            {"detail": "An unexpected error occurred. Please try again."},
+            status_code=500,
+        )
+
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"] if _settings.desktop_mode else _settings.frontend_origins(),
@@ -184,29 +216,13 @@ def _platform_error_handler(request, exc):
 for _exc_type in _PLATFORM_ERROR_LABELS:
     app.add_exception_handler(_exc_type, _platform_error_handler)
 
-
-# Catch-all for any OTHER unhandled exception escaping a router — the three
-# platform types above only covered ad-platform reads; a bug anywhere else
-# (CSV import, a service call with no try/except, a DB constraint violation)
-# reproduces the identical bare-500-bypasses-CORS symptom, just uncovered.
-# Logged at ERROR with the full traceback for ops visibility (the platform
-# handler above only logs the short vendor message); the client only ever
-# gets a generic message — never the raw exception text, which could leak
-# internals for an arbitrary/unexpected error type.
-_log = logging.getLogger("salescale.unhandled")
-
-
-def _unhandled_error_handler(request, exc):
-    from fastapi.responses import JSONResponse
-
-    _log.exception("Unhandled exception in %s %s", request.method, request.url.path)
-    return JSONResponse(
-        {"detail": "An unexpected error occurred. Please try again."},
-        status_code=500,
-    )
-
-
-app.add_exception_handler(Exception, _unhandled_error_handler)
+# The generic catch-all for anything else lives as HTTP middleware near the
+# top of this file (_catch_unhandled_exceptions, registered before
+# CORSMiddleware) — NOT as app.add_exception_handler(Exception, ...). See
+# that middleware's docstring: Starlette routes an Exception-keyed handler
+# to ServerErrorMiddleware, which sits outside all user middleware including
+# CORS, so a handler registered that way never actually produces a
+# CORS-safe response — confirmed live, it's the bug this whole fix targets.
 
 
 @app.get("/api/health")

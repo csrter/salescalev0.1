@@ -1376,39 +1376,55 @@ live activation + the entitlement flip, the Outreach module build
       test). Tests 490 → 491. DEPLOYED — config/code only, no migration.
       Email's {{city}} was never AI-dependent (always a plain field lookup)
       so this only affects SMS.
-- [x] Generic unhandled-exception catch-all (2026-07-13, same-day
-      follow-up): user hit "NetworkError when attempting to fetch resource"
-      on CSV CRM import — the exact symptom this codebase already diagnosed
-      once (bare 500s emitted outside CORSMiddleware read by browsers as an
-      opaque NetworkError), but that prior fix (main.py) only special-cased
-      three specific platform-API exception types (Google/Meta/PlacesError)
-      for the live-refresh paths, leaving every OTHER router with the same
-      unguarded exposure. api/crm.py's CSV import loop specifically has
-      several unguarded calls (get_or_create_company, sms_consent.
-      record_opt_in/apply_org_default, the Contact(...) construction) whose
-      exceptions would escape uncaught — only the custom_fields_svc call has
-      a try/except (CustomFieldError only). Fix: a generic
-      app.add_exception_handler(Exception, ...) catch-all registered the
-      same way as the platform-specific ones (confirmed via Starlette's
-      exception-MRO resolution + the full test suite that this does NOT
-      shadow HTTPException/RequestValidationError's own specific handlers —
-      422s/404s/etc. all still resolve normally); logs the full traceback at
-      ERROR for ops visibility, returns a generic safe 500 message to the
-      client (never the raw exception text). Test added
-      (test_platform_error_surfacing.py) reproducing the actual CSV-import
-      crash via a monkeypatched get_or_create_company raising a plain
-      RuntimeError — needed a LOCAL TestClient(raise_server_exceptions=
-      False) since the shared `api` fixture's default (True) makes
-      Starlette re-raise in the test process even when a registered handler
-      already sent the correct ASGI response, which would otherwise make
-      this exact class of fix untestable via the shared fixture. Tests
-      491 → 492. DEPLOYED — code only, no migration. NOTE: this is a safety
-      net (any future bug anywhere now degrades to a readable 500 instead of
-      an opaque crash) — it does not by itself add per-row exception
-      containment inside the CSV import loop itself (a bad row still 500s
-      the whole request rather than landing in the per-row `failed` list,
-      the way CustomFieldError already does); worth hardening if this
-      recurs with a specific reproducible row.
+- [x] Generic unhandled-exception catch-all, CORRECTLY this time (2026-07-13,
+      same-day, two-pass): user hit "NetworkError when attempting to fetch
+      resource" on CSV CRM import — the symptom this codebase already
+      diagnosed once (bare 500s emitted outside CORSMiddleware read by
+      browsers as an opaque NetworkError), but that prior fix only
+      special-cased three platform-API exception types (Google/Meta/
+      PlacesError) for live-refresh paths, leaving every other router (incl.
+      CSV import's loop — several unguarded calls: get_or_create_company,
+      sms_consent.record_opt_in/apply_org_default, the Contact(...)
+      construction; only custom_fields_svc has a try/except, CustomFieldError
+      only) exposed to the same gap.
+      FIRST PASS (wrong, corrected same day): added
+      app.add_exception_handler(Exception, ...) mirroring the platform-error
+      pattern. Passed a dedicated test AND manual verification — but the
+      user reported the identical browser error afterward. ROOT CAUSE OF THE
+      MISS: Starlette's Starlette.build_middleware_stack() specifically
+      special-cases a handler keyed on the base Exception class (or the
+      literal int 500) into ServerErrorMiddleware, which wraps OUTSIDE every
+      user middleware including CORSMiddleware — so that handler's response
+      NEVER passes back through CORS and never gets Access-Control-Allow-
+      Origin, regardless of what the handler returns. The platform-specific
+      handlers work because they're keyed on SPECIFIC exception types, which
+      Starlette instead routes through ExceptionMiddleware — INSIDE
+      CORSMiddleware. Confirmed live via the browser console:
+      "Cross-Origin Request Blocked ... Access-Control-Allow-Origin missing.
+      Status code: 500" — proving the handler DID run (produced a 500) but
+      the response was CORS-less. The first-pass test didn't catch this
+      because Starlette's TestClient doesn't enforce or simulate CORS at
+      all — it only checks status/body, which were both already correct.
+      CORRECT FIX: real HTTP middleware (@app.middleware("http")), registered
+      in main.py BEFORE app.add_middleware(CORSMiddleware, ...) so it ends up
+      wrapped BY CORS instead of wrapping ServerErrorMiddleware around it —
+      catches everything in a try/except around call_next(request), logs
+      the full traceback at ERROR, returns the same generic safe 500 (never
+      raw exception text). The old add_exception_handler(Exception, ...)
+      registration was removed (redundant — provided no real CORS benefit
+      even as a fallback). Tests corrected to actually assert
+      access-control-allow-origin is present on the response (with a real
+      Origin header on the request, mimicking a browser) — added to BOTH the
+      new middleware's test AND retrofitted onto the existing platform-error
+      test, confirming that pre-existing mechanism was always correct.
+      Tests 492 (unchanged count — existing tests strengthened, not added).
+      DEPLOYED — code only, no migration. Lesson for next time: a test that
+      only checks status code + body cannot catch a CORS-header regression;
+      TestClient must be given a real Origin header and the response
+      header itself asserted. NOTE: still a safety net only — a bad CSV row
+      still 500s the whole import request rather than landing in the
+      per-row `failed` list the way CustomFieldError already does; worth
+      hardening if a specific reproducible bad row recurs.
 - [ ] Stripe live activation + entitlement flip (after 12–14, so real
       limits land everywhere in one pass)
 - [ ] Outreach module build (dev-mode) — go-live gated on Meta App

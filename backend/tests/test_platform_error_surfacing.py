@@ -16,11 +16,15 @@ def test_live_refresh_platform_error_becomes_502(api, team_headers, seeded, monk
     monkeypatch.setattr(meta_api, "fetch_campaigns", boom)
     resp = api.get(
         f"/api/ad-accounts/{seeded['acct_a']}/campaigns?refresh=true",
-        headers=team_headers,
+        headers={**team_headers, "Origin": "http://localhost:5173"},
     )
     assert resp.status_code == 502
     detail = resp.json()["detail"]
     assert "Meta API error" in detail and "Graph API timed out" in detail
+    # this handler is registered for the specific MetaApiError type (not the
+    # base Exception class), so Starlette routes it through ExceptionMiddleware
+    # — inside CORSMiddleware — and the header is correctly present.
+    assert resp.headers.get("access-control-allow-origin") == "http://localhost:5173"
 
 
 def test_cached_read_unaffected_by_platform_error(
@@ -37,7 +41,7 @@ def test_cached_read_unaffected_by_platform_error(
     assert resp.status_code == 200
 
 
-def test_arbitrary_unhandled_exception_becomes_readable_500(
+def test_arbitrary_unhandled_exception_becomes_readable_500_with_cors(
     team_headers, seeded, monkeypatch
 ):
     """The three platform-error types above are only special-cased —
@@ -46,6 +50,19 @@ def test_arbitrary_unhandled_exception_becomes_readable_500(
     normal, CORS-safe 500, not a bare crash the browser reports as an opaque
     NetworkError. Reproduces the actual CSV-import symptom: an unguarded
     service call (get_or_create_company) throwing mid-row.
+
+    Critically asserts the Access-Control-Allow-Origin header is actually
+    present (with an Origin header on the request, mimicking a real
+    cross-origin browser call) — an EARLIER version of this fix used
+    app.add_exception_handler(Exception, ...), which produced a status-500/
+    correct-body response that this exact test happily passed, while still
+    being genuinely broken in the browser: Starlette special-cases a handler
+    keyed on the base Exception class into ServerErrorMiddleware, which sits
+    OUTSIDE CORSMiddleware, so that response never got CORS headers at all.
+    TestClient doesn't enforce/simulate CORS the way a real browser does, so
+    a test that only checks status/body — like the original version of this
+    test — cannot catch that class of regression; asserting the header
+    itself is the only way to.
 
     Uses a local TestClient with raise_server_exceptions=False — the shared
     `api` fixture defaults to True (Starlette re-raises in the TEST process
@@ -65,9 +82,12 @@ def test_arbitrary_unhandled_exception_becomes_readable_500(
                 "mapping": {"Name": "full_name", "Email": "email", "Org": "company"},
                 "rows": [{"Name": "Jane Doe", "Email": "jane@example.com", "Org": "Acme"}],
             },
-            headers=team_headers,
+            headers={**team_headers, "Origin": "http://localhost:5173"},
         )
     assert resp.status_code == 500
     assert resp.json()["detail"] == "An unexpected error occurred. Please try again."
     # never leaks the raw exception text to the client
     assert "unexpected failure unrelated" not in resp.text
+    # the actual bug: this header must be present, or the browser blocks the
+    # response entirely and reports an opaque CORS/network error instead
+    assert resp.headers.get("access-control-allow-origin") == "http://localhost:5173"
