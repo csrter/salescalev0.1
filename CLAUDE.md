@@ -1202,7 +1202,8 @@ live activation + the entitlement flip, the Outreach module build
       Apollo key, site discovery, verification) previously ran ONLY at
       import time, so the 80 Atlas Reach leads imported before the Apollo
       key was connected had no owner/mobile data and no way to get it.
-      Fill-blanks-only as always. Tests 467 → 468.
+      Fill-blanks-only as always. Tests 467 → 468. DEPLOYED to production
+      (2026-07-13 UTC, c7762b2): health green, endpoint live + auth-gated.
 - [ ] Stripe live activation + entitlement flip (after 12–14, so real
       limits land everywhere in one pass)
 - [ ] Outreach module build (dev-mode) — go-live gated on Meta App
