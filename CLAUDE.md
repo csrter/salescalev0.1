@@ -1376,6 +1376,39 @@ live activation + the entitlement flip, the Outreach module build
       test). Tests 490 → 491. DEPLOYED — config/code only, no migration.
       Email's {{city}} was never AI-dependent (always a plain field lookup)
       so this only affects SMS.
+- [x] Generic unhandled-exception catch-all (2026-07-13, same-day
+      follow-up): user hit "NetworkError when attempting to fetch resource"
+      on CSV CRM import — the exact symptom this codebase already diagnosed
+      once (bare 500s emitted outside CORSMiddleware read by browsers as an
+      opaque NetworkError), but that prior fix (main.py) only special-cased
+      three specific platform-API exception types (Google/Meta/PlacesError)
+      for the live-refresh paths, leaving every OTHER router with the same
+      unguarded exposure. api/crm.py's CSV import loop specifically has
+      several unguarded calls (get_or_create_company, sms_consent.
+      record_opt_in/apply_org_default, the Contact(...) construction) whose
+      exceptions would escape uncaught — only the custom_fields_svc call has
+      a try/except (CustomFieldError only). Fix: a generic
+      app.add_exception_handler(Exception, ...) catch-all registered the
+      same way as the platform-specific ones (confirmed via Starlette's
+      exception-MRO resolution + the full test suite that this does NOT
+      shadow HTTPException/RequestValidationError's own specific handlers —
+      422s/404s/etc. all still resolve normally); logs the full traceback at
+      ERROR for ops visibility, returns a generic safe 500 message to the
+      client (never the raw exception text). Test added
+      (test_platform_error_surfacing.py) reproducing the actual CSV-import
+      crash via a monkeypatched get_or_create_company raising a plain
+      RuntimeError — needed a LOCAL TestClient(raise_server_exceptions=
+      False) since the shared `api` fixture's default (True) makes
+      Starlette re-raise in the test process even when a registered handler
+      already sent the correct ASGI response, which would otherwise make
+      this exact class of fix untestable via the shared fixture. Tests
+      491 → 492. DEPLOYED — code only, no migration. NOTE: this is a safety
+      net (any future bug anywhere now degrades to a readable 500 instead of
+      an opaque crash) — it does not by itself add per-row exception
+      containment inside the CSV import loop itself (a bad row still 500s
+      the whole request rather than landing in the per-row `failed` list,
+      the way CustomFieldError already does); worth hardening if this
+      recurs with a specific reproducible row.
 - [ ] Stripe live activation + entitlement flip (after 12–14, so real
       limits land everywhere in one pass)
 - [ ] Outreach module build (dev-mode) — go-live gated on Meta App

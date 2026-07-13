@@ -185,6 +185,30 @@ for _exc_type in _PLATFORM_ERROR_LABELS:
     app.add_exception_handler(_exc_type, _platform_error_handler)
 
 
+# Catch-all for any OTHER unhandled exception escaping a router — the three
+# platform types above only covered ad-platform reads; a bug anywhere else
+# (CSV import, a service call with no try/except, a DB constraint violation)
+# reproduces the identical bare-500-bypasses-CORS symptom, just uncovered.
+# Logged at ERROR with the full traceback for ops visibility (the platform
+# handler above only logs the short vendor message); the client only ever
+# gets a generic message — never the raw exception text, which could leak
+# internals for an arbitrary/unexpected error type.
+_log = logging.getLogger("salescale.unhandled")
+
+
+def _unhandled_error_handler(request, exc):
+    from fastapi.responses import JSONResponse
+
+    _log.exception("Unhandled exception in %s %s", request.method, request.url.path)
+    return JSONResponse(
+        {"detail": "An unexpected error occurred. Please try again."},
+        status_code=500,
+    )
+
+
+app.add_exception_handler(Exception, _unhandled_error_handler)
+
+
 @app.get("/api/health")
 def health():
     return {"ok": True}
