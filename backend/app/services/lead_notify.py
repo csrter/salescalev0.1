@@ -30,6 +30,7 @@ from sqlalchemy.orm import Session
 from ..models.core import Client, Organization
 from ..models.crm import Contact
 from ..models.sms_outreach import SMS_ACCOUNT_ACTIVE, SmsAccount
+from . import custom_fields as custom_fields_svc
 from . import sms_send
 
 _PROVIDER_BLUEBUBBLES = "bluebubbles"
@@ -54,14 +55,23 @@ DEFAULT_TEMPLATE = (
 KNOWN_TOKENS = frozenset(
     {"name", "first_name", "last_name", "phone", "email", "brand", "zip", "source"}
 )
-_TOKEN_RE = re.compile(r"\{\{\s*([a-zA-Z_]+)\s*\}\}")
+# {{custom.<key>}} references one of the org's own custom fields (Phase 14) —
+# e.g. a "Brand" select field for an org whose {{brand}} (client name) isn't
+# what they mean by "Brand". Auto-populated from a landing-page webhook field
+# of the same name (api/lead_webhooks.py _match_custom_fields) when defined.
+_CUSTOM_PREFIX = "custom."
+_TOKEN_RE = re.compile(r"\{\{\s*([a-zA-Z_][a-zA-Z0-9_.]*)\s*\}\}")
 
 
 def unknown_tokens(template: str) -> list:
-    """Tokens in `template` not in KNOWN_TOKENS, for the save-time 422 —
-    mirrors the SMS/email step-editor's unknown-token validation."""
+    """Tokens in `template` not in KNOWN_TOKENS and not a custom.* reference,
+    for the save-time 422 — mirrors the SMS/email step-editor's own
+    unknown-token validation. custom.* is never flagged unknown regardless of
+    whether that key currently exists — custom fields are added/renamed
+    independently of the template."""
     found = {m.group(1) for m in _TOKEN_RE.finditer(template)}
-    return sorted(found - KNOWN_TOKENS)
+    bad = {t for t in found if t not in KNOWN_TOKENS and not t.startswith(_CUSTOM_PREFIX)}
+    return sorted(bad)
 
 
 def _template_tokens(client: Client, contact: Contact) -> dict:
@@ -78,13 +88,54 @@ def _template_tokens(client: Client, contact: Contact) -> dict:
     }
 
 
+def _custom_option_labels(db, organization_id: str) -> dict:
+    """def.key -> {option_key: option_label} for every select/multi_select
+    custom field in the org, so {{custom.<key>}} shows the human label
+    ("Glacier") rather than the stored option key ("glacier")."""
+    defs = custom_fields_svc.list_definitions(
+        db, organization_id, "contact", include_archived=True
+    )
+    return {
+        d.key: {o["key"]: o["label"] for o in (d.options or [])}
+        for d in defs
+        if d.field_type in ("select", "multi_select")
+    }
+
+
+def _display_custom_value(value, option_labels: Optional[dict]) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, list):
+        labels = [
+            (option_labels or {}).get(v, str(v)) if option_labels else str(v)
+            for v in value
+        ]
+        return ", ".join(labels)
+    if option_labels:
+        return option_labels.get(value, str(value))
+    return str(value)
+
+
 def render_notification_body(
-    template: Optional[str], client: Client, contact: Contact
+    db, template: Optional[str], client: Client, contact: Contact
 ) -> str:
     tokens = _template_tokens(client, contact)
-    body = _TOKEN_RE.sub(
-        lambda m: str(tokens.get(m.group(1), "")), template or DEFAULT_TEMPLATE
-    )
+    custom_values = contact.custom_fields or {}
+    option_labels: Optional[dict] = None
+    loaded = False
+
+    def _sub(m):
+        nonlocal option_labels, loaded
+        name = m.group(1)
+        if name.startswith(_CUSTOM_PREFIX):
+            key = name[len(_CUSTOM_PREFIX):]
+            if not loaded:
+                option_labels = _custom_option_labels(db, client.organization_id)
+                loaded = True
+            return _display_custom_value(custom_values.get(key), option_labels.get(key))
+        return str(tokens.get(name, ""))
+
+    body = _TOKEN_RE.sub(_sub, template or DEFAULT_TEMPLATE)
     return body[:_MAX_BODY_LEN]
 
 
@@ -141,7 +192,7 @@ def notify_new_lead(db: Session, client: Client, contact: Contact) -> None:
                 client.organization_id,
             )
             return
-        body = render_notification_body(org.lead_notification_template, client, contact)
+        body = render_notification_body(db, org.lead_notification_template, client, contact)
         for phone in phones:
             result, _row = sms_send.send_notification(db, account, phone, body)
             if result != sms_send.SENT:

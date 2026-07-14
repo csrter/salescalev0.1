@@ -400,6 +400,81 @@ def test_landing_page_webhook_generate_toggle_and_ingest(api, team_headers, crm_
     assert resp.status_code == 200
 
 
+def test_generic_webhook_captures_matching_custom_field_for_notification(
+    api, team_headers, crm_client
+):
+    """A form field matching one of the org's own custom-field labels (here
+    "Brand", a select field) is captured onto the contact in addition to
+    source_detail, and the lead-notification template's {{custom.<key>}}
+    renders the human option LABEL ("Glacier"), not the stored option key
+    ("glacier")."""
+    resp = api.post(
+        "/api/crm/custom-fields",
+        json={
+            "label": "Brand",
+            "field_type": "select",
+            "options": [
+                {"label": "Glacier"},
+                {"label": "Artesian"},
+                {"label": "Signature"},
+                {"label": "Viking"},
+            ],
+        },
+        headers=team_headers,
+    )
+    assert resp.status_code == 201, resp.text
+    field_key = resp.json()["key"]
+    assert field_key == "brand"
+
+    resp = api.post(
+        f"/api/clients/{crm_client}/lead-forms/landing-page/rotate",
+        headers=team_headers,
+    )
+    assert resp.status_code == 200, resp.text
+    key = resp.json()["external_key"]
+    url = f"/api/webhooks/landing-form/{crm_client}/{key}"
+
+    # Value casing from the form ("glacier") doesn't match the option's
+    # stored key exactly — matched case-insensitively.
+    resp = api.post(
+        url,
+        json={
+            "Full Name": "Brandy Buyer",
+            "Email": "brandy@example.com",
+            "Brand": "glacier",
+        },
+    )
+    assert resp.status_code == 200, resp.text
+
+    contacts = _contacts(api, team_headers, crm_client)
+    lead = next(c for c in contacts if c["email"] == "brandy@example.com")
+    assert lead["custom_fields"]["brand"] == "glacier"
+    # source_detail still keeps the raw snapshot regardless (harmless
+    # duplication — it's an audit trail, not a data-loss risk).
+    assert lead["source_detail"]["Brand"] == "glacier"
+
+    db = SessionLocal()
+    try:
+        from app.models.core import Client, Organization
+        from app.models.crm import Contact
+        from app.services import lead_notify
+
+        contact = db.get(Contact, lead["id"])
+        client_obj = db.get(Client, crm_client)
+        org = db.get(Organization, client_obj.organization_id)
+        body = lead_notify.render_notification_body(
+            db, "Brand: {{custom.brand}}", client_obj, contact
+        )
+        assert body == "Brand: Glacier"
+        # An org's own default/org-set template (unset here) still works
+        # fine even though it references no custom.* tokens.
+        assert lead_notify.render_notification_body(
+            db, org.lead_notification_template, client_obj, contact
+        ).startswith("*NEW LEAD*")
+    finally:
+        db.close()
+
+
 # --- lead ingestion: landing-page path updates instead of duplicating ---
 
 

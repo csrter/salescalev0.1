@@ -1738,7 +1738,7 @@ def test_render_notification_body_default_and_custom_template():
         zip="85001",
         source="landing_page_webhook",
     )
-    assert lead_notify.render_notification_body(None, client, contact) == (
+    assert lead_notify.render_notification_body(None, None, client, contact) == (
         "*NEW LEAD*\n"
         "Name: Jane Doe\n"
         "Phone: 4805551234\n"
@@ -1747,13 +1747,13 @@ def test_render_notification_body_default_and_custom_template():
         "Zip Code: 85001"
     )
     custom = lead_notify.render_notification_body(
-        "{{first_name}} for {{brand}} via {{source}}", client, contact
+        None, "{{first_name}} for {{brand}} via {{source}}", client, contact
     )
     assert custom == "Jane for Acme HVAC via landing page webhook"
 
     # Missing values render blank, never "None".
     bare = Contact(id="ct2", organization_id="o1", client_id="c1")
-    assert lead_notify.render_notification_body(None, client, bare) == (
+    assert lead_notify.render_notification_body(None, None, client, bare) == (
         "*NEW LEAD*\nName: New lead\nPhone: \nBrand: Acme HVAC\nEmail: \nZip Code: "
     )
 

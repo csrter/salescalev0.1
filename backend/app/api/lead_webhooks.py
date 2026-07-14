@@ -32,6 +32,7 @@ from ..models.core import CONN_ACTIVE, Client, PlatformConnection
 from ..models.crm import Activity, LeadFormConfig
 from ..services import connections as conn_svc
 from ..services import crm as crm_svc
+from ..services import custom_fields as custom_fields_svc
 from ..ratelimit import rate_limit
 from ..services import integration_creds, lead_ingest, lead_notify, meta_leadgen
 from ..services.external_sync import push_contact_update
@@ -400,6 +401,48 @@ def _map_landing_form_fields(raw: dict) -> dict:
     return mapped
 
 
+def _resolve_custom_value_ci(definition, raw: str):
+    """Case-insensitive option resolution for select/multi_select — a landing
+    form sends whatever casing its own field uses ("glacier" vs "Glacier"),
+    but coerce_value's own matching is exact-string. Other field types pass
+    through unresolved for coerce_value to handle as usual."""
+    if definition.field_type not in ("select", "multi_select"):
+        return raw
+    by_norm = {}
+    for o in definition.options or []:
+        by_norm[_lf_key(o["key"])] = o["key"]
+        by_norm[_lf_key(o["label"])] = o["key"]
+    if definition.field_type == "select":
+        return by_norm.get(_lf_key(raw), raw)
+    parts = [p.strip() for p in raw.split(",") if p.strip()]
+    return [by_norm.get(_lf_key(p), p) for p in parts]
+
+
+def _match_custom_fields(db: Session, organization_id: str, extra: dict) -> dict:
+    """Any unmapped form field whose normalized name matches one of the org's
+    own custom-field labels or keys (e.g. "Brand" -> a "Brand" select field)
+    is ALSO captured there, in addition to landing in source_detail audit as
+    usual (harmless duplication — source_detail is a raw-payload snapshot
+    either way). Returns {def.key: raw_value} for services/custom_fields.
+    validate_and_merge; an org that hasn't defined the field just gets none
+    back, and a value that doesn't match one of the field's options fails
+    open at the call site (never blocks lead capture)."""
+    if not extra:
+        return {}
+    defs = custom_fields_svc.list_definitions(db, organization_id, "contact")
+    by_norm = {}
+    for d in defs:
+        by_norm[_lf_key(d.label)] = d
+        by_norm[_lf_key(d.key)] = d
+    custom_incoming: dict = {}
+    for raw_key, value in extra.items():
+        definition = by_norm.get(_lf_key(raw_key))
+        if definition is None:
+            continue
+        custom_incoming[definition.key] = _resolve_custom_value_ci(definition, value)
+    return custom_incoming
+
+
 @router.post("/landing-form/{client_id}/{key}")
 async def landing_form_webhook(
     client_id: str,
@@ -442,6 +485,7 @@ async def landing_form_webhook(
         raise HTTPException(
             400, "No recognized email or phone field in the submitted data"
         )
+    custom_incoming = _match_custom_fields(db, client.organization_id, fields["extra"])
 
     contact, created = lead_ingest.upsert_contact(
         db,
@@ -453,6 +497,16 @@ async def landing_form_webhook(
         source="landing_page_webhook",
         source_detail=fields["extra"] or None,
     )
+    if custom_incoming:
+        try:
+            custom_fields_svc.validate_and_merge(
+                db, client.organization_id, contact, custom_incoming, enforce_required=False
+            )
+        except custom_fields_svc.CustomFieldError:
+            # A value that doesn't match the field's options (or any other
+            # coercion failure) must never block lead capture — the raw text
+            # is still preserved in source_detail regardless.
+            pass
     for attr in ("city", "state", "job_title", "zip"):
         if getattr(contact, attr) is None and fields.get(attr):
             setattr(contact, attr, fields[attr])
