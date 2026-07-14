@@ -1520,6 +1520,26 @@ live activation + the entitlement flip, the Outreach module build
       connected first (_twilio_send wired to explode if mis-dispatched).
       Tests 498 → 499. DEPLOYED to production (2026-07-13, migration
       b8e2f4a916c7 applied cleanly on the live Supabase DB).
+- [x] Per-client lead SMS notifications (2026-07-13, same-day follow-up):
+      the agency's own ops alert (above) is org-wide; this adds a per-client
+      counterpart so a client's own contact (e.g. the business owner) can
+      ALSO get texted when one of THEIR leads arrives. No new columns —
+      mirrors the existing external_sync convention exactly: stored in
+      client.metric_settings["lead_notifications"] ({"enabled", "phones"}),
+      admin-managed via GET/PUT /api/clients/{id}/lead-notifications (same
+      normalize/dedupe/cap-10 validation as the org-level endpoint). services/
+      lead_notify._recipient_phones combines both sources — org-wide numbers
+      (if org.notify_new_leads) + this client's numbers (if its own toggle is
+      on) — deduped, so a number configured in both places is texted once;
+      either source alone is sufficient to fire, neither is required for the
+      other to work. Frontend: ClientLeadNotifications card in the client's
+      CRM setup panel (frontend/src/crm.tsx), next to LeadFormRouting —
+      same Switch + add/remove phone-row UI as the org-level SMS-dashboard
+      card. Tests 499 → 501 (settings roundtrip + validation, and org+client
+      combining with a deduped overlapping number). Verified live on alt2:
+      saved a client-level number through the real CRM-setup UI, confirmed
+      via the API. DEPLOYED to production (2026-07-13) — no migration
+      (metric_settings already existed on clients).
 - [ ] Stripe live activation + entitlement flip (after 12–14, so real
       limits land everywhere in one pass)
 - [ ] Outreach module build (dev-mode) — go-live gated on Meta App

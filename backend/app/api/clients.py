@@ -10,9 +10,10 @@ from ..deps import TenantScope, get_scope, require_admin
 from ..models.core import Client, Organization, PlatformConnection, User
 from ..models.crm import LeadFormConfig
 from ..pagination import Page, paginator
-from ..services import entitlements, external_sync
+from ..services import entitlements, external_sync, sms_consent
 from ..schemas import (
     ClientCreate,
+    ClientLeadNotificationsIn,
     ClientOutPublic,
     ClientOutTeam,
     ConnectionOut,
@@ -345,6 +346,59 @@ def clear_external_sync(
     settings.pop("external_sync", None)
     client.metric_settings = settings
     db.commit()
+
+
+_MAX_CLIENT_NOTIFICATION_PHONES = 10
+
+
+# --- per-client lead SMS notifications (admin, opt-in) — the client's own
+# contacts (e.g. the business owner), alongside the org-wide ops numbers set
+# in Settings; see services/lead_notify.py for how the two combine. ---
+
+
+@router.get("/{client_id}/lead-notifications")
+def get_client_lead_notifications(
+    client_id: str,
+    user: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    client = db.get(Client, client_id)
+    if client is None or client.organization_id != user.organization_id:
+        raise HTTPException(404, "Not found")
+    config = (client.metric_settings or {}).get("lead_notifications") or {}
+    return {
+        "enabled": bool(config.get("enabled")),
+        "phones": config.get("phones") or [],
+    }
+
+
+@router.put("/{client_id}/lead-notifications")
+def set_client_lead_notifications(
+    client_id: str,
+    body: ClientLeadNotificationsIn,
+    user: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    client = db.get(Client, client_id)
+    if client is None or client.organization_id != user.organization_id:
+        raise HTTPException(404, "Not found")
+    phones: List[str] = []
+    for raw in body.phones:
+        normalized = sms_consent.normalize_phone(raw)
+        if not normalized:
+            raise HTTPException(422, f"Could not parse phone number: {raw!r}")
+        if normalized not in phones:
+            phones.append(normalized)
+    if len(phones) > _MAX_CLIENT_NOTIFICATION_PHONES:
+        raise HTTPException(
+            400, f"Up to {_MAX_CLIENT_NOTIFICATION_PHONES} notification numbers"
+        )
+    client.metric_settings = {
+        **(client.metric_settings or {}),
+        "lead_notifications": {"enabled": body.enabled, "phones": phones},
+    }
+    db.commit()
+    return {"enabled": body.enabled, "phones": phones}
 
 
 @router.get("/{client_id}/connections", response_model=List[ConnectionOut])

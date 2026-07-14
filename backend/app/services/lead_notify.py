@@ -1,11 +1,14 @@
 """Text-the-team alert on a new lead — reuses the SMS Outreach module's
 connected account and provider transport (services/sms_send.py) rather than
-building new send infrastructure. This is NOT lead outreach: the recipient
-is an ops phone number the org itself configured (Organization.
-lead_notification_phones), never a CRM Contact, so it goes through
+building new send infrastructure. This is NOT lead outreach: recipients are
+ops phone numbers configured directly (Organization.lead_notification_phones
+for the agency's own team; client.metric_settings["lead_notifications"] for
+the client's own contact, e.g. the business owner — mirrors the external_sync
+per-client-config convention), never a CRM Contact, so it goes through
 sms_send.send_notification — which deliberately skips the TCPA consent gate
 built for texting prospects — and logs to the same ledger with
-kind="notification", contact_id=None.
+kind="notification", contact_id=None. Both sources are independent opt-ins
+and simply combine (deduped) when both are configured.
 
 Account choice (no per-purpose "default account" concept exists in the SMS
 module yet): prefers the org's BlueBubbles account (a real iMessage from a
@@ -50,6 +53,20 @@ def _notification_body(client: Client, contact: Contact) -> str:
     return " · ".join(parts)[:_MAX_BODY_LEN]
 
 
+def _recipient_phones(org: Organization, client: Client) -> list:
+    phones: list = []
+    if org.notify_new_leads:
+        for p in org.lead_notification_phones or []:
+            if p not in phones:
+                phones.append(p)
+    client_config = (client.metric_settings or {}).get("lead_notifications") or {}
+    if client_config.get("enabled"):
+        for p in client_config.get("phones") or []:
+            if p not in phones:
+                phones.append(p)
+    return phones
+
+
 def notify_new_lead(db: Session, client: Client, contact: Contact) -> None:
     """Best-effort side effect of lead creation — never commits or rolls back
     the session itself (the caller's own commit, right after this returns,
@@ -58,9 +75,9 @@ def notify_new_lead(db: Session, client: Client, contact: Contact) -> None:
     Twilio outage must not cost the lead that was just successfully created."""
     try:
         org = db.get(Organization, client.organization_id)
-        if org is None or not org.notify_new_leads:
+        if org is None:
             return
-        phones = org.lead_notification_phones or []
+        phones = _recipient_phones(org, client)
         if not phones:
             return
         account = db.execute(

@@ -1462,6 +1462,16 @@ class OrgLeadNotificationsIn(BaseModel):
     phones: List[str] = Field(default_factory=list)
 
 
+class ClientLeadNotificationsIn(BaseModel):
+    """Per-client counterpart — e.g. the client's own business owner, texted
+    alongside (or instead of) the agency's own ops numbers. Same shape and
+    validation as OrgLeadNotificationsIn, stored in
+    client.metric_settings["lead_notifications"] (mirrors external_sync)."""
+
+    enabled: bool
+    phones: List[str] = Field(default_factory=list)
+
+
 # --- SMS campaigns (campaign engine) ---------------------------------------
 
 

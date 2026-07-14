@@ -33,6 +33,8 @@ import {
   createContactList,
   deleteContact,
   deleteContactList,
+  getClientLeadNotifications,
+  setClientLeadNotifications,
   listContactLists,
   listResearchFields,
   renameContactList,
@@ -3037,6 +3039,7 @@ function SetupPanel({
       <FieldManager onChanged={onFieldsChanged} />
       <ResearchFieldManager />
       <LeadFormRouting clientId={clientId} />
+      <ClientLeadNotifications clientId={clientId} />
       <ExternalSyncConfig clientId={clientId} />
     </div>
   );
@@ -3396,6 +3399,103 @@ function LeadFormRouting({ clientId }: { clientId: string }) {
           <Button size="sm" busy={landingBusy} onClick={rotateLandingWebhook}>
             Generate webhook URL
           </Button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Per-client counterpart to the org-wide "text the team" setting (SMS
+ * module dashboard) — e.g. the client's own business owner, texted
+ * alongside the agency's own ops numbers when a lead for THIS client
+ * arrives. Admin-only; needs an SMS account connected org-wide to send. */
+function ClientLeadNotifications({ clientId }: { clientId: string }) {
+  const toast = useToast();
+  const [enabled, setEnabled] = useState<boolean | null>(null);
+  const [phones, setPhones] = useState<string[]>([]);
+  const [busy, setBusy] = useState(false);
+
+  const load = useCallback(() => {
+    getClientLeadNotifications(clientId)
+      .then((c) => {
+        setEnabled(c.enabled);
+        setPhones(c.phones.length > 0 ? c.phones : [""]);
+      })
+      .catch(() => {});
+  }, [clientId]);
+  useEffect(load, [load]);
+
+  const save = (next: { enabled: boolean; phones: string[] }) => {
+    setBusy(true);
+    setClientLeadNotifications(clientId, {
+      enabled: next.enabled,
+      phones: next.phones.map((p) => p.trim()).filter(Boolean),
+    })
+      .then((saved) => {
+        setEnabled(saved.enabled);
+        setPhones(saved.phones.length > 0 ? saved.phones : [""]);
+        toast("Saved", "ok");
+      })
+      .catch((e) => toast((e as Error).message, "error"))
+      .finally(() => setBusy(false));
+  };
+
+  if (enabled == null) return null;
+
+  return (
+    <div className="crm-setup-block">
+      <h5 className="crm-subhead crm-subhead--sm">Lead SMS notifications</h5>
+      <p className="crm-muted">
+        Text this client's own contacts (e.g. the business owner) the moment
+        one of their leads arrives — alongside the agency's own alert numbers
+        set in SMS → Dashboard. Uses the org's connected SMS account; nothing
+        sends without one.
+      </p>
+      <Switch
+        checked={enabled}
+        onChange={(next) => save({ enabled: next, phones })}
+        disabled={busy}
+        label="Text this client when a new lead comes in"
+      />
+      {enabled && (
+        <div className="crm-form">
+          {phones.map((phone, i) => (
+            <div key={i} className="crm-form-row">
+              <input
+                placeholder="+1 480 555 0100"
+                value={phone}
+                onChange={(e) =>
+                  setPhones(phones.map((p, j) => (j === i ? e.target.value : p)))
+                }
+              />
+              <Button
+                variant="ghost"
+                size="sm"
+                disabled={busy}
+                onClick={() => setPhones(phones.filter((_, j) => j !== i))}
+              >
+                Remove
+              </Button>
+            </div>
+          ))}
+          <div className="crm-form-actions">
+            <Button
+              variant="ghost"
+              size="sm"
+              disabled={busy}
+              onClick={() => setPhones([...phones, ""])}
+            >
+              <Plus size={14} /> Add number
+            </Button>
+            <Button
+              variant="primary"
+              size="sm"
+              busy={busy}
+              onClick={() => save({ enabled, phones })}
+            >
+              Save numbers
+            </Button>
+          </div>
         </div>
       )}
     </div>

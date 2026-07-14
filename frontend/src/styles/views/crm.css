@@ -275,6 +275,18 @@
   flex-wrap: wrap;
 }
 
+.crm-form-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+}
+
+.crm-form-row input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
 .crm-check {
   display: inline-flex;
   align-items: center;

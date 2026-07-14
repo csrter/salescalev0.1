@@ -1587,3 +1587,87 @@ def test_lead_notification_prefers_bluebubbles_over_other_active_accounts(
     assert len(bb_sent) == 1
     assert bb_sent[0]["account_id"] == bb_acct["id"]
     assert bb_sent[0]["to"] == "+14805559991"
+
+
+def test_client_lead_notifications_settings_roundtrip(ln_org, api):
+    r = api.get(
+        f"/api/clients/{ln_org['client']}/lead-notifications",
+        headers=ln_org["headers"],
+    )
+    assert r.status_code == 200, r.text
+    assert r.json() == {"enabled": False, "phones": []}
+
+    r = api.put(
+        f"/api/clients/{ln_org['client']}/lead-notifications",
+        json={"enabled": True, "phones": ["(480) 555-9997", "+14805559997"]},
+        headers=ln_org["headers"],
+    )
+    assert r.status_code == 200, r.text
+    assert r.json() == {"enabled": True, "phones": ["+14805559997"]}
+
+    r = api.get(
+        f"/api/clients/{ln_org['client']}/lead-notifications",
+        headers=ln_org["headers"],
+    )
+    assert r.json() == {"enabled": True, "phones": ["+14805559997"]}
+
+    r = api.put(
+        f"/api/clients/{ln_org['client']}/lead-notifications",
+        json={"enabled": True, "phones": ["garbage"]},
+        headers=ln_org["headers"],
+    )
+    assert r.status_code == 422
+
+    r = api.put(
+        f"/api/clients/{ln_org['client']}/lead-notifications",
+        json={"enabled": True, "phones": [f"+1480555{n:04d}" for n in range(11)]},
+        headers=ln_org["headers"],
+    )
+    assert r.status_code == 400
+
+
+def test_client_lead_notifications_combine_with_org_deduped(
+    ln_org, api, twilio_creds_ok, captured_sends
+):
+    """Org-wide ops numbers and this client's own numbers both get texted,
+    deduped when the same number appears in both — and the client-level
+    setting alone (org notifications left off) is enough to fire."""
+    _mk_account(ln_org, api, from_number="+14805559998")
+
+    # Only the client-level number is configured; org notifications stay off.
+    r = api.put(
+        f"/api/clients/{ln_org['client']}/lead-notifications",
+        json={"enabled": True, "phones": ["+14805559991"]},
+        headers=ln_org["headers"],
+    )
+    assert r.status_code == 200, r.text
+
+    r = api.post(
+        "/api/track/lead",
+        json={
+            "client_id": ln_org["client"],
+            "session_key": "notify-sess-client-only",
+            "email": "clientonlylead@example.com",
+        },
+    )
+    assert r.status_code == 201, r.text
+    assert sorted(s["to"] for s in captured_sends) == ["+14805559991"]
+
+    # Now also enable org-wide with an overlapping AND a distinct number.
+    _enable_notifications(api, ln_org, ["+14805559991", "+14805559999"])
+    captured_sends.clear()
+
+    r = api.post(
+        "/api/track/lead",
+        json={
+            "client_id": ln_org["client"],
+            "session_key": "notify-sess-both",
+            "email": "bothlead@example.com",
+        },
+    )
+    assert r.status_code == 201, r.text
+    # +14805559991 appears in both configs but is texted only once.
+    assert sorted(s["to"] for s in captured_sends) == [
+        "+14805559991",
+        "+14805559999",
+    ]

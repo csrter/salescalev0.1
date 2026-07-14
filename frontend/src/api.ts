@@ -239,6 +239,20 @@ export const setLeadNotifications = (body: LeadNotificationsConfig) =>
     body: JSON.stringify(body),
   });
 
+/** Per-client counterpart — e.g. the client's own business owner, texted
+ * alongside the agency's own ops numbers above. */
+export const getClientLeadNotifications = (clientId: string) =>
+  api<LeadNotificationsConfig>(`/api/clients/${clientId}/lead-notifications`);
+
+export const setClientLeadNotifications = (
+  clientId: string,
+  body: LeadNotificationsConfig
+) =>
+  api<LeadNotificationsConfig>(`/api/clients/${clientId}/lead-notifications`, {
+    method: "PUT",
+    body: JSON.stringify(body),
+  });
+
 // --- Org outreach context (grounds the AI snippet + AI research prompts) ---
 
 export interface OrgOutreachContext {
