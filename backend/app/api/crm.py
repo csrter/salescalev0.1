@@ -448,6 +448,7 @@ def create_contact(
         job_title=body.job_title,
         city=body.city,
         state=body.state,
+        zip=body.zip,
         source="manual",
     )
     if body.company_name and body.company_name.strip():
@@ -503,6 +504,8 @@ def _apply_contact_update(
         contact.city = body.city
     if body.state is not None:
         contact.state = body.state
+    if body.zip is not None:
+        contact.zip = body.zip
     if "company_name" in body.model_fields_set:
         name = (body.company_name or "").strip()
         contact.company_id = (
@@ -670,6 +673,7 @@ _CSV_SYSTEM_TARGETS = {
     "job_title",
     "city",
     "state",
+    "zip",
     "company",
     "full_name",
     "sms_opt_in",
@@ -791,6 +795,7 @@ def import_contacts(
             job_title=identity.get("job_title"),
             city=identity.get("city"),
             state=identity.get("state"),
+            zip=identity.get("zip"),
             source="csv_import",
         )
         if row_opted_in:

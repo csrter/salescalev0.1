@@ -211,6 +211,10 @@ _GOOGLE_COLUMNS = {
     "LAST_NAME": "last_name",
     "FULL_NAME": "full_name",
 }
+# Not part of upsert_contact's core-identity kwargs, so kept out of `fields`
+# (which gets **-spread into that call) — applied fill-blanks-only afterward,
+# same as city/state/job_title on the other capture paths.
+_GOOGLE_ZIP_COLUMNS = {"ZIP_CODE", "POSTAL_CODE"}
 
 
 @router.post("/google/lead-form/{client_id}")
@@ -249,10 +253,17 @@ def google_lead_form_webhook(
 
     fields = {"email": None, "phone": None, "first_name": None, "last_name": None}
     full_name = None
+    zip_code = None
     for col in body.get("user_column_data") or []:
-        key = _GOOGLE_COLUMNS.get(col.get("column_id") or "")
+        column_id = col.get("column_id") or ""
         value = col.get("string_value")
-        if not key or not value:
+        if not value:
+            continue
+        if column_id in _GOOGLE_ZIP_COLUMNS:
+            zip_code = zip_code or value
+            continue
+        key = _GOOGLE_COLUMNS.get(column_id)
+        if not key:
             continue
         if key == "full_name":
             full_name = value
@@ -281,6 +292,8 @@ def google_lead_form_webhook(
             if v
         },
     )
+    if contact.zip is None and zip_code:
+        contact.zip = zip_code
 
     # gcl_id is a real click id → this lead gets a first-class attribution
     # row, same capture layer as landing-page leads (Phase 1 rule).
@@ -440,7 +453,7 @@ async def landing_form_webhook(
         source="landing_page_webhook",
         source_detail=fields["extra"] or None,
     )
-    for attr in ("city", "state", "job_title"):
+    for attr in ("city", "state", "job_title", "zip"):
         if getattr(contact, attr) is None and fields.get(attr):
             setattr(contact, attr, fields[attr])
     if fields.get("company") and contact.company_id is None:

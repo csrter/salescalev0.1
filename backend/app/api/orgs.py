@@ -34,7 +34,7 @@ from ..deps import (
     require_verified_email,
 )
 from ..ratelimit import enforce_bucket, rate_limit
-from ..services import auth_email, entitlements, sessions, sms_consent, team
+from ..services import auth_email, entitlements, lead_notify, sessions, sms_consent, team
 from ..models.base import utcnow
 from ..models.core import (
     ORG_SUSPENDED,
@@ -294,6 +294,8 @@ def get_lead_notifications(
     return {
         "enabled": org.notify_new_leads,
         "phones": org.lead_notification_phones or [],
+        "message_template": org.lead_notification_template,
+        "default_template": lead_notify.DEFAULT_TEMPLATE,
     }
 
 
@@ -305,7 +307,11 @@ def set_lead_notifications(
 ):
     """Full replace. Phones are normalized to E.164 and deduped so the
     suppression/ledger comparisons in services/lead_notify.py never diverge
-    on formatting — same normalize_phone used by the SMS consent gate."""
+    on formatting — same normalize_phone used by the SMS consent gate. The
+    message template (shared by org-wide AND per-client recipients — see
+    /api/clients/{id}/lead-notifications) is validated against the known
+    {{token}} set at save time; a blank/omitted template resets to the
+    built-in default."""
     phones: List[str] = []
     for raw in body.phones:
         normalized = sms_consent.normalize_phone(raw)
@@ -317,13 +323,21 @@ def set_lead_notifications(
         raise HTTPException(
             400, f"Up to {_MAX_NOTIFICATION_PHONES} notification numbers"
         )
+    template = (body.message_template or "").strip() or None
+    if template:
+        bad = lead_notify.unknown_tokens(template)
+        if bad:
+            raise HTTPException(422, f"Unknown token(s): {', '.join(bad)}")
     org = db.get(Organization, user.organization_id)
     org.notify_new_leads = body.enabled
     org.lead_notification_phones = phones or None
+    org.lead_notification_template = template
     db.commit()
     return {
         "enabled": org.notify_new_leads,
         "phones": org.lead_notification_phones or [],
+        "message_template": org.lead_notification_template,
+        "default_template": lead_notify.DEFAULT_TEMPLATE,
     }
 
 

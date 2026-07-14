@@ -88,6 +88,12 @@ class Contact(Base):
     job_title: Mapped[Optional[str]] = mapped_column(String(150))
     city: Mapped[Optional[str]] = mapped_column(String(120))
     state: Mapped[Optional[str]] = mapped_column(String(64))
+    # Fill-blanks-only from real-time capture (the JS landing embed's
+    # LeadSubmissionIn.zip, the generic landing-page webhook's synonym-mapped
+    # "zip" field, Google's POSTAL_CODE lead-form column) or typed in; also a
+    # CSV-import target. Referenced by the lead-notification SMS template
+    # (services/lead_notify.py {{zip}}).
+    zip: Mapped[Optional[str]] = mapped_column(String(20))
     # Where the lead came from: meta_instant_form | google_lead_form |
     # landing_page (Salescale's own JS-tracked embed) | landing_page_webhook
     # (a third-party form tool posting to /api/webhooks/landing-form) |

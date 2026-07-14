@@ -58,10 +58,12 @@ def test_create_and_patch_identity_city_state_company(api, cc_org):
         first_name="Dana",
         city="Scottsdale",
         state="AZ",
+        zip="85251",
         company_name="Acme LLC",
     )
     assert created["city"] == "Scottsdale"
     assert created["state"] == "AZ"
+    assert created["zip"] == "85251"
     assert created["company_name"] == "Acme LLC"
     cid = created["id"]
 
@@ -86,6 +88,7 @@ def test_create_and_patch_identity_city_state_company(api, cc_org):
         json={
             "first_name": "Dana R",
             "city": "Mesa",
+            "zip": "85201",
             "company_name": "Beta Inc",
             "job_title": "Marketing Director",
         },
@@ -96,6 +99,7 @@ def test_create_and_patch_identity_city_state_company(api, cc_org):
     assert body["first_name"] == "Dana R"
     assert body["city"] == "Mesa"
     assert body["state"] == "AZ"
+    assert body["zip"] == "85201"
     assert body["company_name"] == "Beta Inc"
     assert body["job_title"] == "Marketing Director"
 
@@ -132,6 +136,7 @@ def test_csv_import_city_state_company_full_name(api, cc_org):
             "Title": "job_title",
             "Town": "city",
             "Region": "state",
+            "Postal": "zip",
             "Org": "company",
         },
         "rows": [
@@ -141,6 +146,7 @@ def test_csv_import_city_state_company_full_name(api, cc_org):
                 "Title": "Owner",
                 "Town": "Tempe",
                 "Region": "AZ",
+                "Postal": "85281",
                 "Org": "Widgets LLC",
             },
             {
@@ -175,6 +181,7 @@ def test_csv_import_city_state_company_full_name(api, cc_org):
         assert john.job_title == "Owner"
         assert john.city == "Tempe"
         assert john.state == "AZ"
+        assert john.zip == "85281"
         # "Widgets LLC" / "widgets llc" dedupe to one Company.
         widgets = db.query(Company).filter(
             Company.client_id == cc_org["client"],

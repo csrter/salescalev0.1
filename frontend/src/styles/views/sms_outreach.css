@@ -361,6 +361,13 @@
   align-items: center;
 }
 
+.sms-notify-template {
+  width: 100%;
+  font-family: var(--font-mono, monospace);
+  font-size: var(--text-sm);
+  resize: vertical;
+}
+
 .sms-pickrow-name {
   font-weight: var(--weight-medium);
 }

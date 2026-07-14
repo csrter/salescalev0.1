@@ -1205,6 +1205,7 @@ const SYSTEM_TARGETS: { value: string; label: string }[] = [
   { value: "job_title", label: "Position / title" },
   { value: "city", label: "City" },
   { value: "state", label: "State" },
+  { value: "zip", label: "Zip code" },
   { value: "company", label: "Business name" },
 ];
 
@@ -1236,6 +1237,7 @@ const HEADER_SYNONYMS: { target: string; keys: string[] }[] = [
   },
   { target: "city", keys: ["city", "town", "locality"] },
   { target: "state", keys: ["state", "province", "region", "stateprovince"] },
+  { target: "zip", keys: ["zip", "zipcode", "postalcode", "postcode"] },
   {
     target: "company",
     keys: [

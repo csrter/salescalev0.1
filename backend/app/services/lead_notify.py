@@ -21,6 +21,8 @@ should fail or block the request that created the lead.
 """
 
 import logging
+import re
+from typing import Optional
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -34,23 +36,56 @@ _PROVIDER_BLUEBUBBLES = "bluebubbles"
 
 log = logging.getLogger("salescale.lead_notify")
 
-_MAX_BODY_LEN = 300  # generous single-segment-ish cap; this is a short alert, never personalized/long
+_MAX_BODY_LEN = 500  # a multi-line labeled template runs longer than the old one-liner
+
+# Admin-editable via PUT /api/orgs/me/lead-notifications (message_template).
+# {{name}} is the full name; {{brand}} is the client's name (the business the
+# lead is for) — kept distinct from "client" since a client-role person could
+# be a template recipient too and "brand" reads more naturally in a text.
+DEFAULT_TEMPLATE = (
+    "*NEW LEAD*\n"
+    "Name: {{name}}\n"
+    "Phone: {{phone}}\n"
+    "Brand: {{brand}}\n"
+    "Email: {{email}}\n"
+    "Zip Code: {{zip}}"
+)
+
+KNOWN_TOKENS = frozenset(
+    {"name", "first_name", "last_name", "phone", "email", "brand", "zip", "source"}
+)
+_TOKEN_RE = re.compile(r"\{\{\s*([a-zA-Z_]+)\s*\}\}")
 
 
-def _lead_label(contact: Contact) -> str:
-    name = " ".join(p for p in (contact.first_name, contact.last_name) if p)
-    return name or "New lead"
+def unknown_tokens(template: str) -> list:
+    """Tokens in `template` not in KNOWN_TOKENS, for the save-time 422 —
+    mirrors the SMS/email step-editor's unknown-token validation."""
+    found = {m.group(1) for m in _TOKEN_RE.finditer(template)}
+    return sorted(found - KNOWN_TOKENS)
 
 
-def _notification_body(client: Client, contact: Contact) -> str:
-    parts = [f"New lead for {client.name}: {_lead_label(contact)}"]
-    if contact.phone:
-        parts.append(contact.phone)
-    elif contact.email:
-        parts.append(contact.email)
-    if contact.source:
-        parts.append(f"via {contact.source.replace('_', ' ')}")
-    return " · ".join(parts)[:_MAX_BODY_LEN]
+def _template_tokens(client: Client, contact: Contact) -> dict:
+    full_name = " ".join(p for p in (contact.first_name, contact.last_name) if p)
+    return {
+        "name": full_name or "New lead",
+        "first_name": contact.first_name or "",
+        "last_name": contact.last_name or "",
+        "phone": contact.phone or "",
+        "email": contact.email or "",
+        "brand": client.name,
+        "zip": contact.zip or "",
+        "source": (contact.source or "").replace("_", " "),
+    }
+
+
+def render_notification_body(
+    template: Optional[str], client: Client, contact: Contact
+) -> str:
+    tokens = _template_tokens(client, contact)
+    body = _TOKEN_RE.sub(
+        lambda m: str(tokens.get(m.group(1), "")), template or DEFAULT_TEMPLATE
+    )
+    return body[:_MAX_BODY_LEN]
 
 
 def _recipient_phones(org: Organization, client: Client) -> list:
@@ -106,7 +141,7 @@ def notify_new_lead(db: Session, client: Client, contact: Contact) -> None:
                 client.organization_id,
             )
             return
-        body = _notification_body(client, contact)
+        body = render_notification_body(org.lead_notification_template, client, contact)
         for phone in phones:
             result, _row = sms_send.send_notification(db, account, phone, body)
             if result != sms_send.SENT:

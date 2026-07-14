@@ -99,6 +99,8 @@ def capture_lead(
         last_name=body.last_name,
         source="landing_page",
     )
+    if contact.zip is None and body.zip:
+        contact.zip = body.zip
     landing.contact_id = contact.id
 
     event = ConversionEvent(

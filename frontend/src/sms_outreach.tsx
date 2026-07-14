@@ -553,11 +553,15 @@ function OrgOptInDefaultCard({ isOwner }: { isOwner: boolean }) {
 }
 
 /** Admin-only: text-the-team alerts on new leads. Reuses whichever SMS
- * account the org has already connected — no separate sender setup. */
+ * account the org has already connected — no separate sender setup. The
+ * message template is shared with per-client recipients too (see
+ * ClientLeadNotifications in crm.tsx). */
 function LeadNotificationsCard({ hasAccount }: { hasAccount: boolean }) {
   const toast = useToast();
   const [enabled, setEnabled] = useState<boolean | null>(null);
   const [phones, setPhones] = useState<string[]>([]);
+  const [template, setTemplate] = useState("");
+  const [defaultTemplate, setDefaultTemplate] = useState("");
   const [busy, setBusy] = useState(false);
 
   const load = useCallback(() => {
@@ -565,20 +569,29 @@ function LeadNotificationsCard({ hasAccount }: { hasAccount: boolean }) {
       .then((c) => {
         setEnabled(c.enabled);
         setPhones(c.phones.length > 0 ? c.phones : [""]);
+        setTemplate(c.message_template ?? c.default_template);
+        setDefaultTemplate(c.default_template);
       })
       .catch(() => {});
   }, []);
   useEffect(load, [load]);
 
-  const save = async (next: { enabled: boolean; phones: string[] }) => {
+  const save = async (next: {
+    enabled: boolean;
+    phones: string[];
+    template: string;
+  }) => {
     setBusy(true);
     try {
       const saved = await setLeadNotifications({
         enabled: next.enabled,
         phones: next.phones.map((p) => p.trim()).filter(Boolean),
+        message_template: next.template,
       });
       setEnabled(saved.enabled);
       setPhones(saved.phones.length > 0 ? saved.phones : [""]);
+      setTemplate(saved.message_template ?? saved.default_template);
+      setDefaultTemplate(saved.default_template);
     } catch (e) {
       toast(e instanceof Error ? e.message : "Failed to update", "error");
     } finally {
@@ -593,7 +606,7 @@ function LeadNotificationsCard({ hasAccount }: { hasAccount: boolean }) {
       <GlassCard className="sms-optin-card">
         <Switch
           checked={enabled}
-          onChange={(next) => save({ enabled: next, phones })}
+          onChange={(next) => save({ enabled: next, phones, template })}
           disabled={busy}
           label="Text the team when a new lead comes in"
         />
@@ -635,13 +648,34 @@ function LeadNotificationsCard({ hasAccount }: { hasAccount: boolean }) {
               >
                 <Plus size={14} /> Add number
               </Button>
+            </div>
+            <Field
+              label="Message template"
+              description="Also used for a client's own alert numbers (CRM setup → Lead SMS notifications). Tokens: {{name}} {{first_name}} {{last_name}} {{phone}} {{email}} {{brand}} {{zip}} {{source}}"
+            >
+              <textarea
+                className="input sms-notify-template"
+                rows={6}
+                value={template}
+                onChange={(e) => setTemplate(e.target.value)}
+              />
+            </Field>
+            <div className="sms-form-actions">
+              <Button
+                variant="ghost"
+                size="sm"
+                disabled={busy}
+                onClick={() => setTemplate(defaultTemplate)}
+              >
+                Reset to default
+              </Button>
               <Button
                 variant="primary"
                 size="sm"
                 busy={busy}
-                onClick={() => save({ enabled, phones })}
+                onClick={() => save({ enabled, phones, template })}
               >
-                Save numbers
+                Save
               </Button>
             </div>
           </div>

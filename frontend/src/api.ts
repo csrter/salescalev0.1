@@ -230,11 +230,21 @@ export interface LeadNotificationsConfig {
   phones: string[];
 }
 
-export const getLeadNotifications = () =>
-  api<LeadNotificationsConfig>("/api/orgs/me/lead-notifications");
+/** Org-level config additionally carries the shared message template (used
+ * for both org-wide AND per-client recipients — see ClientLeadNotifications
+ * in crm.tsx). null message_template means "use default_template". */
+export interface OrgLeadNotificationsConfig extends LeadNotificationsConfig {
+  message_template: string | null;
+  default_template: string;
+}
 
-export const setLeadNotifications = (body: LeadNotificationsConfig) =>
-  api<LeadNotificationsConfig>("/api/orgs/me/lead-notifications", {
+export const getLeadNotifications = () =>
+  api<OrgLeadNotificationsConfig>("/api/orgs/me/lead-notifications");
+
+export const setLeadNotifications = (
+  body: LeadNotificationsConfig & { message_template?: string | null }
+) =>
+  api<OrgLeadNotificationsConfig>("/api/orgs/me/lead-notifications", {
     method: "PUT",
     body: JSON.stringify(body),
   });
@@ -1369,6 +1379,7 @@ export interface ContactEditBody {
   job_title?: string | null;
   city?: string | null;
   state?: string | null;
+  zip?: string | null;
   company_name?: string | null;
   /** True records a manual opt-in; false revokes it. */
   sms_opt_in?: boolean | null;

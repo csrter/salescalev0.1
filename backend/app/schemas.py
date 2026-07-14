@@ -752,6 +752,7 @@ class ContactOutPublic(BaseModel):
     phone: Optional[str] = None
     city: Optional[str] = None
     state: Optional[str] = None
+    zip: Optional[str] = None
     company_name: Optional[str] = None
     source: Optional[str] = None
     qualified_at: Optional[dt.datetime] = None
@@ -796,6 +797,7 @@ class ContactCreateIn(BaseModel):
     job_title: Optional[str] = None
     city: Optional[str] = None
     state: Optional[str] = None
+    zip: Optional[str] = Field(default=None, max_length=20)
     # Non-empty resolves to a get-or-created org-scoped Company; the contact's
     # company_id is set to it.
     company_name: Optional[str] = None
@@ -816,6 +818,7 @@ class ContactUpdateIn(BaseModel):
     job_title: Optional[str] = None
     city: Optional[str] = None
     state: Optional[str] = None
+    zip: Optional[str] = Field(default=None, max_length=20)
     # Present + non-empty get-or-creates and links a Company; present + empty
     # clears company_id (detected via model_fields_set in the router).
     company_name: Optional[str] = None
@@ -1456,10 +1459,13 @@ class OrgOutreachContextIn(BaseModel):
 
 class OrgLeadNotificationsIn(BaseModel):
     """Text-the-team alerts on new leads. Phones are raw strings — the
-    endpoint normalizes to E.164 and rejects anything unparseable."""
+    endpoint normalizes to E.164 and rejects anything unparseable.
+    message_template uses {{token}} placeholders (services/lead_notify.
+    KNOWN_TOKENS); blank/omitted resets to the built-in default."""
 
     enabled: bool
     phones: List[str] = Field(default_factory=list)
+    message_template: Optional[str] = Field(default=None, max_length=1000)
 
 
 class ClientLeadNotificationsIn(BaseModel):

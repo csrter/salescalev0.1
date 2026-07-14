@@ -90,6 +90,12 @@ class Organization(Base):
         Boolean, default=False, server_default=text("false"), nullable=False
     )
     lead_notification_phones: Mapped[Optional[list]] = mapped_column(JSON)
+    # Editable message template for the lead-notification SMS (both org-wide
+    # and per-client recipients share it) — {{name}}/{{first_name}}/
+    # {{last_name}}/{{phone}}/{{email}}/{{brand}}/{{zip}}/{{source}} tokens,
+    # substituted in services/lead_notify.py. None means the built-in default
+    # template. Capped 1000 chars; unknown tokens are rejected at save time.
+    lead_notification_template: Mapped[Optional[str]] = mapped_column(Text)
     # Phase 8 — Stripe subscription linkage. Populated by the billing webhook.
     stripe_customer_id: Mapped[Optional[str]] = mapped_column(
         String(64), unique=True, index=True

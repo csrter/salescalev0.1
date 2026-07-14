@@ -265,6 +265,7 @@ def test_google_lead_form_lead_ingested_with_gclid(api, team_headers, crm_client
             {"column_id": "FULL_NAME", "string_value": "Paige Turner"},
             {"column_id": "EMAIL", "string_value": "paige@example.com"},
             {"column_id": "PHONE_NUMBER", "string_value": "+15550107788"},
+            {"column_id": "ZIP_CODE", "string_value": "85004"},
         ],
     }
     url = f"/api/webhooks/google/lead-form/{crm_client}"
@@ -278,6 +279,7 @@ def test_google_lead_form_lead_ingested_with_gclid(api, team_headers, crm_client
     contacts = _contacts(api, team_headers, crm_client)
     lead = next(c for c in contacts if c["email"] == "paige@example.com")
     assert lead["source"] == "google_lead_form"
+    assert lead["zip"] == "85004"
     # gcl_id became a first-class attribution row: platform resolves via the
     # click id, not just the form source.
     assert lead["attribution"]["platform"] == "google"
@@ -326,6 +328,7 @@ def test_landing_page_webhook_generate_toggle_and_ingest(api, team_headers, crm_
             "Phone Number": "(555) 099-2231",
             "Business Name": "Quinn Roofing",
             "City": "Tempe",
+            "Zip Code": "85281",
             "Message": "Need a quote for a roof repair ASAP",
             "gclid": "test-gclid-webhook",
             "referral_code": "XY123",  # unmapped, kept for audit
@@ -340,6 +343,7 @@ def test_landing_page_webhook_generate_toggle_and_ingest(api, team_headers, crm_
     assert lead["first_name"] == "Nora"
     assert lead["last_name"] == "Quinn"
     assert lead["city"] == "Tempe"
+    assert lead["zip"] == "85281"
     assert lead["company_name"] == "Quinn Roofing"
     assert lead["source_detail"] == {"referral_code": "XY123"}
     assert lead["attribution"]["platform"] == "google"

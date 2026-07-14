@@ -35,7 +35,7 @@ from app.models.sms_outreach import (
     SmsStep,
     SmsSuppression,
 )
-from app.services import email_personalize, sms_campaigns
+from app.services import email_personalize, lead_notify, sms_campaigns
 from app.services import sms_send as gateway
 from app.services import sms_consent
 
@@ -1372,14 +1372,20 @@ def _enable_notifications(api, ln_org, phones):
 def test_lead_notifications_settings_roundtrip(ln_org, api):
     r = api.get("/api/orgs/me/lead-notifications", headers=ln_org["headers"])
     assert r.status_code == 200, r.text
-    assert r.json() == {"enabled": False, "phones": []}
+    body = r.json()
+    assert body["enabled"] is False
+    assert body["phones"] == []
+    assert body["message_template"] is None
+    assert body["default_template"] == lead_notify.DEFAULT_TEMPLATE
 
     # Formatting variants normalize to the same E.164 and dedupe.
     saved = _enable_notifications(api, ln_org, ["(480) 555-9991", "+14805559991"])
-    assert saved == {"enabled": True, "phones": ["+14805559991"]}
+    assert saved["enabled"] is True
+    assert saved["phones"] == ["+14805559991"]
+    assert saved["message_template"] is None  # untouched, still default
 
     r = api.get("/api/orgs/me/lead-notifications", headers=ln_org["headers"])
-    assert r.json() == {"enabled": True, "phones": ["+14805559991"]}
+    assert r.json()["phones"] == ["+14805559991"]
 
     # Unparseable phone -> 422, nothing saved.
     r = api.put(
@@ -1397,6 +1403,39 @@ def test_lead_notifications_settings_roundtrip(ln_org, api):
     )
     assert r.status_code == 400
 
+    # A custom template saves and reads back; a blank one resets to default.
+    r = api.put(
+        "/api/orgs/me/lead-notifications",
+        json={
+            "enabled": True,
+            "phones": ["+14805559991"],
+            "message_template": "Lead: {{name}} ({{brand}})",
+        },
+        headers=ln_org["headers"],
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["message_template"] == "Lead: {{name}} ({{brand}})"
+
+    r = api.put(
+        "/api/orgs/me/lead-notifications",
+        json={"enabled": True, "phones": ["+14805559991"], "message_template": ""},
+        headers=ln_org["headers"],
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["message_template"] is None
+
+    # An unknown token is rejected at save time.
+    r = api.put(
+        "/api/orgs/me/lead-notifications",
+        json={
+            "enabled": True,
+            "phones": ["+14805559991"],
+            "message_template": "Lead: {{nickname}}",
+        },
+        headers=ln_org["headers"],
+    )
+    assert r.status_code == 422
+
 
 def test_new_lead_triggers_sms_notification_to_configured_numbers(
     ln_org, api, twilio_creds_ok, captured_sends
@@ -1410,8 +1449,10 @@ def test_new_lead_triggers_sms_notification_to_configured_numbers(
             "client_id": ln_org["client"],
             "session_key": "notify-sess-1",
             "email": "newlead@example.com",
+            "phone": "4805551234",
             "first_name": "Newt",
             "last_name": "Leadman",
+            "zip": "85001",
         },
     )
     assert r.status_code == 201, r.text
@@ -1419,7 +1460,15 @@ def test_new_lead_triggers_sms_notification_to_configured_numbers(
     assert len(captured_sends) == 1
     assert captured_sends[0]["to"] == "+14805559991"
     assert captured_sends[0]["account_id"] == acct["id"]
-    assert "Newt Leadman" in captured_sends[0]["body"]
+    body = captured_sends[0]["body"]
+    assert body == (
+        "*NEW LEAD*\n"
+        "Name: Newt Leadman\n"
+        "Phone: 4805551234\n"
+        f"Brand: Notify Client\n"
+        "Email: newlead@example.com\n"
+        "Zip Code: 85001"
+    )
 
     db = SessionLocal()
     try:
@@ -1671,3 +1720,44 @@ def test_client_lead_notifications_combine_with_org_deduped(
         "+14805559991",
         "+14805559999",
     ]
+
+
+def test_render_notification_body_default_and_custom_template():
+    from app.models.core import Client
+    from app.models.crm import Contact
+
+    client = Client(id="c1", organization_id="o1", name="Acme HVAC")
+    contact = Contact(
+        id="ct1",
+        organization_id="o1",
+        client_id="c1",
+        first_name="Jane",
+        last_name="Doe",
+        phone="4805551234",
+        email="jane@example.com",
+        zip="85001",
+        source="landing_page_webhook",
+    )
+    assert lead_notify.render_notification_body(None, client, contact) == (
+        "*NEW LEAD*\n"
+        "Name: Jane Doe\n"
+        "Phone: 4805551234\n"
+        "Brand: Acme HVAC\n"
+        "Email: jane@example.com\n"
+        "Zip Code: 85001"
+    )
+    custom = lead_notify.render_notification_body(
+        "{{first_name}} for {{brand}} via {{source}}", client, contact
+    )
+    assert custom == "Jane for Acme HVAC via landing page webhook"
+
+    # Missing values render blank, never "None".
+    bare = Contact(id="ct2", organization_id="o1", client_id="c1")
+    assert lead_notify.render_notification_body(None, client, bare) == (
+        "*NEW LEAD*\nName: New lead\nPhone: \nBrand: Acme HVAC\nEmail: \nZip Code: "
+    )
+
+
+def test_unknown_tokens_rejects_unrecognized_placeholders():
+    assert lead_notify.unknown_tokens("Hi {{name}}, brand {{brand}}") == []
+    assert lead_notify.unknown_tokens("Hi {{nickname}} {{zip}}") == ["nickname"]

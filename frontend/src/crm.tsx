@@ -116,6 +116,7 @@ interface ContactRow {
   job_title?: string | null;
   city: string | null;
   state: string | null;
+  zip: string | null;
   company_name: string | null;
   // Enrichment firmographics (team payloads only) — from the business's own
   // site / the org's connected data provider.
@@ -824,6 +825,7 @@ const SYS_COLUMNS: { key: string; label: string; get: (c: ContactRow) => string 
   { key: "job_title", label: "Position", get: (c) => c.job_title ?? null },
   { key: "city", label: "City", get: (c) => c.city },
   { key: "state", label: "State", get: (c) => c.state },
+  { key: "zip", label: "Zip code", get: (c) => c.zip },
   { key: "company_name", label: "Business name", get: (c) => c.company_name },
   { key: "mobile_phone", label: "Mobile", get: (c) => c.mobile_phone ?? null },
   {
@@ -1755,9 +1757,10 @@ function AddToListDialog({
  * fields (name/email/phone) are deliberately excluded — the same value across
  * many contacts is never right. Custom fields reuse the drawer's own
  * per-type input control. */
-const BULK_EDIT_SYS_FIELDS: { key: "city" | "state" | "company_name" | "job_title"; label: string }[] = [
+const BULK_EDIT_SYS_FIELDS: { key: "city" | "state" | "zip" | "company_name" | "job_title"; label: string }[] = [
   { key: "city", label: "City" },
   { key: "state", label: "State" },
+  { key: "zip", label: "Zip code" },
   { key: "company_name", label: "Business name" },
   { key: "job_title", label: "Position" },
 ];
@@ -2536,6 +2539,7 @@ function IdentityBlock({
     job_title: "",
     city: "",
     state: "",
+    zip: "",
     company_name: "",
   });
 
@@ -2549,6 +2553,7 @@ function IdentityBlock({
       job_title: detail.job_title ?? "",
       city: detail.city ?? "",
       state: detail.state ?? "",
+      zip: detail.zip ?? "",
       company_name: detail.company_name ?? "",
     });
     setError(null);
@@ -2570,6 +2575,7 @@ function IdentityBlock({
       job_title: form.job_title.trim() || null,
       city: form.city.trim() || null,
       state: form.state.trim() || null,
+      zip: form.zip.trim() || null,
       company_name: form.company_name.trim() || null,
     })
       .then(() => {
@@ -2624,6 +2630,9 @@ function IdentityBlock({
         </Field>
         <Field label="State">
           <input value={form.state} onChange={(e) => set({ state: e.target.value })} />
+        </Field>
+        <Field label="Zip code">
+          <input value={form.zip} onChange={(e) => set({ zip: e.target.value })} />
         </Field>
         <Field label="Business name">
           <input

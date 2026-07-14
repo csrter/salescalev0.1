@@ -1540,6 +1540,51 @@ live activation + the entitlement flip, the Outreach module build
       saved a client-level number through the real CRM-setup UI, confirmed
       via the API. DEPLOYED to production (2026-07-13) — no migration
       (metric_settings already existed on clients).
+- [x] Editable lead-notification message + contacts.zip (2026-07-13,
+      same-day follow-up, user-requested exact format): the SMS body was a
+      hardcoded one-liner; now an admin-editable {{token}} template
+      (Organization.lead_notification_template, migration d2a6f8c1b3e5 —
+      NOTE the first-picked revision id collided with the existing
+      c9e4a7b2d8f1 job_title migration and had to be regenerated), shared by
+      both org-wide and per-client recipients (services/lead_notify.
+      render_notification_body + KNOWN_TOKENS = name/first_name/last_name/
+      phone/email/brand/zip/source; unknown_tokens() 422s at save time,
+      mirroring the SMS/email step-editor's own token validation). Default
+      template is the exact format requested:
+      "*NEW LEAD*\nName: {{name}}\nPhone: {{phone}}\nBrand: {{brand}}\n
+      Email: {{email}}\nZip Code: {{zip}}" — {{brand}} is the client's name.
+      Blank values render as empty (never "None"); a blank/omitted template
+      on save resets to the default. contacts.zip is a new first-class field
+      (mirrors city/state, same migration) since the template needed
+      somewhere to read it from — populated fill-blanks-only from the JS
+      landing embed (LeadSubmissionIn.zip, previously only forwarded to
+      dispatch_conversion and discarded), the generic landing-page webhook
+      (its synonym mapper already parsed "zip" but discarded it — now
+      wired through), and Google's ZIP_CODE/POSTAL_CODE lead-form column
+      (new addition to _GOOGLE_COLUMNS handling, kept out of the
+      **fields-spread into upsert_contact since zip isn't a core-identity
+      kwarg there). Also wired zip into: ContactCreateIn/UpdateIn +
+      ContactOutPublic (client-portal visible, same level as city/state),
+      CSV import target + frontend header-synonym auto-detect, drawer
+      "Edit info" + bulk-edit field list, and an optional lead-list column.
+      API: GET/PUT /api/orgs/me/lead-notifications gained message_template +
+      default_template. Frontend: LeadNotificationsCard (SMS Dashboard)
+      gained a monospace textarea + "Reset to default"; ClientLeadNotifications
+      (CRM setup) explicitly notes the template is shared/set on the org card.
+      Tests 501 → 503 (default/custom template rendering incl. blank-value
+      case, unknown-token rejection, zip round-trip through create/PATCH/CSV
+      import/Google webhook, and the full default-template text asserted
+      byte-for-byte against a real /api/track/lead submission). Verified
+      live on alt2: typed a custom template through the real Dashboard UI,
+      saved, confirmed via API; Reset to default restored the exact
+      requested format; a real lead posted with phone/zip rendered
+      byte-for-byte as "*NEW LEAD*\nName: Uniq Person\nPhone: 4805559877\n
+      Brand: Paganelli HVAC\nEmail: ...\nZip Code: 85009" up through the
+      real send dispatch (only the actual Twilio network call failed, on
+      that stack's known unrelated TOKEN_ENCRYPTION_KEY mismatch for a
+      pre-existing seeded account — not a code path this session touched).
+      DEPLOYED to production (2026-07-13): migration d2a6f8c1b3e5 applied
+      cleanly to the live Supabase DB.
 - [ ] Stripe live activation + entitlement flip (after 12–14, so real
       limits land everywhere in one pass)
 - [ ] Outreach module build (dev-mode) — go-live gated on Meta App
