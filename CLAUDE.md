@@ -1585,6 +1585,69 @@ live activation + the entitlement flip, the Outreach module build
       pre-existing seeded account — not a code path this session touched).
       DEPLOYED to production (2026-07-13): migration d2a6f8c1b3e5 applied
       cleanly to the live Supabase DB.
+- [x] Desktop app repair, take 2 (2026-07-15): the desktop-app "Failed to
+      fetch" symptom traced back to a real repo bug, not just staleness —
+      electron-app/main.js had been silently DELETED (no replacement) by
+      commit 66c9b08 three days earlier, despite that commit's message
+      describing features added to it; package.json's "main" still pointed
+      at the missing file, so any rebuild since would have failed outright.
+      The installed app was running a stale pre-deletion main.js against an
+      increasingly out-of-date packaged backend — its bundled Alembic
+      scripts predated ~15 migrations already applied directly to
+      production, so `alembic upgrade head` crashed (exit 3) before the
+      backend ever bound port 8000, and every frontend fetch to
+      localhost:8000 failed. Fixed by reconstructing main.js (recovered
+      pre-deletion version + the audit's described feature set: single-
+      instance lock, no backend double-spawn on dock reactivate, spawn-
+      error/unexpected-exit dialogs with an output tail, target=_blank to
+      the system browser, config.json "env" merge) and doing a full rebuild
+      (PyInstaller backend + frontend + electron-builder DMG). Verified live:
+      installed app spawns the backend, binds 8000, /api/health 200.
+- [x] Dashboard timeframe + account/campaign spend filter, click/impression
+      drill-down metrics, keyword bid/match-type/pause editing (2026-07-15):
+      the dashboard previously had no timeframe control at all (every widget
+      silently got the backend's 30-day default) and no way to narrow spend
+      to a specific ad account or campaign; clicks/impressions/CTR/CPC were
+      already computed in the metrics layer but never returned to the
+      frontend. Added a Today/7d/30d/90d/Custom timeframe control (native
+      date inputs for custom — no calendar-picker primitive exists yet) and
+      an account/campaign multi-select filter (checkboxes at both levels,
+      lazy-loaded campaigns), both persisted per user+client via new
+      dashboard_layouts.filters (migration c4e8f1a6b9d3, same one-JSON-blob
+      Phase 4 pattern as `widgets`, which was relaxed to nullable so a
+      filters-only save doesn't fabricate an empty-dashboard value).
+      /api/metrics/blended + /spend-daily gained account_ids/campaign_ids
+      params; insights_daily gained account_external_id (nullable,
+      populated going forward) since entity_external_id+client_id
+      under-determines the account for a client with 2+ accounts on one
+      platform — campaign filtering instead matches the campaign_id already
+      carried in InsightDaily.raw. _matches_entity_filter unions the two
+      picks rather than intersecting (a real bug caught during self-review:
+      checking a whole account AND a campaign under a different, unchecked
+      account would otherwise zero out that campaign's rows). Overview
+      widget gained Impressions/Clicks/CTR/CPC KPIs + a range-aware spend
+      label; Channel mix table gained the same columns per platform.
+      Keywords: the existing Google-only keyword panel (add/remove only)
+      gained inline bid/match-type editing and pause/resume, reusing the
+      stage->confirm->execute guardrail as-is — keywords join asset_group as
+      entity types with no local cache table. fetch_keywords now also
+      returns cpc_bid_micros; the add-keyword form gained a bid field
+      (google_ads_api.add_keyword already accepted one, just never threaded
+      through from the payload). Tests 519 → 526 (test_metrics.py
+      entity-filter/union-fix + campaign-filter cases; new
+      test_keyword_management.py, its own dedicated Google org fixture since
+      the shared `seeded` fixture is Meta-only). Verified live on alt2
+      (custom range + account filter render and persist across navigation,
+      Overview KPIs render with correct empty-state formatting) — no ad
+      accounts connected in that dev DB, so keyword editing itself was
+      verified via a full HTTP-level test (stage → diff → execute →
+      google_ads_api.update_keyword called with the right args) rather than
+      click-through. DEPLOYED to production 2026-07-15: migration
+      c4e8f1a6b9d3 applied cleanly to the live Supabase DB, backend/frontend
+      rebuilt on the VPS, health green, new routes (/api/dashboard/filters,
+      /api/metrics/blended's new params, /api/manage/changes) confirmed
+      live + auth-gated (401 without a token). Same build also shipped to
+      the desktop app (see the repair entry above).
 - [ ] Stripe live activation + entitlement flip (after 12–14, so real
       limits land everywhere in one pass)
 - [ ] Outreach module build (dev-mode) — go-live gated on Meta App
