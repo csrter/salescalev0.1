@@ -43,6 +43,12 @@ class Settings(BaseSettings):
     email_outreach_tick_seconds: int = 60
     email_sync_min_interval_seconds: int = 180
 
+    # Dedicated connection pool for the background schedulers (see db.py's
+    # SchedulerSessionLocal) — deliberately small; schedulers run one tick at
+    # a time and must never compete with request-serving connections.
+    scheduler_db_pool_size: int = 3
+    scheduler_db_max_overflow: int = 2
+
     google_client_id: str = ""
     google_client_secret: str = ""
     google_developer_token: str = ""

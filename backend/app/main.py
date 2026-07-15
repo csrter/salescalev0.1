@@ -248,13 +248,13 @@ async def _outreach_scheduler():
         return
     import asyncio
 
-    from .db import SessionLocal
+    from .db import SchedulerSessionLocal
     from .services import outreach_sequences
 
     log = logging.getLogger("salescale.outreach")
 
     def _tick():
-        db = SessionLocal()
+        db = SchedulerSessionLocal()
         try:
             outreach_sequences.run_due(db)
         finally:
@@ -291,14 +291,14 @@ async def _email_outreach_scheduler():
         return
     import asyncio
 
-    from .db import SessionLocal
+    from .db import SchedulerSessionLocal
     from .services import email_campaigns, email_outreach_sync, email_warmup
     from .services import sms_campaigns
 
     log = logging.getLogger("salescale.email_outreach")
 
     def _tick():
-        db = SessionLocal()
+        db = SchedulerSessionLocal()
         try:
             email_campaigns.run_due(db)
             email_warmup.run_due(db)
@@ -308,7 +308,7 @@ async def _email_outreach_scheduler():
         # Isolated session + its own try/except: an SMS failure must never
         # stall (or roll back) the email tick that already ran above.
         try:
-            sms_db = SessionLocal()
+            sms_db = SchedulerSessionLocal()
             try:
                 sms_campaigns.run_due(sms_db)
             finally:

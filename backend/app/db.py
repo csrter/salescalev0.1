@@ -1,3 +1,5 @@
+from typing import Optional
+
 from sqlalchemy import create_engine
 from sqlalchemy.engine import make_url
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
@@ -23,7 +25,7 @@ def _normalize_url(url: str):
     return u
 
 
-def _make_engine():
+def _make_engine(*, pool_size: Optional[int] = None, max_overflow: Optional[int] = None):
     url = _normalize_url(get_settings().database_url)
 
     if url.get_backend_name() == "sqlite":
@@ -38,14 +40,35 @@ def _make_engine():
         # prepared statements. Disabling them keeps every Supabase connection
         # mode working — direct, session pooler, and transaction pooler.
         connect_args["prepare_threshold"] = None
+        kwargs = {"connect_args": connect_args, "pool_pre_ping": True}
         # Cloud Postgres drops idle connections; validate one before use.
-        return create_engine(url, connect_args=connect_args, pool_pre_ping=True)
+        if pool_size is not None:
+            kwargs["pool_size"] = pool_size
+        if max_overflow is not None:
+            kwargs["max_overflow"] = max_overflow
+        return create_engine(url, **kwargs)
 
     return create_engine(url)
 
 
 engine = _make_engine()
 SessionLocal = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
+
+# Background schedulers (IG outreach sequences, cold-email/SMS campaign sends,
+# IMAP reply sync) run long chains of blocking network I/O — each SMTP send or
+# IMAP poll has its own multi-second timeout — while holding whatever session
+# they were given checked out the entire time. Sharing `engine`'s pool with
+# request-serving code meant a slow mailbox could hold a connection long
+# enough to starve unrelated requests (e.g. login) waiting on the same pool.
+# A separate, small, dedicated pool means a stalled scheduler tick can never
+# block real HTTP traffic — it can only ever starve itself.
+scheduler_engine = _make_engine(
+    pool_size=get_settings().scheduler_db_pool_size,
+    max_overflow=get_settings().scheduler_db_max_overflow,
+)
+SchedulerSessionLocal = sessionmaker(
+    bind=scheduler_engine, autoflush=False, expire_on_commit=False
+)
 
 
 def get_db():
