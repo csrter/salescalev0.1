@@ -1,6 +1,7 @@
 const { app, BrowserWindow, shell, ipcMain, dialog } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const http = require('http');
 const { spawn } = require('child_process');
 
 let backendProcess = null;
@@ -38,31 +39,96 @@ if (!gotLock) {
         return undefined;
     });
 
+    // The backend takes several real seconds to start (PyInstaller unpack +
+    // Alembic migration check against Postgres) before it binds :8000 — but
+    // the Electron window loads its local file:// bundle and the React app
+    // fires its first API calls almost instantly. With no handshake between
+    // the two, that gap surfaces to the user as "Failed to fetch" on
+    // whatever the app happens to load into (confirmed live: ~5s from spawn
+    // to a healthy /api/health). Polls the health endpoint before ever
+    // loading the real frontend; the window itself opens immediately with a
+    // lightweight inline loading page so there's no blank/frozen window
+    // during the wait.
+    const BACKEND_POLL_INTERVAL_MS = 200;
+    const BACKEND_POLL_TIMEOUT_MS = 30000;
+
+    function waitForBackend(onReady) {
+        const deadline = Date.now() + BACKEND_POLL_TIMEOUT_MS;
+        const attempt = () => {
+            const req = http.get(
+                { host: '127.0.0.1', port: 8000, path: '/api/health', timeout: 1500 },
+                (res) => {
+                    res.resume();
+                    if (res.statusCode === 200) {
+                        onReady(null);
+                    } else {
+                        scheduleRetry();
+                    }
+                }
+            );
+            req.on('error', scheduleRetry);
+            req.on('timeout', () => {
+                req.destroy();
+                scheduleRetry();
+            });
+        };
+        const scheduleRetry = () => {
+            if (Date.now() >= deadline) {
+                onReady(new Error('The backend did not respond within 30 seconds.'));
+                return;
+            }
+            setTimeout(attempt, BACKEND_POLL_INTERVAL_MS);
+        };
+        attempt();
+    }
+
+    function loadingPageUrl() {
+        const html =
+            '<!doctype html><html><body style="margin:0;height:100vh;' +
+            'display:flex;align-items:center;justify-content:center;' +
+            'background:#0b0f1a;color:#c7cbe0;' +
+            'font-family:-apple-system,BlinkMacSystemFont,\'Segoe UI\',sans-serif;">' +
+            '<div>Starting Salescale…</div></body></html>';
+        return 'data:text/html;charset=utf-8,' + encodeURIComponent(html);
+    }
+
     function createWindow() {
-        mainWindow = new BrowserWindow({
+        const win = new BrowserWindow({
             width: 1200,
             height: 800,
             webPreferences: {
                 preload: path.join(__dirname, 'preload.js')
             }
         });
+        mainWindow = win;
 
         // Anything the renderer tries to open as a new window (target=_blank,
         // window.open) goes to the system browser — the app has no use for a
         // second in-app window.
-        mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+        win.webContents.setWindowOpenHandler(({ url }) => {
             if (/^https?:\/\//i.test(url)) {
                 shell.openExternal(url);
             }
             return { action: 'deny' };
         });
 
-        mainWindow.on('closed', () => {
-            mainWindow = null;
+        win.on('closed', () => {
+            if (mainWindow === win) mainWindow = null;
         });
 
-        // Load the frontend
-        mainWindow.loadFile(path.join(__dirname, 'frontend', 'index.html'));
+        win.loadURL(loadingPageUrl());
+
+        waitForBackend((err) => {
+            if (win.isDestroyed()) return;
+            if (err) {
+                dialog.showErrorBox(
+                    'Salescale is taking longer than expected to start',
+                    `${err.message}\n\nLast backend output:\n${backendOutputTail || '(none captured)'}`
+                );
+                return;
+            }
+            win.loadFile(path.join(__dirname, 'frontend', 'index.html'));
+        });
     }
 
     // Optional operator config, dropped in without a rebuild:
