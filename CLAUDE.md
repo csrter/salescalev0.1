@@ -1648,6 +1648,25 @@ live activation + the entitlement flip, the Outreach module build
       /api/metrics/blended's new params, /api/manage/changes) confirmed
       live + auth-gated (401 without a token). Same build also shipped to
       the desktop app (see the repair entry above).
+- [x] Desktop app: backend-readiness handshake (2026-07-15, same-day
+      follow-up): user reported a fresh "Failed to fetch" on the desktop app
+      right after the repair above — root cause was a startup RACE, not a
+      regression: the packaged backend takes ~5s real time (PyInstaller
+      unpack + Alembic migration check) to bind :8000, but the Electron
+      window loads its file:// bundle and the React app fires its first API
+      calls almost instantly, with no handshake between the two. This was a
+      known-but-unfixed gap flagged in an earlier session's desktop audit
+      ("dynamic port + own-backend handshake chip"). createWindow() now
+      opens immediately with a lightweight inline loading page and polls
+      /api/health (200ms interval, 30s timeout) before loading the real
+      frontend; a genuine timeout surfaces the same error-dialog + output-
+      tail pattern as the existing crash dialogs. Polling helper unit-tested
+      in isolation (no listener / delayed listener / 503-then-200) against a
+      plain Node http server. Verified live: port 8000 confirmed NOT
+      listening immediately post-launch (the exact window the race
+      exploited), then healthy on the expected ~5-9s timeline. Rebuilt +
+      reinstalled locally; nothing to redeploy on the webapp side (Electron-
+      shell-only change).
 - [ ] Stripe live activation + entitlement flip (after 12–14, so real
       limits land everywhere in one pass)
 - [ ] Outreach module build (dev-mode) — go-live gated on Meta App
