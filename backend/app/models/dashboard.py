@@ -56,7 +56,17 @@ class DashboardLayout(Base):
         ForeignKey("users.id"), nullable=False, index=True
     )
     client_id: Mapped[str] = mapped_column(ForeignKey("clients.id"), nullable=False)
-    widgets: Mapped[list] = mapped_column(JSON, nullable=False)
+    # Nullable so a filters-only save (before the user ever touches their
+    # widget layout) can create this row without a fake empty-dashboard
+    # value overriding the role default on the widgets side.
+    widgets: Mapped[Optional[list]] = mapped_column(JSON)
+    # {"preset": "7d"|"30d"|"90d"|"today"|"custom", "since": "YYYY-MM-DD",
+    # "until": "YYYY-MM-DD", "account_ids": [str], "campaign_ids": [str]}.
+    # since/until are only meaningful (and only persisted) for "custom"; for
+    # a preset the frontend recomputes the range from today on load, so a
+    # saved layout never shows a stale window. None means the role default
+    # (last 30 days, every connected account).
+    filters: Mapped[Optional[dict]] = mapped_column(JSON)
     updated_at: Mapped[Optional[dt.datetime]] = mapped_column(
         DateTime(timezone=True), onupdate=utcnow
     )

@@ -317,13 +317,36 @@ def _execute_google(
             text=payload["text"],
             match_type=payload["match_type"],
             negative=payload.get("negative", False),
-            cpc_bid_micros=payload.get("cpc_bid_micros"),
+            cpc_bid_micros=payload.get("bid_micros"),
         )
 
     if kind == ("keyword", "remove"):
         ad_group = db.get(AdGroup, payload["ad_group_id"])
         google_ads_api.remove_keyword(
             refresh_token, customer_id, ad_group.external_id, payload["criterion_id"]
+        )
+        return {}
+
+    if kind == ("keyword", "update"):
+        ad_group = db.get(AdGroup, payload["ad_group_id"])
+        google_ads_api.update_keyword(
+            refresh_token,
+            customer_id,
+            ad_group.external_id,
+            change.entity_external_id,
+            match_type=payload.get("match_type"),
+            cpc_bid_micros=payload.get("bid_micros"),
+        )
+        return {}
+
+    if kind[0] == "keyword" and change.action in ("pause", "resume"):
+        ad_group = db.get(AdGroup, payload["ad_group_id"])
+        google_ads_api.update_keyword(
+            refresh_token,
+            customer_id,
+            ad_group.external_id,
+            change.entity_external_id,
+            status=_google_status(change.action),
         )
         return {}
 

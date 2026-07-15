@@ -19,8 +19,21 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, TEAM_ROLES, type Session } from "./api";
-import { Button, EmptyState, Skeleton } from "./components/ui";
+import {
+  api,
+  TEAM_ROLES,
+  type AdAccount,
+  type Campaign,
+  type Session,
+} from "./api";
+import {
+  Button,
+  EmptyState,
+  PlatformChip,
+  Segmented,
+  Skeleton,
+  SkeletonText,
+} from "./components/ui";
 import { GripVertical, Plus, RefreshCw, X } from "./components/icons";
 import {
   BenchmarkWidget,
@@ -101,6 +114,58 @@ const MAX_H = 6;
 const clamp = (v: number, lo: number, hi: number) =>
   Math.min(Math.max(v, lo), hi);
 
+// --- Timeframe + account/campaign spend filter -----------------------------
+// Owned by the page (one control set governs every widget), same pattern as
+// the platform toggle — persisted alongside the widget layout via
+// /api/dashboard/filters (see PersistedFilters below).
+
+type TimeframePreset = "today" | "7d" | "30d" | "90d" | "custom";
+
+// Field names match DashboardFiltersIn on the wire (backend/app/api/
+// dashboard.py) since this object round-trips through PUT/GET verbatim —
+// same convention as StageChangeBody in api.ts.
+interface DashFilters {
+  preset: TimeframePreset;
+  since: string | null; // only meaningful (and only persisted) for "custom"
+  until: string | null;
+  account_ids: string[];
+  campaign_ids: string[];
+}
+
+const DEFAULT_FILTERS: DashFilters = {
+  preset: "30d",
+  since: null,
+  until: null,
+  account_ids: [],
+  campaign_ids: [],
+};
+
+const isoDate = (d: Date) => d.toISOString().slice(0, 10);
+
+const PRESET_LABEL: Record<TimeframePreset, string> = {
+  today: "Today",
+  "7d": "Last 7 days",
+  "30d": "Last 30 days",
+  "90d": "Last 90 days",
+  custom: "Custom",
+};
+
+/** Resolve a preset to concrete since/until dates, recomputed from "today"
+ * on every load so a saved "7d" preset never shows a stale window. */
+function resolveRange(f: DashFilters): { since: string; until: string; label: string } {
+  const today = new Date();
+  const until = isoDate(today);
+  if (f.preset === "custom") {
+    const since = f.since ?? isoDate(new Date(today.getTime() - 29 * 86_400_000));
+    const u = f.until ?? until;
+    return { since, until: u, label: since === u ? since : `${since} – ${u}` };
+  }
+  const daysBack = { today: 0, "7d": 6, "30d": 29, "90d": 89 }[f.preset];
+  const sinceDate = new Date(today);
+  sinceDate.setDate(sinceDate.getDate() - daysBack);
+  return { since: isoDate(sinceDate), until, label: PRESET_LABEL[f.preset] };
+}
+
 export function Dashboard({
   clientId,
   session,
@@ -121,10 +186,12 @@ export function Dashboard({
   const [syncNote, setSyncNote] = useState<string | null>(null);
   const [arrange, setArrange] = useState(false);
   const [announce, setAnnounce] = useState("");
+  const [filters, setFilters] = useState<DashFilters>(DEFAULT_FILTERS);
   // Which widget is mid-drag; live-updated as it passes over siblings so the
   // reorder animates in place (standard sortable pattern).
   const [dragIndex, setDragIndex] = useState<number | null>(null);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const filtersSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const gridRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -141,6 +208,17 @@ export function Dashboard({
       )
       .catch(() => setWidgets(isTeam ? TEAM_DEFAULT : CLIENT_DEFAULT));
   }, [clientId, isTeam]);
+
+  useEffect(() => {
+    setFilters(DEFAULT_FILTERS);
+    api<{ filters: Partial<DashFilters> | null }>(
+      `/api/dashboard/filters?client_id=${clientId}`,
+    )
+      .then((r) => {
+        if (r.filters) setFilters({ ...DEFAULT_FILTERS, ...r.filters });
+      })
+      .catch(() => {});
+  }, [clientId]);
 
   const persist = useCallback(
     (next: WidgetSlot[]) => {
@@ -162,6 +240,19 @@ export function Dashboard({
     setWidgets(next);
     persist(next);
   };
+
+  const updateFilters = (next: DashFilters) => {
+    setFilters(next);
+    if (filtersSaveTimer.current) clearTimeout(filtersSaveTimer.current);
+    filtersSaveTimer.current = setTimeout(() => {
+      api(`/api/dashboard/filters?client_id=${clientId}`, {
+        method: "PUT",
+        body: JSON.stringify(next),
+      }).catch(() => {});
+    }, 500);
+  };
+
+  const range = resolveRange(filters);
 
   const sync = async () => {
     setSyncing(true);
@@ -259,6 +350,22 @@ export function Dashboard({
         </span>
         {syncNote && <span className="dash-note">{syncNote}</span>}
         <span className="dash-actions">
+          <TimeframeControl
+            filters={filters}
+            onChange={updateFilters}
+          />
+          <AccountCampaignFilter
+            clientId={clientId}
+            accountIds={filters.account_ids}
+            campaignIds={filters.campaign_ids}
+            onChange={(accountIds, campaignIds) =>
+              updateFilters({
+                ...filters,
+                account_ids: accountIds,
+                campaign_ids: campaignIds,
+              })
+            }
+          />
           {isTeam && (
             <Button variant="ghost" size="sm" onClick={sync} busy={syncing}>
               <RefreshCw size={16} aria-hidden="true" /> Sync insights
@@ -336,6 +443,11 @@ export function Dashboard({
                 session={session}
                 platforms={platforms}
                 refresh={refresh}
+                since={range.since}
+                until={range.until}
+                rangeLabel={range.label}
+                accountIds={filters.account_ids}
+                campaignIds={filters.campaign_ids}
               />
             </WidgetCard>
           );
@@ -408,6 +520,223 @@ function AddWidgetMenu({
               {def.title}
             </button>
           ))}
+        </div>
+      )}
+    </span>
+  );
+}
+
+function TimeframeControl({
+  filters,
+  onChange,
+}: {
+  filters: DashFilters;
+  onChange: (next: DashFilters) => void;
+}) {
+  const today = isoDate(new Date());
+  const setPreset = (preset: TimeframePreset) => {
+    if (preset === "custom") {
+      const r = resolveRange({ ...filters, preset: "custom" });
+      onChange({ ...filters, preset, since: filters.since ?? r.since, until: filters.until ?? r.until });
+    } else {
+      onChange({ ...filters, preset, since: null, until: null });
+    }
+  };
+  return (
+    <span className="dash-timeframe">
+      <Segmented<TimeframePreset>
+        ariaLabel="Timeframe"
+        value={filters.preset}
+        onChange={setPreset}
+        options={[
+          { value: "today", label: "Today" },
+          { value: "7d", label: "7d" },
+          { value: "30d", label: "30d" },
+          { value: "90d", label: "90d" },
+          { value: "custom", label: "Custom" },
+        ]}
+      />
+      {filters.preset === "custom" && (
+        <span className="dash-timeframe-custom">
+          <input
+            className="input dash-date-input"
+            type="date"
+            aria-label="Since"
+            value={filters.since ?? ""}
+            max={filters.until ?? today}
+            onChange={(e) => onChange({ ...filters, since: e.target.value })}
+          />
+          <span aria-hidden="true">–</span>
+          <input
+            className="input dash-date-input"
+            type="date"
+            aria-label="Until"
+            value={filters.until ?? ""}
+            min={filters.since ?? undefined}
+            max={today}
+            onChange={(e) => onChange({ ...filters, until: e.target.value })}
+          />
+        </span>
+      )}
+    </span>
+  );
+}
+
+function AccountCampaignFilter({
+  clientId,
+  accountIds,
+  campaignIds,
+  onChange,
+}: {
+  clientId: string;
+  accountIds: string[];
+  campaignIds: string[];
+  onChange: (accountIds: string[], campaignIds: string[]) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [accounts, setAccounts] = useState<AdAccount[] | null>(null);
+  const [campaignsByAccount, setCampaignsByAccount] = useState<
+    Record<string, Campaign[]>
+  >({});
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const ref = useRef<HTMLSpanElement>(null);
+
+  useEffect(() => {
+    if (!open || accounts !== null) return;
+    api<AdAccount[]>(`/api/ad-accounts?client_id=${clientId}`)
+      .then(setAccounts)
+      .catch(() => setAccounts([]));
+  }, [open, accounts, clientId]);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("mousedown", onDoc);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDoc);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+
+  const loadCampaigns = (account: AdAccount) => {
+    if (campaignsByAccount[account.id]) return;
+    api<Campaign[]>(`/api/ad-accounts/${account.id}/campaigns`)
+      .then((cs) =>
+        setCampaignsByAccount((prev) => ({ ...prev, [account.id]: cs })),
+      )
+      .catch(() =>
+        setCampaignsByAccount((prev) => ({ ...prev, [account.id]: [] })),
+      );
+  };
+
+  const toggleExpand = (account: AdAccount) => {
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(account.id)) {
+        next.delete(account.id);
+      } else {
+        next.add(account.id);
+        loadCampaigns(account);
+      }
+      return next;
+    });
+  };
+
+  const toggleAccount = (a: AdAccount) => {
+    const has = accountIds.includes(a.external_id);
+    const nextAccounts = has
+      ? accountIds.filter((id) => id !== a.external_id)
+      : [...accountIds, a.external_id];
+    // Selecting a whole account supersedes any of its own campaign-level
+    // picks; deselecting it should drop them too, so the two never conflict.
+    const ownCampaignIds = new Set(
+      (campaignsByAccount[a.id] ?? []).map((c) => c.external_id),
+    );
+    const nextCampaigns = campaignIds.filter((id) => !ownCampaignIds.has(id));
+    onChange(nextAccounts, nextCampaigns);
+  };
+
+  const toggleCampaign = (c: Campaign) => {
+    const has = campaignIds.includes(c.external_id);
+    onChange(
+      accountIds,
+      has ? campaignIds.filter((id) => id !== c.external_id) : [...campaignIds, c.external_id],
+    );
+  };
+
+  const count = accountIds.length + campaignIds.length;
+
+  return (
+    <span className="dash-add" ref={ref}>
+      <Button
+        variant="default"
+        size="sm"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        onClick={() => setOpen((o) => !o)}
+      >
+        {count === 0 ? "All accounts" : `${count} selected`}
+      </Button>
+      {open && (
+        <div className="dash-add-menu dash-filter-menu" role="menu">
+          {accounts === null && <SkeletonText lines={3} />}
+          {accounts?.length === 0 && (
+            <p className="dash-muted">No connected ad accounts.</p>
+          )}
+          {accounts?.map((a) => (
+            <div key={a.id} className="dash-filter-row">
+              <span className="dash-filter-line">
+                <button
+                  type="button"
+                  className="dash-filter-expand"
+                  aria-label={expanded.has(a.id) ? "Collapse campaigns" : "Expand campaigns"}
+                  aria-expanded={expanded.has(a.id)}
+                  onClick={() => toggleExpand(a)}
+                >
+                  {expanded.has(a.id) ? "▾" : "▸"}
+                </button>
+                <label className="mg-check dash-filter-check">
+                  <input
+                    type="checkbox"
+                    checked={accountIds.includes(a.external_id)}
+                    onChange={() => toggleAccount(a)}
+                  />
+                  <PlatformChip name={a.platform} /> {a.name}
+                </label>
+              </span>
+              {expanded.has(a.id) && (
+                <div className="dash-filter-sub">
+                  {campaignsByAccount[a.id] === undefined && (
+                    <SkeletonText lines={2} />
+                  )}
+                  {campaignsByAccount[a.id]?.length === 0 && (
+                    <p className="dash-muted">No campaigns.</p>
+                  )}
+                  {campaignsByAccount[a.id]?.map((c) => (
+                    <label key={c.id} className="mg-check dash-filter-check">
+                      <input
+                        type="checkbox"
+                        checked={campaignIds.includes(c.external_id)}
+                        onChange={() => toggleCampaign(c)}
+                      />
+                      {c.name}
+                    </label>
+                  ))}
+                </div>
+              )}
+            </div>
+          ))}
+          {count > 0 && (
+            <Button variant="ghost" size="sm" onClick={() => onChange([], [])}>
+              Clear filter
+            </Button>
+          )}
         </div>
       )}
     </span>

@@ -235,6 +235,80 @@
   box-shadow: var(--focus-ring);
 }
 
+/* ---- timeframe control ----------------------------------------------------
+   The Segmented preset (Today/7d/30d/90d/Custom) plus, only when Custom is
+   active, two native date inputs — deliberately not a bespoke calendar
+   widget; a real popover-calendar primitive doesn't exist in the design
+   system yet and native <input type="date"> already themes reasonably via
+   .input and needs no new component surface. */
+
+.dash-timeframe {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.dash-timeframe-custom {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  color: var(--ink-faint);
+}
+
+.dash-date-input {
+  width: auto;
+  min-height: 32px;
+  padding: var(--space-1) var(--space-2);
+  font-size: var(--text-sm);
+}
+
+/* ---- account/campaign spend filter --------------------------------------- */
+
+.dash-filter-menu {
+  min-width: 280px;
+  max-height: 360px;
+  overflow-y: auto;
+}
+
+.dash-filter-row {
+  display: flex;
+  flex-direction: column;
+}
+
+.dash-filter-line {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.dash-filter-expand {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: var(--ink-faint);
+  cursor: pointer;
+  padding: var(--space-1);
+  font-size: var(--text-xs);
+  line-height: 1;
+}
+
+.dash-filter-check {
+  flex: 1;
+  min-width: 0;
+  padding: var(--space-1) var(--space-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dash-filter-sub {
+  display: flex;
+  flex-direction: column;
+  margin-left: calc(var(--space-5) + var(--space-1));
+  border-left: 1px solid var(--border);
+  padding-left: var(--space-2);
+}
+
 /* ---- widget-internal composition ---------------------------------------- */
 
 .dash-muted {

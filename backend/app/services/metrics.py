@@ -101,17 +101,52 @@ def _insight_rows(
     )
 
 
+def _matches_entity_filter(
+    row: InsightDaily,
+    account_ids: Optional[Set[str]],
+    campaign_ids: Optional[Set[str]],
+) -> bool:
+    """Dashboard account/campaign filter — applied on top of (never instead
+    of) the canonical-insight-level restriction every caller already uses.
+    account_external_id is a direct column (rows synced before it existed are
+    NULL and never match a real filter); campaign id rides along in `raw` for
+    both Meta (ad-level rows) and Google (ad_group-level rows), per
+    fetch_insights' "upward aggregation" convention — no schema for a
+    campaign-level row exists, so this is a Python-side filter rather than a
+    query predicate.
+
+    UNION, not intersection: the picker lets an operator check a whole
+    account AND a specific campaign under a *different*, unchecked account
+    (e.g. "everything in Account A, plus just this one campaign in Account
+    B") — an AND would silently zero out that campaign's rows since its
+    account was never selected. A row matches if either selected set claims
+    it; with neither set given, nothing is filtered."""
+    if account_ids is None and campaign_ids is None:
+        return True
+    if account_ids is not None and row.account_external_id in account_ids:
+        return True
+    if campaign_ids is not None:
+        raw = row.raw or {}
+        if raw.get("campaign_id") in campaign_ids:
+            return True
+    return False
+
+
 def _platform_totals(
     db: Session,
     client: Client,
     since: dt.date,
     until: dt.date,
     platforms: Optional[Set[str]] = None,
+    account_ids: Optional[Set[str]] = None,
+    campaign_ids: Optional[Set[str]] = None,
 ) -> Dict[str, Dict[str, int]]:
     """Spend / platform-reported conversions / clicks / impressions per
     platform, summed at that platform's canonical insight level. `platforms`
     (None = all) is the Phase 4 dashboard filter — restricting here keeps
-    every downstream blended total consistent with the visible channels."""
+    every downstream blended total consistent with the visible channels.
+    `account_ids`/`campaign_ids` (None = all) narrow further to specific ad
+    accounts or campaigns, the dashboard's spend-selection filter."""
     totals: Dict[str, Dict[str, int]] = defaultdict(
         lambda: {"spend_micros": 0, "conversions": 0, "clicks": 0, "impressions": 0}
     )
@@ -119,6 +154,8 @@ def _platform_totals(
         if row.entity_type != _INSIGHT_LEVELS.get(row.platform):
             continue
         if platforms is not None and row.platform not in platforms:
+            continue
+        if not _matches_entity_filter(row, account_ids, campaign_ids):
             continue
         t = totals[row.platform]
         t["spend_micros"] += row.spend_micros
@@ -194,6 +231,21 @@ def _cpl(spend_micros: int, leads: int) -> Optional[float]:
     return round(spend_micros / leads / 1_000_000, 2)
 
 
+def _ctr(clicks: int, impressions: int) -> Optional[float]:
+    """Click-through rate as a fraction (0.0312 = 3.12%); None when there
+    were no impressions to divide by."""
+    if impressions <= 0:
+        return None
+    return round(clicks / impressions, 4)
+
+
+def _cpc(spend_micros: int, clicks: int) -> Optional[float]:
+    """Cost per click in dollars; None when there were no clicks."""
+    if clicks <= 0:
+        return None
+    return round(spend_micros / clicks / 1_000_000, 2)
+
+
 # --- 1 & 2: blended CAC/ROAS and channel mix ---
 
 
@@ -203,6 +255,8 @@ def blended_and_mix(
     since: dt.date,
     until: dt.date,
     platform_filter: Optional[Set[str]] = None,
+    account_ids: Optional[Set[str]] = None,
+    campaign_ids: Optional[Set[str]] = None,
 ) -> Dict[str, Any]:
     """Definitions:
     - Tracked CPL (per platform) = platform spend / tracked leads attributed
@@ -216,12 +270,20 @@ def blended_and_mix(
     - Blended ROAS = sum of those won deals' value_cents / total spend.
       Revenue source is Salescale won-deal value — not platform-reported
       conversion values.
+    - CTR = clicks / impressions. CPC = spend / clicks.
 
     With a platform_filter (Phase 4 dashboard toggle), every total narrows
     to the selected platforms: spend, tracked leads (unattributed leads drop
     out — they can't be assigned to a channel), won deals, and revenue.
+    account_ids/campaign_ids (the dashboard's spend-selection filter) narrow
+    the same way at the account/campaign level; tracked leads and won-deal
+    revenue are NOT narrowed by them (a lead's landing event isn't tied to
+    the ad account/campaign it came from in this schema), so those stay
+    org/client-wide even when a specific account or campaign is selected.
     """
-    totals = _platform_totals(db, client, since, until, platform_filter)
+    totals = _platform_totals(
+        db, client, since, until, platform_filter, account_ids, campaign_ids
+    )
     contacts = _contacts_in_range(db, client, since, until)
     platforms = contact_platforms(db, client, contacts)
     if platform_filter is not None:
@@ -270,17 +332,30 @@ def blended_and_mix(
             if total_spend
             else None,
             "lead_share": round(tracked / total_leads, 3) if total_leads else None,
+            "clicks": t["clicks"],
+            "impressions": t["impressions"],
+            "ctr": _ctr(t["clicks"], t["impressions"]),
+            "cpc": _cpc(t["spend_micros"], t["clicks"]),
         }
+
+    total_clicks = sum(t["clicks"] for t in totals.values())
+    total_impressions = sum(t["impressions"] for t in totals.values())
 
     return {
         "since": since.isoformat(),
         "until": until.isoformat(),
         "platforms": sorted(platform_filter) if platform_filter else None,
+        "account_ids": sorted(account_ids) if account_ids else None,
+        "campaign_ids": sorted(campaign_ids) if campaign_ids else None,
         "per_platform": per_platform,
         "unattributed_leads": leads_by_platform.get("unattributed", 0),
         "total_spend_micros": total_spend,
         "total_tracked_leads": total_leads,
+        "total_clicks": total_clicks,
+        "total_impressions": total_impressions,
         "blended_cpl": _cpl(total_spend, total_leads),
+        "blended_ctr": _ctr(total_clicks, total_impressions),
+        "blended_cpc": _cpc(total_spend, total_clicks),
         "won_deals_from_paid": len(paid_won),
         "revenue_cents_from_paid": revenue_cents,
         "blended_cac": _cpl(total_spend, len(paid_won)),
@@ -560,12 +635,15 @@ def spend_daily(
     since: dt.date,
     until: dt.date,
     platform_filter: Optional[Set[str]] = None,
+    account_ids: Optional[Set[str]] = None,
+    campaign_ids: Optional[Set[str]] = None,
 ) -> Dict[str, Any]:
-    """Per-platform daily spend + platform-reported conversions, zero-filled
-    for every day in [since, until] so pacing charts don't interpolate over
-    missing days. Sums at each platform's canonical insight level (same rule
-    as _platform_totals, so a day's total here always matches the blended
-    view's total for that day)."""
+    """Per-platform daily spend + platform-reported conversions (+ clicks/
+    impressions), zero-filled for every day in [since, until] so pacing
+    charts don't interpolate over missing days. Sums at each platform's
+    canonical insight level (same rule as _platform_totals, so a day's total
+    here always matches the blended view's total for that day).
+    account_ids/campaign_ids narrow the same way as blended_and_mix."""
     days = [
         since + dt.timedelta(days=i) for i in range((until - since).days + 1)
     ]
@@ -576,18 +654,26 @@ def spend_daily(
             continue
         if platform_filter is not None and row.platform not in platform_filter:
             continue
+        if not _matches_entity_filter(row, account_ids, campaign_ids):
+            continue
         s = series.setdefault(
             row.platform,
             {
                 "daily_spend_micros": [0] * len(days),
                 "daily_conversions": [0] * len(days),
+                "daily_clicks": [0] * len(days),
+                "daily_impressions": [0] * len(days),
             },
         )
         i = index[row.date]
         s["daily_spend_micros"][i] += row.spend_micros
         s["daily_conversions"][i] += row.conversions
+        s["daily_clicks"][i] += row.clicks
+        s["daily_impressions"][i] += row.impressions
     for s in series.values():
         s["total_spend_micros"] = sum(s["daily_spend_micros"])
+        s["total_clicks"] = sum(s["daily_clicks"])
+        s["total_impressions"] = sum(s["daily_impressions"])
     return {
         "since": since.isoformat(),
         "until": until.isoformat(),

@@ -82,6 +82,14 @@
   height: 16px;
 }
 
+/* Compact bid input inside a table cell (keyword edit row). */
+.mg-bid-input {
+  max-width: 110px;
+  min-height: 28px;
+  padding: var(--space-1) var(--space-2);
+  margin-left: auto;
+}
+
 /* Right-aligned cell for row-level table actions. */
 .mg-row-actions {
   display: inline-flex;

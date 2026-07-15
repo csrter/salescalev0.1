@@ -58,6 +58,17 @@ def _platform_set(platforms: Optional[str]) -> Optional[set[str]]:
     return parsed or None
 
 
+def _id_set(ids: Optional[str]) -> Optional[set[str]]:
+    """Parse a CSV of external ids (?account_ids=... / ?campaign_ids=...).
+    None / empty means no filter — unlike _platform_set there's no fixed
+    vocabulary to validate against, so anything non-empty passes through and
+    simply matches zero rows if the id is wrong."""
+    if not ids:
+        return None
+    parsed = {i.strip() for i in ids.split(",") if i.strip()}
+    return parsed or None
+
+
 @router.post("/insights/sync")
 def sync_insights(
     client_id: str,
@@ -79,12 +90,17 @@ def blended(
     since: Optional[dt.date] = None,
     until: Optional[dt.date] = None,
     platforms: Optional[str] = None,
+    account_ids: Optional[str] = None,
+    campaign_ids: Optional[str] = None,
     scope: TenantScope = Depends(get_scope),
     db: Session = Depends(get_db),
 ):
     client = _client_for(db, scope, client_id)
     s, u = _range(since, until)
-    return metrics.blended_and_mix(db, client, s, u, _platform_set(platforms))
+    return metrics.blended_and_mix(
+        db, client, s, u,
+        _platform_set(platforms), _id_set(account_ids), _id_set(campaign_ids),
+    )
 
 
 @router.get("/metrics/spend-daily")
@@ -93,12 +109,17 @@ def spend_daily(
     since: Optional[dt.date] = None,
     until: Optional[dt.date] = None,
     platforms: Optional[str] = None,
+    account_ids: Optional[str] = None,
+    campaign_ids: Optional[str] = None,
     scope: TenantScope = Depends(get_scope),
     db: Session = Depends(get_db),
 ):
     client = _client_for(db, scope, client_id)
     s, u = _range(since, until)
-    return metrics.spend_daily(db, client, s, u, _platform_set(platforms))
+    return metrics.spend_daily(
+        db, client, s, u,
+        _platform_set(platforms), _id_set(account_ids), _id_set(campaign_ids),
+    )
 
 
 @router.get("/metrics/guarantee")

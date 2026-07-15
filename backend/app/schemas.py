@@ -608,6 +608,7 @@ class KeywordOut(BaseModel):
     match_type: str
     status: Optional[str] = None
     negative: bool = False
+    cpc_bid_micros: Optional[int] = None
 
 
 class SearchTermOut(BaseModel):

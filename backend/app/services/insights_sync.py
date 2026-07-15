@@ -52,6 +52,7 @@ def _upsert_insight(db: Session, account: AdAccount, row: Dict[str, Any]) -> Non
                 platform=account.platform,
                 entity_type=row["entity_type"],
                 entity_external_id=row["entity_external_id"],
+                account_external_id=account.external_id,
                 date=date,
                 impressions=row["impressions"],
                 clicks=row["clicks"],
@@ -68,6 +69,7 @@ def _upsert_insight(db: Session, account: AdAccount, row: Dict[str, Any]) -> Non
         existing.spend_micros = row["spend_micros"]
         existing.conversions = row["conversions"]
         existing.raw = row.get("raw")
+        existing.account_external_id = account.external_id
 
 
 def _upsert_snapshot(

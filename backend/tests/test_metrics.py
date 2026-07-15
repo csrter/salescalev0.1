@@ -27,6 +27,7 @@ from app.models.attribution import LandingEvent
 from app.models.base import utcnow
 from app.models.core import Client
 from app.models.crm import Contact, Deal, Pipeline, PipelineStage
+from app.services.metrics import _matches_entity_filter
 
 TODAY = dt.date.today()
 
@@ -192,6 +193,83 @@ def test_blended_cac_roas_and_channel_mix(api, team_headers, metrics_seeded):
     google = body["per_platform"]["google"]
     assert google["spend_share"] == round(200 / 300, 3)
     assert body["unattributed_leads"] == 1
+
+
+def test_entity_filter_unions_account_and_campaign_picks():
+    # An operator can check a whole account AND a campaign under a
+    # *different*, unchecked account (the picker allows both levels
+    # independently). A row belonging to neither the checked account nor
+    # the checked campaign must still be excluded, but a row under the
+    # checked campaign's own (unchecked) account must still match — an
+    # intersection would zero it out, which is the bug this guards.
+    row_in_checked_account = InsightDaily(
+        account_external_id="acct_A", raw={"campaign_id": "camp_other"}
+    )
+    row_in_checked_campaign_only = InsightDaily(
+        account_external_id="acct_B", raw={"campaign_id": "camp_X"}
+    )
+    row_in_neither = InsightDaily(
+        account_external_id="acct_C", raw={"campaign_id": "camp_Y"}
+    )
+    account_ids = {"acct_A"}
+    campaign_ids = {"camp_X"}
+    assert _matches_entity_filter(row_in_checked_account, account_ids, campaign_ids)
+    assert _matches_entity_filter(
+        row_in_checked_campaign_only, account_ids, campaign_ids
+    )
+    assert not _matches_entity_filter(row_in_neither, account_ids, campaign_ids)
+
+
+def test_entity_filter_no_filter_matches_everything():
+    row = InsightDaily(account_external_id=None, raw=None)
+    assert _matches_entity_filter(row, None, None)
+
+
+def test_blended_campaign_filter_narrows_to_one_campaign(
+    api, team_headers, metrics_seeded
+):
+    # c_cold is Meta's only campaign in the fixture: $100 spend, 5 platform
+    # conversions, all under one campaign — filtering to it alone should
+    # reproduce the unfiltered Meta totals exactly (single-campaign account).
+    resp = api.get(
+        f"/api/metrics/blended?client_id={metrics_seeded['client_a']}"
+        "&campaign_ids=c_cold",
+        headers=team_headers,
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["campaign_ids"] == ["c_cold"]
+    assert body["total_spend_micros"] == 100_000_000
+    assert "google" not in body["per_platform"]
+
+
+def test_blended_campaign_filter_unions_multiple_campaigns(
+    api, team_headers, metrics_seeded
+):
+    # g_brand ($50) + g_generic ($150) together should reproduce Google's
+    # full unfiltered total — proves the filter is inclusive across the
+    # given set, not an intersection collapsing to nothing.
+    resp = api.get(
+        f"/api/metrics/blended?client_id={metrics_seeded['client_a']}"
+        "&campaign_ids=g_brand,g_generic",
+        headers=team_headers,
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["per_platform"]["google"]["spend_micros"] == 200_000_000
+    assert "meta" not in body["per_platform"]
+
+
+def test_blended_unknown_campaign_id_yields_zero_spend(
+    api, team_headers, metrics_seeded
+):
+    resp = api.get(
+        f"/api/metrics/blended?client_id={metrics_seeded['client_a']}"
+        "&campaign_ids=does-not-exist",
+        headers=team_headers,
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["total_spend_micros"] == 0
 
 
 def test_funnel_tiers(api, team_headers, metrics_seeded):

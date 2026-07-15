@@ -188,6 +188,14 @@ class InsightDaily(Base):
         String(20), nullable=False
     )  # account | campaign | ad_group | ad
     entity_external_id: Mapped[str] = mapped_column(String(100), nullable=False)
+    # The ad account this row was synced from. Nullable — rows synced before
+    # this column existed stay NULL until their next sync. Needed because
+    # entity_external_id alone under-determines the account when a client has
+    # more than one ad account on the same platform; client_id isn't enough
+    # either (same reason). Powers the dashboard's per-account filter.
+    account_external_id: Mapped[Optional[str]] = mapped_column(
+        String(100), index=True
+    )
     date: Mapped[dt.date] = mapped_column(Date, nullable=False)
     impressions: Mapped[int] = mapped_column(BigInteger, default=0, nullable=False)
     clicks: Mapped[int] = mapped_column(BigInteger, default=0, nullable=False)

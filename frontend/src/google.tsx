@@ -14,6 +14,15 @@ import "./styles/views/manage.css";
 
 const MATCH_TYPES = ["EXACT", "PHRASE", "BROAD"] as const;
 
+function dollarsFromMicros(micros?: number | null): string {
+  return micros == null ? "" : (micros / 1_000_000).toFixed(2);
+}
+
+function microsFromDollars(dollars: string): number | undefined {
+  const n = parseFloat(dollars);
+  return Number.isFinite(n) && n >= 0 ? Math.round(n * 1_000_000) : undefined;
+}
+
 export function KeywordsPanel({
   adGroupId,
   adAccountId,
@@ -27,6 +36,10 @@ export function KeywordsPanel({
   const [text, setText] = useState("");
   const [matchType, setMatchType] = useState<string>("PHRASE");
   const [negative, setNegative] = useState(false);
+  const [bid, setBid] = useState("");
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editMatch, setEditMatch] = useState<string>("PHRASE");
+  const [editBid, setEditBid] = useState("");
 
   const load = useCallback(() => {
     api<Keyword[]>(`/api/ad-groups/${adGroupId}/keywords`)
@@ -43,10 +56,17 @@ export function KeywordsPanel({
         entity_type: "keyword",
         action: "add",
         entity_name: text,
-        payload: { ad_group_id: adGroupId, text, match_type: matchType, negative },
+        payload: {
+          ad_group_id: adGroupId,
+          text,
+          match_type: matchType,
+          negative,
+          bid_micros: negative ? undefined : microsFromDollars(bid),
+        },
       },
       () => {
         setText("");
+        setBid("");
         load();
       }
     ).catch((e) => setError((e as Error).message));
@@ -60,6 +80,52 @@ export function KeywordsPanel({
         action: "remove",
         entity_name: kw.text,
         payload: { ad_group_id: adGroupId, criterion_id: kw.criterion_id, text: kw.text },
+      },
+      load
+    ).catch((e) => setError((e as Error).message));
+
+  const startEdit = (kw: Keyword) => {
+    setEditingId(kw.criterion_id);
+    setEditMatch(kw.match_type);
+    setEditBid(dollarsFromMicros(kw.cpc_bid_micros));
+  };
+
+  const saveEdit = (kw: Keyword) => {
+    const payload: Record<string, unknown> = { ad_group_id: adGroupId };
+    if (editMatch !== kw.match_type) payload.match_type = editMatch;
+    const bidMicros = microsFromDollars(editBid);
+    if (bidMicros !== undefined && bidMicros !== kw.cpc_bid_micros) {
+      payload.bid_micros = bidMicros;
+    }
+    if (Object.keys(payload).length === 1) {
+      setEditingId(null);
+      return;
+    }
+    stage(
+      {
+        ad_account_id: adAccountId,
+        entity_type: "keyword",
+        action: "update",
+        entity_external_id: kw.criterion_id,
+        entity_name: kw.text,
+        payload,
+      },
+      () => {
+        setEditingId(null);
+        load();
+      }
+    ).catch((e) => setError((e as Error).message));
+  };
+
+  const toggleStatus = (kw: Keyword) =>
+    stage(
+      {
+        ad_account_id: adAccountId,
+        entity_type: "keyword",
+        action: kw.status === "PAUSED" ? "resume" : "pause",
+        entity_external_id: kw.criterion_id,
+        entity_name: kw.text,
+        payload: { ad_group_id: adGroupId },
       },
       load
     ).catch((e) => setError((e as Error).message));
@@ -87,8 +153,40 @@ export function KeywordsPanel({
           {
             key: "match",
             header: "Match",
-            render: (k) => k.match_type,
+            render: (k) =>
+              editingId === k.criterion_id ? (
+                <Segmented<string>
+                  ariaLabel="Match type"
+                  options={MATCH_TYPES.map((m) => ({ value: m, label: m }))}
+                  value={editMatch}
+                  onChange={setEditMatch}
+                />
+              ) : (
+                k.match_type
+              ),
             sortValue: (k) => k.match_type,
+          },
+          {
+            key: "bid",
+            header: "Bid",
+            align: "right",
+            render: (k) =>
+              editingId === k.criterion_id ? (
+                <input
+                  className="input mg-bid-input"
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  placeholder="Ad group default"
+                  value={editBid}
+                  onChange={(e) => setEditBid(e.target.value)}
+                />
+              ) : k.cpc_bid_micros ? (
+                `$${dollarsFromMicros(k.cpc_bid_micros)}`
+              ) : (
+                "Ad group default"
+              ),
+            sortValue: (k) => k.cpc_bid_micros ?? 0,
           },
           {
             key: "status",
@@ -100,13 +198,33 @@ export function KeywordsPanel({
           {
             key: "actions",
             header: "",
-            render: (k) => (
-              <span className="mg-row-actions">
-                <Button variant="danger-outline" size="sm" onClick={() => removeKeyword(k)}>
-                  Remove
-                </Button>
-              </span>
-            ),
+            render: (k) =>
+              editingId === k.criterion_id ? (
+                <span className="mg-row-actions">
+                  <Button variant="primary" size="sm" onClick={() => saveEdit(k)}>
+                    Save
+                  </Button>
+                  <Button variant="ghost" size="sm" onClick={() => setEditingId(null)}>
+                    Cancel
+                  </Button>
+                </span>
+              ) : (
+                <span className="mg-row-actions">
+                  {k.status !== "REMOVED" && (
+                    <>
+                      <Button variant="ghost" size="sm" onClick={() => startEdit(k)}>
+                        Edit
+                      </Button>
+                      <Button variant="ghost" size="sm" onClick={() => toggleStatus(k)}>
+                        {k.status === "PAUSED" ? "Resume" : "Pause"}
+                      </Button>
+                    </>
+                  )}
+                  <Button variant="danger-outline" size="sm" onClick={() => removeKeyword(k)}>
+                    Remove
+                  </Button>
+                </span>
+              ),
           },
         ]}
       />
@@ -134,6 +252,20 @@ export function KeywordsPanel({
             onChange={setMatchType}
           />
         </Field>
+        {!negative && (
+          <div className="mg-form-cell">
+            <Field label="Bid (optional)">
+              <input
+                type="number"
+                min="0"
+                step="0.01"
+                placeholder="Ad group default"
+                value={bid}
+                onChange={(e) => setBid(e.target.value)}
+              />
+            </Field>
+          </div>
+        )}
         <label className="mg-check">
           <input
             type="checkbox"

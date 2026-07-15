@@ -7,6 +7,8 @@ row is always looked up by the authenticated user's id, so there is no
 user_id parameter to tamper with.
 """
 
+import datetime as dt
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -78,6 +80,55 @@ def save_layout(
         row.widgets = widgets
     db.commit()
     return {"client_id": client_id, "widgets": row.widgets}
+
+
+# --- Dashboard timeframe + account/campaign filter (same row as widgets) ---
+
+
+class DashboardFiltersIn(BaseModel):
+    preset: str | None = None  # "today" | "7d" | "30d" | "90d" | "custom"
+    since: dt.date | None = None
+    until: dt.date | None = None
+    account_ids: list[str] = []
+    campaign_ids: list[str] = []
+
+
+@router.get("/filters")
+def get_filters(
+    client_id: str,
+    scope: TenantScope = Depends(get_scope),
+    db: Session = Depends(get_db),
+):
+    """The saved timeframe + account/campaign selection for this user's view
+    of this client's dashboard. null = no saved choice (role default: last
+    30 days, every connected account)."""
+    _client_for(db, scope, client_id)
+    row = _layout_row(db, scope, client_id)
+    return {"client_id": client_id, "filters": row.filters if row else None}
+
+
+@router.put("/filters")
+def save_filters(
+    client_id: str,
+    body: DashboardFiltersIn,
+    scope: TenantScope = Depends(get_scope),
+    db: Session = Depends(get_db),
+):
+    _client_for(db, scope, client_id)
+    filters = body.model_dump(mode="json")
+    row = _layout_row(db, scope, client_id)
+    if row is None:
+        row = DashboardLayout(
+            organization_id=scope.organization_id,
+            user_id=scope.user.id,
+            client_id=client_id,
+            filters=filters,
+        )
+        db.add(row)
+    else:
+        row.filters = filters
+    db.commit()
+    return {"client_id": client_id, "filters": row.filters}
 
 
 # --- Phase 14: CRM lead-list column choice (same per-user preference pattern) ---

@@ -489,7 +489,8 @@ def fetch_keywords(
         customer_id,
         "SELECT ad_group_criterion.criterion_id, ad_group_criterion.keyword.text, "
         "ad_group_criterion.keyword.match_type, ad_group_criterion.status, "
-        "ad_group_criterion.negative, ad_group.id FROM ad_group_criterion "
+        "ad_group_criterion.negative, ad_group_criterion.cpc_bid_micros, "
+        "ad_group.id FROM ad_group_criterion "
         f"WHERE ad_group.id = {int(ad_group_external_id)} "
         "AND ad_group_criterion.type = KEYWORD",
     )
@@ -500,6 +501,7 @@ def fetch_keywords(
             "match_type": r.ad_group_criterion.keyword.match_type.name,
             "status": r.ad_group_criterion.status.name,
             "negative": bool(r.ad_group_criterion.negative),
+            "cpc_bid_micros": r.ad_group_criterion.cpc_bid_micros or None,
         }
         for r in rows
     ]
@@ -532,6 +534,44 @@ def add_keyword(
         )
         rn = resp.results[0].resource_name
         return {"criterion_id": rn.split("~")[-1], "resource_name": rn}
+
+    return _run(refresh_token, fn)
+
+
+def update_keyword(
+    refresh_token: str,
+    customer_id: str,
+    ad_group_external_id: str,
+    criterion_id: str,
+    match_type: Optional[str] = None,
+    cpc_bid_micros: Optional[int] = None,
+    status: Optional[str] = None,
+) -> None:
+    """Update an existing keyword criterion's match type, bid, and/or status
+    (ENABLED/PAUSED). Google has no in-place text edit for a keyword — that
+    stays remove + add, same as this UI's existing Remove/Add actions."""
+
+    def fn(client):
+        from google.api_core import protobuf_helpers
+
+        svc = client.get_service("AdGroupCriterionService")
+        op = client.get_type("AdGroupCriterionOperation")
+        criterion = op.update
+        criterion.resource_name = svc.ad_group_criterion_path(
+            customer_id, ad_group_external_id, criterion_id
+        )
+        if match_type is not None:
+            criterion.keyword.match_type = client.enums.KeywordMatchTypeEnum[
+                match_type
+            ]
+        if cpc_bid_micros is not None:
+            criterion.cpc_bid_micros = cpc_bid_micros
+        if status is not None:
+            criterion.status = client.enums.AdGroupCriterionStatusEnum[status]
+        client.copy_from(
+            op.update_mask, protobuf_helpers.field_mask(None, criterion._pb)
+        )
+        svc.mutate_ad_group_criteria(customer_id=customer_id, operations=[op])
 
     return _run(refresh_token, fn)
 

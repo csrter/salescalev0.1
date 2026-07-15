@@ -675,6 +675,7 @@ export interface Keyword {
   match_type: string;
   status?: string | null;
   negative: boolean;
+  cpc_bid_micros?: number | null;
 }
 
 export interface SearchTerm {

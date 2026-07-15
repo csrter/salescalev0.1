@@ -47,6 +47,21 @@ export interface WidgetProps {
   session: Session;
   platforms: PlatformFilter;
   refresh: number;
+  /** Dashboard timeframe (YYYY-MM-DD, inclusive), owned by the page like
+   * `platforms`. Every widget whose backend endpoint accepts since/until
+   * honors it; point-in-time widgets (guarantee, fatigue, quality) ignore it. */
+  since: string;
+  until: string;
+  /** Human label for the active timeframe (e.g. "Today", "Last 7 days",
+   * "Jul 1 – Jul 15") — for widgets that show the range in a heading. */
+  rangeLabel: string;
+  /** Dashboard spend-selection filter: specific ad accounts/campaigns
+   * (external ids). Empty = every connected account. Only the
+   * spend/blended-metrics widgets (Overview, Channel mix, Spend & pacing)
+   * honor this — the backend filter exists on /metrics/blended and
+   * /metrics/spend-daily only. */
+  accountIds: string[];
+  campaignIds: string[];
 }
 
 // --- formatting -----------------------------------------------------------
@@ -77,6 +92,16 @@ const filterParam = (platforms: PlatformFilter) =>
 
 const keepPlatform = (platforms: PlatformFilter, p: string) =>
   platforms === "all" || platforms === p;
+
+const rangeParam = (since: string, until: string) =>
+  `&since=${since}&until=${until}`;
+
+const entityParam = (accountIds: string[], campaignIds: string[]) =>
+  (accountIds.length ? `&account_ids=${accountIds.join(",")}` : "") +
+  (campaignIds.length ? `&campaign_ids=${campaignIds.join(",")}` : "");
+
+const clicksFmt = (v?: number | null) => (v == null ? "—" : v.toLocaleString());
+const ctrFmt = (v?: number | null) => (v == null ? "—" : `${(v * 100).toFixed(2)}%`);
 
 function useWidgetData<T>(path: string | null, deps: unknown[]) {
   const [data, setData] = useState<T | null>(null);
@@ -128,14 +153,23 @@ function FilteredOut({ widget }: { widget: string }) {
 
 // --- Blended overview -----------------------------------------------------
 
-export function OverviewWidget({ clientId, platforms, refresh }: WidgetProps) {
+export function OverviewWidget({
+  clientId,
+  platforms,
+  refresh,
+  since,
+  until,
+  rangeLabel,
+  accountIds,
+  campaignIds,
+}: WidgetProps) {
   const { data, error, loading } = useWidgetData<any>(
-    `/api/metrics/blended?client_id=${clientId}${filterParam(platforms)}`,
-    [clientId, platforms, refresh],
+    `/api/metrics/blended?client_id=${clientId}${filterParam(platforms)}${rangeParam(since, until)}${entityParam(accountIds, campaignIds)}`,
+    [clientId, platforms, refresh, since, until, accountIds, campaignIds],
   );
   const lqa = useWidgetData<any>(
-    `/api/metrics/lead-quality-adjusted-cpl?client_id=${clientId}${filterParam(platforms)}`,
-    [clientId, platforms, refresh],
+    `/api/metrics/lead-quality-adjusted-cpl?client_id=${clientId}${filterParam(platforms)}${rangeParam(since, until)}`,
+    [clientId, platforms, refresh, since, until],
   );
   return (
     <WidgetBody error={error} loading={loading} empty={null}>
@@ -146,7 +180,7 @@ export function OverviewWidget({ clientId, platforms, refresh }: WidgetProps) {
               the metrics endpoints expose no prior period yet). */}
           <Kpi
             hero
-            label="Spend (30d)"
+            label={`Spend (${rangeLabel})`}
             value={$compact(data.total_spend_micros)}
             upIsGood={false}
           />
@@ -158,6 +192,10 @@ export function OverviewWidget({ clientId, platforms, refresh }: WidgetProps) {
             value={money(lqa.data?.blended_lead_quality_adjusted_cpl)}
             upIsGood={false}
           />
+          <Kpi label="Impressions" value={clicksFmt(data.total_impressions)} />
+          <Kpi label="Clicks" value={clicksFmt(data.total_clicks)} />
+          <Kpi label="CTR" value={ctrFmt(data.blended_ctr)} />
+          <Kpi label="CPC" value={money(data.blended_cpc)} upIsGood={false} />
         </KpiGrid>
       )}
     </WidgetBody>
@@ -174,16 +212,28 @@ interface ChannelRow {
   tracked_cpl: number | null;
   platform_cpl: number | null;
   lqa_cpl: number | null;
+  clicks: number;
+  impressions: number;
+  ctr: number | null;
+  cpc: number | null;
 }
 
-export function ChannelMixWidget({ clientId, platforms, refresh }: WidgetProps) {
+export function ChannelMixWidget({
+  clientId,
+  platforms,
+  refresh,
+  since,
+  until,
+  accountIds,
+  campaignIds,
+}: WidgetProps) {
   const { data, error, loading } = useWidgetData<any>(
-    `/api/metrics/blended?client_id=${clientId}${filterParam(platforms)}`,
-    [clientId, platforms, refresh],
+    `/api/metrics/blended?client_id=${clientId}${filterParam(platforms)}${rangeParam(since, until)}${entityParam(accountIds, campaignIds)}`,
+    [clientId, platforms, refresh, since, until, accountIds, campaignIds],
   );
   const lqa = useWidgetData<any>(
-    `/api/metrics/lead-quality-adjusted-cpl?client_id=${clientId}${filterParam(platforms)}`,
-    [clientId, platforms, refresh],
+    `/api/metrics/lead-quality-adjusted-cpl?client_id=${clientId}${filterParam(platforms)}${rangeParam(since, until)}`,
+    [clientId, platforms, refresh, since, until],
   );
   const rows: ChannelRow[] = Object.entries(data?.per_platform ?? {}).map(
     ([platform, v]: [string, any]) => ({
@@ -194,6 +244,10 @@ export function ChannelMixWidget({ clientId, platforms, refresh }: WidgetProps) 
       tracked_cpl: v.tracked_cpl,
       platform_cpl: v.platform_cpl,
       lqa_cpl: lqa.data?.per_platform?.[platform]?.lead_quality_adjusted_cpl ?? null,
+      clicks: v.clicks,
+      impressions: v.impressions,
+      ctr: v.ctr,
+      cpc: v.cpc,
     }),
   );
   const columns: Column<ChannelRow>[] = [
@@ -205,6 +259,10 @@ export function ChannelMixWidget({ clientId, platforms, refresh }: WidgetProps) 
     },
     { key: "spend", header: "Spend", align: "right", render: (r) => $(r.spend_micros), sortValue: (r) => r.spend_micros },
     { key: "share", header: "Share", align: "right", render: (r) => pct(r.spend_share), sortValue: (r) => r.spend_share },
+    { key: "impressions", header: "Impr.", align: "right", render: (r) => clicksFmt(r.impressions), sortValue: (r) => r.impressions },
+    { key: "clicks", header: "Clicks", align: "right", render: (r) => clicksFmt(r.clicks), sortValue: (r) => r.clicks },
+    { key: "ctr", header: "CTR", align: "right", render: (r) => ctrFmt(r.ctr), sortValue: (r) => r.ctr ?? -1 },
+    { key: "cpc", header: "CPC", align: "right", render: (r) => money(r.cpc) },
     { key: "leads", header: "Leads", align: "right", render: (r) => r.tracked_leads, sortValue: (r) => r.tracked_leads },
     { key: "tcpl", header: "Tracked CPL", align: "right", render: (r) => money(r.tracked_cpl) },
     { key: "pcpl", header: "Platform CPL*", align: "right", render: (r) => money(r.platform_cpl) },
@@ -238,10 +296,18 @@ interface SpendDayRow {
   [platform: string]: string | number;
 }
 
-export function SpendPacingWidget({ clientId, platforms, refresh }: WidgetProps) {
+export function SpendPacingWidget({
+  clientId,
+  platforms,
+  refresh,
+  since,
+  until,
+  accountIds,
+  campaignIds,
+}: WidgetProps) {
   const { data, error, loading } = useWidgetData<any>(
-    `/api/metrics/spend-daily?client_id=${clientId}${filterParam(platforms)}`,
-    [clientId, platforms, refresh],
+    `/api/metrics/spend-daily?client_id=${clientId}${filterParam(platforms)}${rangeParam(since, until)}${entityParam(accountIds, campaignIds)}`,
+    [clientId, platforms, refresh, since, until, accountIds, campaignIds],
   );
   const [mode, setMode] = useState<"chart" | "table">("chart");
 
@@ -334,10 +400,16 @@ interface FunnelRow {
   cpl: number | null;
 }
 
-export function FunnelTiersWidget({ clientId, platforms, refresh }: WidgetProps) {
+export function FunnelTiersWidget({
+  clientId,
+  platforms,
+  refresh,
+  since,
+  until,
+}: WidgetProps) {
   const { data, error, loading } = useWidgetData<any>(
-    `/api/metrics/funnel-tiers?client_id=${clientId}`,
-    [clientId, refresh],
+    `/api/metrics/funnel-tiers?client_id=${clientId}${rangeParam(since, until)}`,
+    [clientId, refresh, since, until],
   );
   const rows: FunnelRow[] = Object.entries(data ?? {})
     .filter(([platform]) => keepPlatform(platforms, platform))
@@ -665,10 +737,12 @@ export function ReconciliationWidget({
   clientId,
   platforms,
   refresh,
+  since,
+  until,
 }: WidgetProps) {
   const { data, error, loading } = useWidgetData<any>(
-    `/api/metrics/reconciliation?client_id=${clientId}`,
-    [clientId, refresh],
+    `/api/metrics/reconciliation?client_id=${clientId}${rangeParam(since, until)}`,
+    [clientId, refresh, since, until],
   );
   const rows: ReconRow[] = Object.entries(data?.per_platform ?? {})
     .filter(([p]) => keepPlatform(platforms, p))
@@ -812,10 +886,10 @@ export function CampaignTableWidget({
 
 // --- Vertical benchmark (team-only) ---------------------------------------
 
-export function BenchmarkWidget({ clientId, refresh }: WidgetProps) {
+export function BenchmarkWidget({ clientId, refresh, since, until }: WidgetProps) {
   const { data, error, loading } = useWidgetData<any>(
-    `/api/metrics/benchmark?client_id=${clientId}`,
-    [clientId, refresh],
+    `/api/metrics/benchmark?client_id=${clientId}${rangeParam(since, until)}`,
+    [clientId, refresh, since, until],
   );
   return (
     <WidgetBody

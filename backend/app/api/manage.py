@@ -65,10 +65,15 @@ _ALLOWED = {
     "campaign": {"create", "update", "pause", "resume"},
     "ad_group": {"create", "update", "pause", "resume"},
     "ad": {"create", "update", "pause", "resume"},
-    "keyword": {"add", "remove"},
+    "keyword": {"add", "remove", "update", "pause", "resume"},
     "campaign_negative": {"add"},
     "asset_group": {"pause", "resume"},
 }
+
+# entity types with no local cache table — a staged change references the
+# platform's external id directly (entity_external_id) instead of a local
+# row, same as asset_group.
+_NO_LOCAL_MODEL = {"asset_group", "keyword"}
 
 # Payload fields whose values are eligible for the visible diff, per entity.
 _DIFFABLE_FIELDS = [
@@ -179,7 +184,10 @@ def stage_change(
     entity = None
     entity_external_id = body.entity_external_id
     entity_name = body.entity_name
-    if body.action in ("update", "pause", "resume") and body.entity_type != "asset_group":
+    if (
+        body.action in ("update", "pause", "resume")
+        and body.entity_type not in _NO_LOCAL_MODEL
+    ):
         if not body.entity_id:
             raise HTTPException(400, "entity_id is required for this action")
         entity = _load_entity(db, scope, body.entity_type, body.entity_id)
@@ -188,9 +196,11 @@ def stage_change(
         _verify_entity_in_account(db, entity, body.entity_type, account)
         entity_external_id = entity.external_id
         entity_name = entity.name
-    elif body.entity_type == "asset_group":
+    elif body.entity_type == "asset_group" or (
+        body.entity_type == "keyword" and body.action != "add"
+    ):
         if not entity_external_id:
-            raise HTTPException(400, "entity_external_id is required for asset groups")
+            raise HTTPException(400, "entity_external_id is required for this action")
     _validate_payload_refs(db, scope, body, account)
 
     change = PendingChange(
