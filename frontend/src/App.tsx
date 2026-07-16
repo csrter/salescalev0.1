@@ -1,5 +1,7 @@
 import {
   createContext,
+  lazy,
+  Suspense,
   useCallback,
   useContext,
   useEffect,
@@ -45,19 +47,45 @@ import {
   PendingChangesPanel,
   useManage,
 } from "./manage";
-import { Dashboard } from "./dashboard";
-import { CrmView } from "./crm";
 import { Logo } from "./logo";
-import { SuperAdmin, TeamAdmin } from "./admin";
 import { AcceptInvite, Billing, ResetPassword, VerifyEmail } from "./account";
-import { Integrations } from "./integrations";
-import { TwoFactorSettings } from "./security";
-import { BrandingSettings } from "./branding";
-import { LeadFinderView } from "./leadfinder";
 import { AccountPickerDialog } from "./components/AccountPicker";
-import { OutreachView } from "./outreach";
-import { EmailOutreachView } from "./email_outreach";
-import { SmsOutreachView } from "./sms_outreach";
+
+// Code-split the heavy views (each becomes its own chunk; the login/shell
+// stays in the entry bundle). All are named exports, hence the .then() maps.
+const Dashboard = lazy(() =>
+  import("./dashboard").then((m) => ({ default: m.Dashboard })),
+);
+const CrmView = lazy(() =>
+  import("./crm").then((m) => ({ default: m.CrmView })),
+);
+const SuperAdmin = lazy(() =>
+  import("./admin").then((m) => ({ default: m.SuperAdmin })),
+);
+const TeamAdmin = lazy(() =>
+  import("./admin").then((m) => ({ default: m.TeamAdmin })),
+);
+const Integrations = lazy(() =>
+  import("./integrations").then((m) => ({ default: m.Integrations })),
+);
+const TwoFactorSettings = lazy(() =>
+  import("./security").then((m) => ({ default: m.TwoFactorSettings })),
+);
+const BrandingSettings = lazy(() =>
+  import("./branding").then((m) => ({ default: m.BrandingSettings })),
+);
+const LeadFinderView = lazy(() =>
+  import("./leadfinder").then((m) => ({ default: m.LeadFinderView })),
+);
+const OutreachView = lazy(() =>
+  import("./outreach").then((m) => ({ default: m.OutreachView })),
+);
+const EmailOutreachView = lazy(() =>
+  import("./email_outreach").then((m) => ({ default: m.EmailOutreachView })),
+);
+const SmsOutreachView = lazy(() =>
+  import("./sms_outreach").then((m) => ({ default: m.SmsOutreachView })),
+);
 import { CommandPalette, type Command } from "./components/CommandPalette";
 import { ToastProvider, useToast } from "./components/Toast";
 import {
@@ -70,6 +98,7 @@ import {
   PlatformChip,
   Segmented,
   Skeleton,
+  SkeletonText,
   toneForStatus,
 } from "./components/ui";
 import { Dialog } from "./components/Dialog";
@@ -186,6 +215,17 @@ function clearAuthQuery() {
   window.history.replaceState({}, "", window.location.pathname);
 }
 
+/** Suspense fallback while a lazy view chunk loads — existing skeleton
+ * primitives, shaped like a page header + body. */
+function ViewFallback() {
+  return (
+    <div className="view-fallback" aria-hidden="true">
+      <Skeleton height="1.6em" width="240px" />
+      <SkeletonText lines={4} />
+    </div>
+  );
+}
+
 export default function App() {
   const [session, setSess] = useState<Session | null>(getSession());
   const [tab, setTab] = useState<Tab>("clients");
@@ -203,6 +243,14 @@ export default function App() {
       return [];
     }
   });
+  // Tabs the user has actually opened. The heavy workspace views (clients, crm,
+  // email, sms, leads) stay mounted once visited and toggle visibility with
+  // `hidden` instead of unmount/remount — so switching tabs no longer refetches
+  // everything. Memory stays bounded: a view only mounts after its first visit,
+  // never eagerly. Polling inside a hidden view is gated by the `active` prop.
+  const [visited, setVisited] = useState<Set<Tab>>(
+    () => new Set<Tab>(["clients"]),
+  );
 
   // Jump-to-client commands for the palette, fetched fresh each time it
   // opens. The API returns only this org's clients (tenant-scoped
@@ -269,6 +317,12 @@ export default function App() {
   useEffect(() => {
     applyDensity(isTeamRole);
   }, [isTeamRole]);
+
+  // Record every tab the user opens (covers navigate(), palette jumps, and any
+  // other setTab path) so the keep-mounted views know they've been visited.
+  useEffect(() => {
+    setVisited((cur) => (cur.has(tab) ? cur : new Set(cur).add(tab)));
+  }, [tab]);
 
   // The org's "house" CRM (the agency's own prospect pipeline) mounts CrmView
   // against a hidden client the server gets-or-creates. Resolve its id lazily —
@@ -475,19 +529,40 @@ export default function App() {
               <Topbar crumbs={crumbs} showDensity={isTeam} />
               <div className="content">
                 {session.email_verified === false && <VerifyBanner />}
-                {tab === "clients" && (
-                  <Clients
-                    session={session}
-                    selected={selectedClient}
-                    onSelect={setSelectedClient}
-                  />
+                {/* Workspace views stay mounted once visited (state, scroll,
+                    fetched data survive tab switches); visibility toggles via
+                    the hidden attribute. Polling views receive `active` so a
+                    hidden view never polls. Each host carries the entrance
+                    transition (.view-host @starting-style — fires on mount AND
+                    on display:none → visible). */}
+                {visited.has("clients") && (
+                  <div className="view-host" hidden={tab !== "clients"}>
+                    <Suspense fallback={<ViewFallback />}>
+                      <Clients
+                        session={session}
+                        selected={selectedClient}
+                        onSelect={setSelectedClient}
+                        active={tab === "clients"}
+                      />
+                    </Suspense>
+                  </div>
+                )}
+                {isTeam && visited.has("crm") && houseId && (
+                  <div className="view-host" hidden={tab !== "crm"}>
+                    <Suspense fallback={<ViewFallback />}>
+                      <CrmView
+                        clientId={houseId}
+                        session={session}
+                        active={tab === "crm"}
+                      />
+                    </Suspense>
+                  </div>
                 )}
                 {tab === "crm" &&
                   isTeam &&
-                  (houseId ? (
-                    <CrmView clientId={houseId} session={session} />
-                  ) : houseErr ? (
-                    <section className="crm">
+                  !houseId &&
+                  (houseErr ? (
+                    <section className="crm view-host">
                       <Alert tone="danger" title="Couldn't load the CRM">
                         <div className="crm-alert-body">
                           <span>{houseErr}</span>
@@ -501,7 +576,7 @@ export default function App() {
                       </Alert>
                     </section>
                   ) : (
-                    <section className="crm">
+                    <section className="crm view-host">
                       <div className="crm-board" aria-hidden="true">
                         {Array.from({ length: 4 }, (_, i) => (
                           <div key={i} className="kanban-lane">
@@ -513,25 +588,99 @@ export default function App() {
                       </div>
                     </section>
                   ))}
-                {tab === "leads" && isTeam && <LeadFinderView isAdmin={isAdmin} />}
-                {tab === "outreach" && isTeam && <OutreachView isAdmin={isAdmin} />}
-                {tab === "email" && isTeam && <EmailOutreachView isAdmin={isAdmin} />}
-                {tab === "sms" && isTeam && (
-                  <SmsOutreachView isAdmin={isAdmin} isOwner={isOwner} />
+                {isTeam && visited.has("leads") && (
+                  <div className="view-host" hidden={tab !== "leads"}>
+                    <Suspense fallback={<ViewFallback />}>
+                      <LeadFinderView isAdmin={isAdmin} />
+                    </Suspense>
+                  </div>
                 )}
-                {tab === "changes" && <PendingChangesPanel />}
-                {tab === "audit" && <AuditLogView />}
+                {isTeam && visited.has("outreach") && (
+                  <div className="view-host" hidden={tab !== "outreach"}>
+                    <Suspense fallback={<ViewFallback />}>
+                      <OutreachView
+                        isAdmin={isAdmin}
+                        active={tab === "outreach"}
+                      />
+                    </Suspense>
+                  </div>
+                )}
+                {isTeam && visited.has("email") && (
+                  <div className="view-host" hidden={tab !== "email"}>
+                    <Suspense fallback={<ViewFallback />}>
+                      <EmailOutreachView
+                        isAdmin={isAdmin}
+                        active={tab === "email"}
+                      />
+                    </Suspense>
+                  </div>
+                )}
+                {isTeam && visited.has("sms") && (
+                  <div className="view-host" hidden={tab !== "sms"}>
+                    <Suspense fallback={<ViewFallback />}>
+                      <SmsOutreachView
+                        isAdmin={isAdmin}
+                        isOwner={isOwner}
+                        active={tab === "sms"}
+                      />
+                    </Suspense>
+                  </div>
+                )}
+                {/* Lighter/settings views keep the mount-on-visit behavior —
+                    each fresh mount also plays the entrance via .view-host. */}
+                {tab === "changes" && (
+                  <div className="view-host">
+                    <PendingChangesPanel />
+                  </div>
+                )}
+                {tab === "audit" && (
+                  <div className="view-host">
+                    <AuditLogView />
+                  </div>
+                )}
                 {tab === "team" && isAdmin && (
-                  <TeamAdmin
-                    session={session}
-                    onGoToBilling={() => navigate("billing")}
-                  />
+                  <div className="view-host">
+                    <Suspense fallback={<ViewFallback />}>
+                      <TeamAdmin
+                        session={session}
+                        onGoToBilling={() => navigate("billing")}
+                      />
+                    </Suspense>
+                  </div>
                 )}
-                {tab === "integrations" && isAdmin && <Integrations isOwner={isOwner} />}
-                {tab === "billing" && isOwner && <Billing session={session} />}
-                {tab === "branding" && isAdmin && <BrandingSettings />}
-                {tab === "security" && <TwoFactorSettings session={session} />}
-                {tab === "admin" && session.is_superadmin && <SuperAdmin />}
+                {tab === "integrations" && isAdmin && (
+                  <div className="view-host">
+                    <Suspense fallback={<ViewFallback />}>
+                      <Integrations isOwner={isOwner} />
+                    </Suspense>
+                  </div>
+                )}
+                {tab === "billing" && isOwner && (
+                  <div className="view-host">
+                    <Billing session={session} />
+                  </div>
+                )}
+                {tab === "branding" && isAdmin && (
+                  <div className="view-host">
+                    <Suspense fallback={<ViewFallback />}>
+                      <BrandingSettings />
+                    </Suspense>
+                  </div>
+                )}
+                {tab === "security" && (
+                  <div className="view-host">
+                    <Suspense fallback={<ViewFallback />}>
+                      <TwoFactorSettings session={session} />
+                    </Suspense>
+                  </div>
+                )}
+                {tab === "admin" && session.is_superadmin && (
+                  <div className="view-host">
+                    <Suspense fallback={<ViewFallback />}>
+                      <SuperAdmin />
+                    </Suspense>
+                  </div>
+                )}
               </div>
             </div>
             <CommandPalette
@@ -1203,10 +1352,13 @@ function Clients({
   session,
   selected,
   onSelect,
+  active = true,
 }: {
   session: Session;
   selected: Client | null;
   onSelect: (c: Client | null) => void;
+  /** False while the view is kept mounted but hidden (tab switched away). */
+  active?: boolean;
 }) {
   const [clients, setClients] = useState<Client[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -1215,6 +1367,9 @@ function Clients({
   const isAdmin = ADMIN_ROLES.includes(session.role);
   const toast = useToast();
 
+  // Fetched once on first mount; the view stays mounted across tab switches
+  // so this no longer re-runs per navigation. Explicit invalidations (back
+  // from a detail where status may have changed, create) call load() again.
   const load = () =>
     api<Client[]>("/api/clients")
       .then(setClients)
@@ -1229,6 +1384,7 @@ function Clients({
       <ClientDetail
         client={selected}
         session={session}
+        active={active}
         onBack={() => {
           onSelect(null);
           load();
@@ -1422,10 +1578,13 @@ function ClientDetail({
   client,
   session,
   onBack,
+  active = true,
 }: {
   client: Client;
   session: Session;
   onBack: () => void;
+  /** False while the parent view is kept mounted but hidden. */
+  active?: boolean;
 }) {
   const [connections, setConnections] = useState<Connection[]>([]);
   const [platforms, setPlatforms] = useState<Platform[]>([]);
@@ -1468,11 +1627,25 @@ function ClientDetail({
 
   // Desktop OAuth completes in the system browser; refresh connections when
   // the app window regains focus so a just-connected platform shows up without
-  // a manual reload. (Harmless on web.)
+  // a manual reload. (Harmless on web.) Gated so alt-tabbing doesn't hammer
+  // the API: refetch on focus only when a connect flow is plausibly pending
+  // (the user just opened the OAuth window), or at most once per 30s — and
+  // never while the view is hidden behind another tab.
+  const oauthPending = useRef(false);
+  const lastFocusRefetch = useRef(0);
   useEffect(() => {
-    window.addEventListener("focus", loadConnections);
-    return () => window.removeEventListener("focus", loadConnections);
-  }, [loadConnections]);
+    const onFocus = () => {
+      if (!active) return;
+      const now = Date.now();
+      if (!oauthPending.current && now - lastFocusRefetch.current < 30_000)
+        return;
+      oauthPending.current = false;
+      lastFocusRefetch.current = now;
+      loadConnections();
+    };
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
+  }, [loadConnections, active]);
 
   // Platform catalog drives the connect list and filter — see /api/platforms.
   useEffect(() => {
@@ -1489,6 +1662,9 @@ function ClientDetail({
       `/api/connect/${platform}/start?client_id=${client.id}`
     );
     openAuthUrl(url);
+    // Arm the focus-refetch above: the next window focus (back from the
+    // OAuth flow) should reload connections immediately.
+    oauthPending.current = true;
   };
 
   return (
@@ -1540,7 +1716,9 @@ function ClientDetail({
         </div>
       )}
       {error && <Alert tone="danger">{error}</Alert>}
-      {view === "crm" && <CrmView clientId={client.id} session={session} />}
+      {view === "crm" && (
+        <CrmView clientId={client.id} session={session} active={active} />
+      )}
       {view === "dashboard" && (
         <Dashboard
           clientId={client.id}

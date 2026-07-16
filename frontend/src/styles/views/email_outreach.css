@@ -652,9 +652,11 @@
 
 .eml-warmup-fill {
   height: 100%;
+  width: 100%;
   border-radius: var(--radius-full);
   background: var(--accent);
-  transition: width 300ms ease;
+  transform-origin: left;
+  transition: transform var(--dur-med) var(--ease-out);
 }
 
 .eml-warmup-fill.is-done {

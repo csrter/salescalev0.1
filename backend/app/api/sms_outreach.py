@@ -57,7 +57,14 @@ from ..schemas import (
 )
 from ..security import encrypt_secret
 from ..services import custom_fields as custom_fields_svc
-from ..services import entitlements, research as research_svc, sms_campaigns, sms_consent, sms_send
+from ..services import (
+    ai_provider,
+    entitlements,
+    research as research_svc,
+    sms_campaigns,
+    sms_consent,
+    sms_send,
+)
 
 router = APIRouter(prefix="/api/sms", tags=["sms-outreach"])
 
@@ -75,8 +82,34 @@ def _scoped_get(db: Session, scope: TenantScope, model, object_id: str):
 
 # --- serialization (auth token never included) ---
 
+# Below this many lifetime outbound sends on a non-Twilio account we don't warn
+# about a missing inbound webhook — a brand-new account legitimately has no
+# replies yet.
+_INBOUND_STALE_MIN_SENDS = 20
+
 
 def _account_out(db: Session, a: SmsAccount) -> dict:
+    # Inbound-webhook liveness. Sendblue/BlueBubbles have no Twilio-21610-style
+    # send-time opt-out self-heal, so if their inbound webhook was never
+    # registered (or is misconfigured) STOP is silently never captured — a TCPA
+    # exposure. Surface it: last time an inbound message landed, plus a derived
+    # warning when a non-Twilio active account has sent a meaningful volume yet
+    # has never received a single inbound message.
+    last_inbound_at = db.execute(
+        select(func.max(SmsMessage.created_at)).where(
+            SmsMessage.account_id == a.id,
+            SmsMessage.direction == SMS_DIR_IN,
+        )
+    ).scalar_one_or_none()
+    inbound_webhook_stale = False
+    if a.provider != "twilio" and a.status == SMS_ACCOUNT_ACTIVE and last_inbound_at is None:
+        outbound_total = db.execute(
+            select(func.count(SmsMessage.id)).where(
+                SmsMessage.account_id == a.id,
+                SmsMessage.direction == SMS_DIR_OUT,
+            )
+        ).scalar_one() or 0
+        inbound_webhook_stale = outbound_total >= _INBOUND_STALE_MIN_SENDS
     return {
         "id": a.id,
         "name": a.name,
@@ -96,6 +129,8 @@ def _account_out(db: Session, a: SmsAccount) -> dict:
         "min_send_spacing_seconds": a.min_send_spacing_seconds,
         "max_send_spacing_seconds": a.max_send_spacing_seconds,
         "channel_health": sms_send.channel_health(db, a),
+        "last_inbound_at": last_inbound_at.isoformat() if last_inbound_at else None,
+        "inbound_webhook_stale": inbound_webhook_stale,
         "created_at": a.created_at.isoformat(),
     }
 
@@ -827,7 +862,16 @@ def preview_campaign(
         raise HTTPException(404, "No step at that position")
     org = db.get(Organization, scope.organization_id)
     # enrollment=None: preview generates the ai_snippet fresh, never cached.
-    rendered = sms_campaigns.render_full(db, org, None, step, contact=contact)
+    # Generate it explicitly (instead of via render_full) so we can surface
+    # whether an AI-instructed step produced an empty snippet — the fail-open
+    # signal the org needs to know its AI provider isn't actually configured.
+    snippet = ""
+    if (step.ai_instructions or "").strip():
+        # None = transient AI failure (unconfigured key, cap, timeout) —
+        # renders as empty here, same as the send path's `or ""`.
+        snippet = sms_campaigns.generate_ai_snippet(db, org, contact, step) or ""
+    ai_snippet_empty = bool((step.ai_instructions or "").strip()) and not snippet.strip()
+    rendered = sms_campaigns.render_body(db, contact, step, ai_snippet=snippet)
     # Show the compliance suffix too — it's what actually goes out.
     final = sms_send.apply_compliance_suffix(
         rendered,
@@ -835,7 +879,7 @@ def preview_campaign(
         first_step=(step.position == 1),
         include_footer=campaign.include_compliance_footer,
     )
-    return {"body": final}
+    return {"body": final, "ai_snippet_empty": ai_snippet_empty}
 
 
 # --- messages (conversation view — SMS has no threads, just a contact-number
@@ -1057,11 +1101,16 @@ def analytics(
     )
     by_day = _analytics_by_day(db, cids, since)
     accounts = _analytics_accounts(db, scope)
+    org = db.get(Organization, scope.organization_id)
     return {
         "totals": totals,
         "by_day": by_day,
         "by_campaign": by_campaign,
         "accounts": accounts,
+        # Whether the active AI provider has a resolvable key for this org.
+        # AI personalization fails open to "" when unconfigured (never blocks a
+        # send), so the Dashboard uses this to warn that {{ai_snippet}} is inert.
+        "ai_configured": ai_provider.resolve(db, org).configured,
     }
 
 

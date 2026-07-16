@@ -63,6 +63,7 @@ from ..schemas import (
     EnrollmentOverrideIn,
 )
 from ..security import encrypt_secret
+from ..services import ai_provider
 from ..services import branding, email_campaigns, email_personalize, entitlements
 from ..services import custom_fields as custom_fields_svc
 from ..services import email_outreach_send as gateway
@@ -1047,7 +1048,14 @@ def preview_campaign(
 
 
 def _preview_issues(
-    db: Session, org: Organization, contact: Optional[Contact], subject, body
+    db: Session,
+    org: Organization,
+    contact: Optional[Contact],
+    subject,
+    body,
+    *,
+    step: Optional[EmailStep] = None,
+    enrollment: Optional[EmailEnrollment] = None,
 ) -> list:
     if contact is None:
         return ["not_sendable:not_found"]
@@ -1069,6 +1077,16 @@ def _preview_issues(
             issues.append("not_sendable:invalid_email")
         elif risky:
             issues.append("not_sendable:risky")
+    # A step that ASKS for an AI snippet but rendered without one (unconfigured
+    # provider, cap hit, or the output guard discarded the response) — the
+    # email still sends, just less personalized; surface it for QA review.
+    if (
+        step is not None
+        and (step.ai_instructions or "").strip()
+        and enrollment is not None
+        and not ((enrollment.ai_snippets or {}).get(step.id) or "").strip()
+    ):
+        issues.append("ai_snippet_empty")
     return issues
 
 
@@ -1135,7 +1153,13 @@ def preview_batch(
                 "body": bodytext,
                 "overridden": overridden,
                 "qa_status": e.qa_status,
-                "issues": _preview_issues(db, org, contact, subject, bodytext),
+                "issues": _preview_issues(
+                    db, org, contact, subject, bodytext,
+                    # A human-edited override is sent verbatim — an empty AI
+                    # snippet is irrelevant to it, so skip the check.
+                    step=None if overridden else step,
+                    enrollment=e,
+                ),
             }
         )
     db.commit()  # persist any newly generated+cached ai_snippets from render_full
@@ -1279,12 +1303,18 @@ def analytics(
 
     by_step = _analytics_by_step(db, campaign_id) if campaign_id else []
     accounts = _analytics_accounts(db, scope)
+    org = db.get(Organization, scope.organization_id)
     return {
         "totals": totals,
         "by_day": by_day,
         "by_campaign": by_campaign,
         "by_step": by_step,
         "accounts": accounts,
+        # Whether an AI key resolves for this org (BYO or operator) — the
+        # frontend banners "AI personalization off" from this on the email
+        # dashboard/campaign view instead of users discovering it via empty
+        # {{ai_snippet}}s in sent mail.
+        "ai_configured": ai_provider.resolve(db, org).configured,
     }
 
 

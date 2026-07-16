@@ -173,16 +173,23 @@ def _from_domain(from_email: str) -> str:
     return from_email.rsplit("@", 1)[-1] if "@" in from_email else "localhost"
 
 
-def _footer(org: Organization, unsub_url: str) -> str:
-    """CAN-SPAM footer: the sending Organization's real identity + physical
-    mailing address + the one-click unsubscribe link."""
+def _identity_block(org: Organization) -> str:
+    """CAN-SPAM identity block: the sending Organization's real name + physical
+    mailing address. Required on EVERY commercial email — including one whose
+    body renders {{unsubscribe_url}} inline (that token supplies the opt-out
+    link but not the postal address, which is a separate CAN-SPAM requirement)."""
     b = branding.merged(org)
     lines = [org.name]
     address = (b.get("mailing_address") or "").strip()
     if address:
         lines.append(address)
-    lines.append(f"Unsubscribe: {unsub_url}")
     return "\n\n--\n" + "\n".join(lines)
+
+
+def _footer(org: Organization, unsub_url: str) -> str:
+    """CAN-SPAM footer for a body that did NOT place {{unsubscribe_url}} itself:
+    the identity block plus the one-click unsubscribe link."""
+    return f"{_identity_block(org)}\nUnsubscribe: {unsub_url}"
 
 
 def _compose_body(
@@ -194,7 +201,10 @@ def _compose_body(
     if unsub_url is None:
         return body
     if _UNSUB_TOKEN in body:
-        return body.replace(_UNSUB_TOKEN, unsub_url)
+        # The body supplies the unsubscribe link in place; still append the
+        # identity block (org name + mailing address) so the postal-address
+        # requirement is met — just without a second unsubscribe link.
+        return body.replace(_UNSUB_TOKEN, unsub_url) + _identity_block(org)
     return body + _footer(org, unsub_url)
 
 

@@ -258,10 +258,36 @@ def rearm_parked(db: Session, campaign: EmailCampaign) -> int:
     return len(parked)
 
 
+def _revive_errored(db: Session, campaign: EmailCampaign) -> int:
+    """A send FAILURE ends its enrollment in ENROLL_ERROR (the mailbox itself
+    flipped to error and parked the siblings). Reconnecting the mailbox must
+    resume THOSE contacts too, not just the parked ones — otherwise whoever
+    happened to hit the broken mailbox first is dropped forever. Returns them
+    to ACTIVE at the campaign's next valid send window."""
+    now = utcnow()
+    when = _next_valid_send_time(now, campaign) or now
+    errored = (
+        db.execute(
+            select(EmailEnrollment).where(
+                EmailEnrollment.campaign_id == campaign.id,
+                EmailEnrollment.status == ENROLL_ERROR,
+            )
+        )
+        .scalars()
+        .all()
+    )
+    for e in errored:
+        e.status = ENROLL_ACTIVE
+        e.exit_reason = None
+        e.ended_at = None
+        e.next_run_at = when
+    return len(errored)
+
+
 def rearm_account(db: Session, account_id: str) -> int:
-    """Mailbox reconnected: re-arm parked enrollments across all of the
-    account's ACTIVE campaigns (the \"reconnect flow re-arms\" contract in
-    process_enrollment)."""
+    """Mailbox reconnected: re-arm parked enrollments — and revive send-FAILURE
+    errored ones — across all of the account's ACTIVE campaigns (the
+    \"reconnect flow re-arms\" contract in process_enrollment)."""
     campaigns = (
         db.execute(
             select(EmailCampaign).where(
@@ -272,7 +298,7 @@ def rearm_account(db: Session, account_id: str) -> int:
         .scalars()
         .all()
     )
-    return sum(rearm_parked(db, c) for c in campaigns)
+    return sum(rearm_parked(db, c) + _revive_errored(db, c) for c in campaigns)
 
 
 def _end(

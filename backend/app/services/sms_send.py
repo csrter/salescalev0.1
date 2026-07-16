@@ -93,6 +93,13 @@ class SmsProviderError(Exception):
 
 # --- daily caps ---
 
+# A message that went out counts against the daily cap regardless of where its
+# delivery lifecycle has since moved: a status callback flips a row
+# sent -> delivered -> read within seconds, so counting only SMS_MSG_SENT would
+# let delivered/read messages fall OUT of the counter and make the cap (a TCPA
+# volume + cost guardrail) effectively unbounded once receipts start flowing.
+_COUNTED_SENT_STATUSES = (SMS_MSG_SENT, SMS_MSG_DELIVERED, SMS_MSG_READ)
+
 
 def sends_today(db: Session, account: SmsAccount) -> int:
     day_start = utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
@@ -101,7 +108,7 @@ def sends_today(db: Session, account: SmsAccount) -> int:
             select(func.count(SmsMessage.id)).where(
                 SmsMessage.account_id == account.id,
                 SmsMessage.direction == SMS_DIR_OUT,
-                SmsMessage.status == SMS_MSG_SENT,
+                SmsMessage.status.in_(_COUNTED_SENT_STATUSES),
                 SmsMessage.created_at >= day_start,
             )
         ).scalar_one()
@@ -116,7 +123,7 @@ def campaign_sends_today(db: Session, campaign: SmsCampaign) -> int:
             select(func.count(SmsMessage.id)).where(
                 SmsMessage.campaign_id == campaign.id,
                 SmsMessage.direction == SMS_DIR_OUT,
-                SmsMessage.status == SMS_MSG_SENT,
+                SmsMessage.status.in_(_COUNTED_SENT_STATUSES),
                 SmsMessage.created_at >= day_start,
             )
         ).scalar_one()

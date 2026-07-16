@@ -27,6 +27,12 @@ for _k in (
     # BYO-key path, so the operator fallback keys must read as unset.
     "GOOGLE_PLACES_API_KEY",
     "ZEROBOUNCE_API_KEY",
+    # AI providers: fail-open paths (snippets, research, owner extraction)
+    # must read as unconfigured — a dev machine's exported key would
+    # otherwise send tests to the real network.
+    "ANTHROPIC_API_KEY",
+    "OPENAI_API_KEY",
+    "GEMINI_API_KEY",
 ):
     os.environ[_k] = ""
 # One dedicated platform super-admin for the /api/admin tests. No org-scoped

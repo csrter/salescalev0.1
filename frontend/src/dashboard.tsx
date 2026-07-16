@@ -209,15 +209,22 @@ export function Dashboard({
       .catch(() => setWidgets(isTeam ? TEAM_DEFAULT : CLIENT_DEFAULT));
   }, [clientId, isTeam]);
 
+  // Saved filters must resolve BEFORE any widget mounts — otherwise every
+  // widget fetches once with DEFAULT_FILTERS and immediately refetches when
+  // the saved filters arrive (a double fetch per widget on every dashboard
+  // open). `filtersReady` gates the grid below alongside the layout load.
+  const [filtersReady, setFiltersReady] = useState(false);
   useEffect(() => {
     setFilters(DEFAULT_FILTERS);
+    setFiltersReady(false);
     api<{ filters: Partial<DashFilters> | null }>(
       `/api/dashboard/filters?client_id=${clientId}`,
     )
       .then((r) => {
         if (r.filters) setFilters({ ...DEFAULT_FILTERS, ...r.filters });
       })
-      .catch(() => {});
+      .catch(() => {})
+      .finally(() => setFiltersReady(true));
   }, [clientId]);
 
   const persist = useCallback(
@@ -314,7 +321,7 @@ export function Dashboard({
     }
   };
 
-  if (widgets === null)
+  if (widgets === null || !filtersReady)
     return (
       <section className="dash">
         <div className="dash-grid">

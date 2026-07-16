@@ -106,38 +106,50 @@ const ctrFmt = (v?: number | null) => (v == null ? "—" : `${(v * 100).toFixed(
 function useWidgetData<T>(path: string | null, deps: unknown[]) {
   const [data, setData] = useState<T | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [fetching, setFetching] = useState(false);
   useEffect(() => {
     if (!path) return;
     let stale = false;
-    setLoading(true);
+    setFetching(true);
     setError(null);
     api<T>(path)
       .then((d) => !stale && setData(d))
       .catch((e) => !stale && setError((e as Error).message))
-      .finally(() => !stale && setLoading(false));
+      .finally(() => !stale && setFetching(false));
     return () => {
       stale = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, deps);
-  return { data, error, loading };
+  // `loading` drives the skeleton — only the first load (no data yet).
+  // `refetching` drives the dimmed-in-place state (stale data still shown)
+  // per DESIGN §4.4/§4.13: never flash a skeleton over data we already have.
+  return {
+    data,
+    error,
+    loading: fetching && data == null,
+    refetching: fetching && data != null,
+  };
 }
 
 function WidgetBody({
   error,
   loading,
+  refetching,
   empty,
   children,
 }: {
   error: string | null;
   loading: boolean;
+  refetching?: boolean;
   empty?: string | null;
   children: React.ReactNode;
 }) {
   if (error) return <Alert tone="danger">{error}</Alert>;
   if (loading) return <SkeletonText lines={3} />;
   if (empty) return <p className="dash-muted">{empty}</p>;
+  if (refetching)
+    return <div className="widget-refetching">{children}</div>;
   return <>{children}</>;
 }
 
@@ -163,7 +175,7 @@ export function OverviewWidget({
   accountIds,
   campaignIds,
 }: WidgetProps) {
-  const { data, error, loading } = useWidgetData<any>(
+  const { data, error, loading, refetching } = useWidgetData<any>(
     `/api/metrics/blended?client_id=${clientId}${filterParam(platforms)}${rangeParam(since, until)}${entityParam(accountIds, campaignIds)}`,
     [clientId, platforms, refresh, since, until, accountIds, campaignIds],
   );
@@ -172,7 +184,7 @@ export function OverviewWidget({
     [clientId, platforms, refresh, since, until],
   );
   return (
-    <WidgetBody error={error} loading={loading} empty={null}>
+    <WidgetBody error={error} loading={loading} refetching={refetching} empty={null}>
       {data && (
         <KpiGrid>
           {/* The one hero tile per view: blended spend. Spend up is not "good"
@@ -227,7 +239,7 @@ export function ChannelMixWidget({
   accountIds,
   campaignIds,
 }: WidgetProps) {
-  const { data, error, loading } = useWidgetData<any>(
+  const { data, error, loading, refetching } = useWidgetData<any>(
     `/api/metrics/blended?client_id=${clientId}${filterParam(platforms)}${rangeParam(since, until)}${entityParam(accountIds, campaignIds)}`,
     [clientId, platforms, refresh, since, until, accountIds, campaignIds],
   );
@@ -272,6 +284,7 @@ export function ChannelMixWidget({
     <WidgetBody
       error={error}
       loading={loading}
+      refetching={refetching}
       empty={data && rows.length === 0 ? "No spend recorded yet — sync insights." : null}
     >
       <DataTable
@@ -305,7 +318,7 @@ export function SpendPacingWidget({
   accountIds,
   campaignIds,
 }: WidgetProps) {
-  const { data, error, loading } = useWidgetData<any>(
+  const { data, error, loading, refetching } = useWidgetData<any>(
     `/api/metrics/spend-daily?client_id=${clientId}${filterParam(platforms)}${rangeParam(since, until)}${entityParam(accountIds, campaignIds)}`,
     [clientId, platforms, refresh, since, until, accountIds, campaignIds],
   );
@@ -324,6 +337,7 @@ export function SpendPacingWidget({
     <WidgetBody
       error={error}
       loading={loading}
+      refetching={refetching}
       empty={data && perPlatform.length === 0 ? "No spend recorded yet — sync insights." : null}
     >
       <div className="dash-chart-toolbar">
@@ -407,7 +421,7 @@ export function FunnelTiersWidget({
   since,
   until,
 }: WidgetProps) {
-  const { data, error, loading } = useWidgetData<any>(
+  const { data, error, loading, refetching } = useWidgetData<any>(
     `/api/metrics/funnel-tiers?client_id=${clientId}${rangeParam(since, until)}`,
     [clientId, refresh, since, until],
   );
@@ -433,6 +447,7 @@ export function FunnelTiersWidget({
     <WidgetBody
       error={error}
       loading={loading}
+      refetching={refetching}
       empty={data && rows.length === 0 ? "No tiered spend in range." : null}
     >
       <DataTable
@@ -450,7 +465,7 @@ export function FunnelTiersWidget({
 
 export function FatigueWidget({ clientId, platforms, refresh }: WidgetProps) {
   const active = keepPlatform(platforms, "meta");
-  const { data, error, loading } = useWidgetData<any>(
+  const { data, error, loading, refetching } = useWidgetData<any>(
     active ? `/api/metrics/creative-fatigue?client_id=${clientId}` : null,
     [clientId, refresh, active],
   );
@@ -460,6 +475,7 @@ export function FatigueWidget({ clientId, platforms, refresh }: WidgetProps) {
     <WidgetBody
       error={error}
       loading={loading}
+      refetching={refetching}
       empty={
         data && flagged.length === 0
           ? "No fatigued creatives — every ad's recent CTR is within 30% of its own baseline."
@@ -486,7 +502,7 @@ export function FatigueWidget({ clientId, platforms, refresh }: WidgetProps) {
 
 export function QualityWidget({ clientId, platforms, refresh }: WidgetProps) {
   const active = keepPlatform(platforms, "google");
-  const { data, error, loading } = useWidgetData<any>(
+  const { data, error, loading, refetching } = useWidgetData<any>(
     active ? `/api/metrics/quality-trends?client_id=${clientId}` : null,
     [clientId, refresh, active],
   );
@@ -496,6 +512,7 @@ export function QualityWidget({ clientId, platforms, refresh }: WidgetProps) {
     <WidgetBody
       error={error}
       loading={loading}
+      refetching={refetching}
       empty={
         data && flagged.length === 0
           ? "No Quality Score or ad-strength drops in the last 30 days."
@@ -529,7 +546,7 @@ export function GuaranteeWidget({
   refresh,
 }: WidgetProps) {
   const [bump, setBump] = useState(0);
-  const { data, error, loading } = useWidgetData<any>(
+  const { data, error, loading, refetching } = useWidgetData<any>(
     `/api/metrics/guarantee?client_id=${clientId}${filterParam(platforms)}`,
     [clientId, platforms, refresh, bump],
   );
@@ -544,7 +561,7 @@ export function GuaranteeWidget({
     );
 
   return (
-    <WidgetBody error={error} loading={loading} empty={null}>
+    <WidgetBody error={error} loading={loading} refetching={refetching} empty={null}>
       {data?.configured && !editing && (
         <div className="dash-guarantee">
           <div className="dash-guarantee-head">
@@ -740,7 +757,7 @@ export function ReconciliationWidget({
   since,
   until,
 }: WidgetProps) {
-  const { data, error, loading } = useWidgetData<any>(
+  const { data, error, loading, refetching } = useWidgetData<any>(
     `/api/metrics/reconciliation?client_id=${clientId}${rangeParam(since, until)}`,
     [clientId, refresh, since, until],
   );
@@ -777,6 +794,7 @@ export function ReconciliationWidget({
     <WidgetBody
       error={error}
       loading={loading}
+      refetching={refetching}
       empty={data && rows.length === 0 ? "No platform-reported conversions in range." : null}
     >
       <DataTable
@@ -804,7 +822,7 @@ export function CampaignTableWidget({
 }: WidgetProps) {
   const { stage } = useManage();
   const [bump, setBump] = useState(0);
-  const { data, error, loading } = useWidgetData<Campaign[]>(
+  const { data, error, loading, refetching } = useWidgetData<Campaign[]>(
     `/api/campaigns?client_id=${clientId}`,
     [clientId, refresh, bump],
   );
@@ -860,6 +878,7 @@ export function CampaignTableWidget({
     <WidgetBody
       error={error}
       loading={loading}
+      refetching={refetching}
       empty={
         data && rows.length === 0
           ? "No cached campaigns — open the account tree below to pull live."
@@ -887,7 +906,7 @@ export function CampaignTableWidget({
 // --- Vertical benchmark (team-only) ---------------------------------------
 
 export function BenchmarkWidget({ clientId, refresh, since, until }: WidgetProps) {
-  const { data, error, loading } = useWidgetData<any>(
+  const { data, error, loading, refetching } = useWidgetData<any>(
     `/api/metrics/benchmark?client_id=${clientId}${rangeParam(since, until)}`,
     [clientId, refresh, since, until],
   );
@@ -895,6 +914,7 @@ export function BenchmarkWidget({ clientId, refresh, since, until }: WidgetProps
     <WidgetBody
       error={error}
       loading={loading}
+      refetching={refetching}
       empty={data && !data.vertical ? "Client has no vertical set." : null}
     >
       {data?.vertical && (
@@ -1118,7 +1138,7 @@ export function ConversionHealthWidget({
   ];
 
   return (
-    <WidgetBody error={configs.error} loading={configs.loading} empty={null}>
+    <WidgetBody error={configs.error} loading={configs.loading} refetching={configs.refetching} empty={null}>
       {configs.data && configs.data.length === 0 && !configuring && (
         <p className="dash-muted">
           Server-side conversion tracking isn't set up for this client.

@@ -412,8 +412,10 @@ export function LeadFinderView({ isAdmin = false }: { isAdmin?: boolean }) {
       <div className="lf-head">
         <p className="lf-sub">
           Find businesses by vertical and geography, then import them as leads
-          in your CRM. Imported leads are enriched from the business's own
-          website and email-verified automatically.
+          in your CRM. Imported leads are enriched automatically: the owner is
+          identified from the business's own website (or your connected data
+          provider) so the lead is a person — with the business name kept
+          alongside — and emails are verified.
         </p>
       </div>
 

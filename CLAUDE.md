@@ -1667,6 +1667,92 @@ live activation + the entitlement flip, the Outreach module build
       exploited), then healthy on the expected ~5-9s timeline. Rebuilt +
       reinstalled locally; nothing to redeploy on the webapp side (Electron-
       shell-only change).
+- [x] UI smoothness pass + logo-cobalt rebrand + outreach functional
+      hardening + Lead Finder owner-first (2026-07-16, three-Opus-agent
+      audit→fix session; interrupted mid-run by a session limit and resumed —
+      two stale-test/crash artifacts of the interruption were repaired before
+      resuming). NO new migrations; NOT yet deployed to prod.
+      (1) THEME — purple is gone; tokens follow the logo (navy #0f2147 /
+      cobalt #2b62e0 / white): theme.css --accent light-dark(#2b62e0,#6d95f2)
+      + strong/soft literals + chart-1; sidebar active pill/icon and auth
+      checkmarks re-keyed to accent-derived color-mix (App.css had literal
+      purples that ignored the token swap); avatar gradients →
+      accent/accent-strong; branding.tsx white-label fallbacks; auth_email.py
+      button hex; DESIGN.md synced. White-label contract (6 frozen names)
+      unchanged.
+      (2) UI SMOOTHNESS (agent, 10 audited fixes, frontend-only): per-view
+      code-splitting via React.lazy (entry 268 kB; crm/email/sms/dashboard/…
+      lazy chunks, per-host Suspense so a loading chunk never blanks
+      siblings); workspace views KEPT MOUNTED after first visit (hidden
+      view-host divs; polling gated on an `active` prop and re-fires on
+      re-activation) so tab switches are instant and state survives;
+      useWidgetData holds stale data during refetch (.widget-refetching
+      opacity dip) instead of skeleton-flashing; keepEqual ref-stability +
+      React.memo list rows for the three inbox/convo lists; 220ms debounced
+      CRM filters + 250ms outreach search; @starting-style entrance on view
+      switch; .btn:active press feedback; dashboard widgets fetch once
+      (filtersReady gate, no default-then-refetch); ClientDetail focus
+      refetch only while a connect flow is pending (oauthPending ref) or
+      30s-throttled; progress fills (CRM enrich, email warmup) animate
+      transform: scaleX not width. DataTable row memoization deliberately
+      skipped (needs every caller's column defs stabilized — flagged, not
+      worth the blast radius).
+      (3) EMAIL functional fixes (agent, 7): CAN-SPAM identity block
+      (org name + postal address) now appended even when the body renders
+      {{unsubscribe_url}} inline (was dropped entirely — compliance gap);
+      generate_ai_snippet contract is now None=transient-failure(retry,
+      never cached) vs ""=ran-but-empty(cacheable) in BOTH email+SMS engines
+      (a missing key/cap/timeout no longer permanently kills an enrollment's
+      personalization); preview-batch issues[] gained ai_snippet_empty and
+      GET /analytics gained ai_configured (org-BYO-aware) in both modules —
+      surfaced as a warn Alert on both Dashboards ("AI personalization is
+      off", wired by the main session; api.ts types updated); nested {{#if}}
+      is a save-time 422 (was killing enrollments at send); outreach AI
+      calls (email/SMS snippets, research, the parked city failsafe) now
+      route through ai_provider.resolve_outreach() — a cheap-model tier
+      (claude-haiku-4-5 / gpt-4o / gemini-2.5-flash, ai_outreach_model etc.
+      env-overridable, PRICING already covered) while insights keep the full
+      model; Gemini calls pass thinking_budget=0 (2.5-flash defaults to
+      burning thinking tokens — pure cost on one-sentence snippets; guarded
+      for older google-genai); account reconnect/test now REVIVES
+      enrollments stranded in error status (rearm_account sums rearm_parked
+      + new _revive_errored; campaign-reactivate deliberately does not —
+      a broken mailbox isn't fixed by reactivating a campaign) in both
+      modules.
+      (4) SMS functional fixes (agent, 4 + a crash): daily/campaign cap
+      queries count sent+delivered+read (delivery receipts were removing
+      rows from the cap counter — silent overspend risk); the 3-segment cap
+      is measured on the body WITH the compliance footer via the real
+      apply_compliance_suffix; ai_configured/ai_snippet_empty surfacing as
+      above; _account_out gained last_inbound_at + inbound_webhook_stale
+      (non-Twilio account, active, ≥20 lifetime sends, zero inbound ever =
+      the STOP-capture webhook was never registered — the one dangerous
+      misconfig, since Sendblue/BlueBubbles have no 21610-style self-heal);
+      plus the interruption artifact fixed by the main session: preview
+      500'd on None.strip() after the contract change.
+      (5) LEAD FINDER OWNER-FIRST (main session): imports should land the
+      OWNER as the contact with the business name secondary. New
+      lead_finder.extract_owner_from_site() — one grounded AI extraction
+      over the business's OWN site text (enrichment.fetch_site_text posture;
+      guardrail 6 holds), STRICT-JSON prompt, hallucination guard requires
+      every returned name part to appear verbatim in the site text,
+      AI-resolution checked BEFORE the crawl so keyless orgs never pay the
+      fetch, metered AiUsage feature="lead_owner_extract", fail-open. Runs
+      in enrich_and_verify AFTER the Apollo path, only while the contact is
+      still the business-name placeholder (typed-in names never touched);
+      fills first/last/job_title. Frontend: lead-list "Lead" cell renders
+      person primary + company_name as a secondary ellipsized line (skipped
+      while placeholder so the name never duplicates), Lead Finder copy
+      updated.
+      Tests 531 passing (519 → 531; the "2 failed" at session pickup were
+      stale assertions against the deliberate new contracts, not
+      regressions); tsc clean; vite build confirms the chunk split; live
+      click-through on alt2 (cobalt everywhere incl. login/nav/avatars,
+      instant tab switches, owner-first lead cell "john o'brien / Desert Air
+      HVAC", both AI-off banners rendering, zero console errors). Impeccable
+      findings triaged: warmup + enrich progress bars converted to scaleX;
+      pre-existing --ease-spring token and the tiny guarantee progress-fill
+      width transition left as documented/contained design choices.
 - [ ] Stripe live activation + entitlement flip (after 12–14, so real
       limits land everywhere in one pass)
 - [ ] Outreach module build (dev-mode) — go-live gated on Meta App

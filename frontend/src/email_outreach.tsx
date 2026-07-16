@@ -12,6 +12,7 @@
  */
 
 import {
+  memo,
   useCallback,
   useEffect,
   useMemo,
@@ -93,6 +94,7 @@ import {
   SkeletonText,
   Switch,
   Tabs,
+  keepEqual,
 } from "./components/ui";
 import { Plus, Send } from "./components/icons";
 import { useToast } from "./components/Toast";
@@ -211,7 +213,15 @@ type Panel =
   | "warmup"
   | "suppression";
 
-export function EmailOutreachView({ isAdmin }: { isAdmin: boolean }) {
+export function EmailOutreachView({
+  isAdmin,
+  active = true,
+}: {
+  isAdmin: boolean;
+  /** False while the view is kept mounted but hidden behind another tab —
+   * gates the inbox poll. */
+  active?: boolean;
+}) {
   const [panel, setPanel] = useState<Panel>("dashboard");
   const [accounts, setAccounts] = useState<EmailAccount[]>([]);
   const [usage, setUsage] = useState<EmailUsage | null>(null);
@@ -269,7 +279,7 @@ export function EmailOutreachView({ isAdmin }: { isAdmin: boolean }) {
       {panel === "campaigns" && isAdmin && (
         <CampaignsPanel accounts={accounts} />
       )}
-      {panel === "inbox" && <InboxPanel accounts={accounts} />}
+      {panel === "inbox" && <InboxPanel accounts={accounts} active={active} />}
       {panel === "accounts" && isAdmin && (
         <AccountsPanel
           accounts={accounts}
@@ -416,6 +426,17 @@ function DashboardPanel({
             {pct(t?.bounce_rate)} of sends bounced (over{" "}
             {pct(BOUNCE_RED_LINE)}). Pause sending, clean the list, and let
             warmup rebuild reputation before continuing.
+          </Alert>
+        </div>
+      )}
+
+      {!loading && data?.ai_configured === false && (
+        <div className="eml-redline">
+          <Alert tone="warn" title="AI personalization is off">
+            No AI provider key is configured, so {"{{ai_snippet}}"} and AI
+            research tokens render as empty text in every send. Add a key on
+            the Integrations page (AI provider card) to turn them on — sends
+            are never blocked either way.
           </Alert>
         </div>
       )}
@@ -2238,7 +2259,52 @@ function ReviewOverrideDialog({
 // 3. Inbox
 // ==========================================================================
 
-function InboxPanel({ accounts }: { accounts: EmailAccount[] }) {
+/** One row in the inbox thread list — memoized so the 15s poll (which keeps
+ * the array reference stable when nothing changed) skips re-rendering
+ * unchanged rows. */
+const ThreadListItem = memo(function ThreadListItem({
+  th,
+  isActive,
+  onOpen,
+}: {
+  th: EmailThread;
+  isActive: boolean;
+  onOpen: (th: EmailThread) => void;
+}) {
+  return (
+    <button
+      type="button"
+      className={[
+        "eml-thread-item",
+        isActive ? "eml-thread-item--active" : "",
+        th.unread ? "eml-thread-item--unread" : "",
+      ]
+        .filter(Boolean)
+        .join(" ")}
+      onClick={() => onOpen(th)}
+    >
+      <div className="eml-thread-top">
+        <span className="eml-thread-name">
+          <span>{th.contact ? contactLabel(th.contact) : th.subject}</span>
+          {th.unread && <Badge tone="info">new</Badge>}
+        </span>
+        <time className="eml-thread-time" title={th.last_message_at ?? undefined}>
+          {timeAgo(th.last_message_at)}
+        </time>
+      </div>
+      <span className="eml-thread-subj">{th.subject}</span>
+      <span className="eml-thread-snippet">{th.snippet}</span>
+    </button>
+  );
+});
+
+function InboxPanel({
+  accounts,
+  active = true,
+}: {
+  accounts: EmailAccount[];
+  active?: boolean;
+}) {
   const toast = useToast();
   const [threads, setThreads] = useState<EmailThread[] | null>(null);
   const [accountId, setAccountId] = useState("");
@@ -2253,21 +2319,27 @@ function InboxPanel({ accounts }: { accounts: EmailAccount[] }) {
   const refresh = useCallback(() => {
     listEmailThreads(accountId || undefined, unreadOnly || undefined)
       .then((rows) => {
-        setThreads(rows);
+        // Keep the previous array reference when a poll tick returns
+        // identical data, so unchanged rows (memoized) don't re-render.
+        setThreads((prev) => keepEqual(prev, rows));
         const cur = selectedRef.current;
         if (cur) {
           const updated = rows.find((r) => r.id === cur);
-          if (updated) setSelected(updated);
+          if (updated)
+            setSelected((prevSel) => keepEqual(prevSel, updated));
         }
       })
       .catch(() => {});
   }, [accountId, unreadOnly]);
 
+  // Poll only while the view is actually visible; re-activating refreshes
+  // immediately (the effect re-runs when `active` flips back to true).
   useEffect(() => {
+    if (!active) return;
     refresh();
     const t = setInterval(refresh, 15_000);
     return () => clearInterval(t);
-  }, [refresh]);
+  }, [refresh, active]);
 
   const open = useCallback((th: EmailThread) => {
     setSelected(th);
@@ -2337,30 +2409,12 @@ function InboxPanel({ accounts }: { accounts: EmailAccount[] }) {
             </EmptyState>
           )}
           {threads?.map((th) => (
-            <button
+            <ThreadListItem
               key={th.id}
-              type="button"
-              className={[
-                "eml-thread-item",
-                selected?.id === th.id ? "eml-thread-item--active" : "",
-                th.unread ? "eml-thread-item--unread" : "",
-              ]
-                .filter(Boolean)
-                .join(" ")}
-              onClick={() => open(th)}
-            >
-              <div className="eml-thread-top">
-                <span className="eml-thread-name">
-                  <span>{th.contact ? contactLabel(th.contact) : th.subject}</span>
-                  {th.unread && <Badge tone="info">new</Badge>}
-                </span>
-                <time className="eml-thread-time" title={th.last_message_at ?? undefined}>
-                  {timeAgo(th.last_message_at)}
-                </time>
-              </div>
-              <span className="eml-thread-subj">{th.subject}</span>
-              <span className="eml-thread-snippet">{th.snippet}</span>
-            </button>
+              th={th}
+              isActive={selected?.id === th.id}
+              onOpen={open}
+            />
           ))}
         </GlassCard>
 
@@ -3118,7 +3172,9 @@ function WarmupPanel({
                   >
                     <div
                       className={`eml-warmup-fill${done ? " is-done" : ""}`}
-                      style={{ width: `${Math.max(2, a.warmup_progress)}%` }}
+                      style={{
+                        transform: `scaleX(${Math.max(2, a.warmup_progress) / 100})`,
+                      }}
                     />
                   </div>
                   <div className="eml-warmup-meta">

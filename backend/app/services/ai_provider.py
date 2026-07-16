@@ -76,6 +76,17 @@ def _model_for(provider: str) -> str:
     }.get(provider, s.ai_model)
 
 
+def _outreach_model_for(provider: str) -> str:
+    """The cheaper per-provider model for high-volume outreach personalization
+    + research (one-sentence tasks), distinct from _model_for (insights)."""
+    s = get_settings()
+    return {
+        "anthropic": s.ai_outreach_model,
+        "openai": s.openai_outreach_model,
+        "gemini": s.gemini_outreach_model,
+    }.get(provider, s.ai_outreach_model)
+
+
 def _env_key(provider: str) -> str:
     s = get_settings()
     return {
@@ -102,6 +113,22 @@ def resolve(db=None, org=None) -> AiResolution:
     (db, org) are supplied, else the operator's env fallback."""
     provider = active_provider()
     model = _model_for(provider)
+    if db is not None and org is not None:
+        from . import integration_creds
+
+        api_key = integration_creds.resolve_key(db, org.id, provider)
+    else:
+        api_key = _env_key(provider)
+    return AiResolution(provider, model, api_key)
+
+
+def resolve_outreach(db=None, org=None) -> AiResolution:
+    """Like resolve(), but selects the cheaper per-provider OUTREACH model for
+    high-volume, one-sentence personalization/research calls. Same provider +
+    BYO/operator key resolution — only the model differs from resolve(), so
+    tenant isolation and the AiUsage/pricing path are otherwise identical."""
+    provider = active_provider()
+    model = _outreach_model_for(provider)
     if db is not None and org is not None:
         from . import integration_creds
 
@@ -188,13 +215,24 @@ def _gemini(res: AiResolution, system: str, user_content: str, max_tokens: int):
     from google.genai import types
 
     client = genai.Client(api_key=res.api_key)
+    config_kwargs = dict(
+        system_instruction=system,
+        max_output_tokens=max_tokens,
+    )
+    # gemini-2.5-flash is a "thinking" model: with a small max_output_tokens
+    # and no thinking config, the internal thinking tokens can consume the
+    # whole budget and return EMPTY text. Disable thinking for these short
+    # completions. Guard so an older google-genai without ThinkingConfig
+    # degrades gracefully (thinking simply left at its default) rather than
+    # crashing the call — email personalization would then just fail open.
+    try:
+        config_kwargs["thinking_config"] = types.ThinkingConfig(thinking_budget=0)
+    except AttributeError:
+        pass
     response = client.models.generate_content(
         model=res.model,
         contents=user_content,
-        config=types.GenerateContentConfig(
-            system_instruction=system,
-            max_output_tokens=max_tokens,
-        ),
+        config=types.GenerateContentConfig(**config_kwargs),
     )
     text = response.text or ""
     meta = getattr(response, "usage_metadata", None)

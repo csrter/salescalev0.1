@@ -795,9 +795,23 @@
 }
 .crm-enrich-bar-fill {
   height: 100%;
+  width: 100%;
   border-radius: inherit;
   background: var(--accent);
-  transition: width 0.6s ease;
+  transform-origin: left;
+  transition: transform 0.6s var(--ease-out, ease);
+}
+.crm-lead-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+.crm-lead-cell-biz {
+  font-size: var(--text-xs);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .crm-enrich-line {
   margin: 0;

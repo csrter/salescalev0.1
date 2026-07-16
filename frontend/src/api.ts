@@ -1721,6 +1721,8 @@ export interface EmailRateBlock {
 }
 
 export interface EmailAnalytics {
+  /** False when no AI key resolves for the org — {{ai_snippet}} renders empty. */
+  ai_configured?: boolean;
   totals: EmailRateBlock;
   by_day: {
     date: string;
@@ -2112,6 +2114,8 @@ export interface SmsRateBlock {
 }
 
 export interface SmsAnalytics {
+  /** False when no AI key resolves for the org — {{ai_snippet}} renders empty. */
+  ai_configured?: boolean;
   totals: SmsRateBlock;
   by_day: {
     date: string;

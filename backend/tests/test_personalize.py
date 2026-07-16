@@ -185,6 +185,25 @@ def test_custom_key_validated_against_provided_set():
     assert "custom.plan" in ep.unknown_tokens("{{custom.plan}}", custom_keys={"other"})
 
 
+def test_nested_if_reported():
+    # Balanced nesting passes the opener/closer COUNT check but the renderer's
+    # single-level regex can't match it — it would render-error and exit live
+    # enrollments at send time. Must be a save-time error instead.
+    assert "nested {{#if}}" in ep.unknown_tokens(
+        "{{#if job_title}}{{#if city}}x{{/if}}{{/if}}"
+    )
+    # SMS step-save shares the same validation.
+    assert "nested {{#if}}" in sms_campaigns.unknown_tokens(
+        "{{#if job_title}}{{#if city}}x{{/if}}{{/if}}"
+    )
+
+
+def test_sequential_ifs_not_reported_as_nested():
+    assert (
+        ep.unknown_tokens("{{#if job_title}}x{{/if}} {{#if city}}y{{/if}}") == []
+    )
+
+
 def test_sms_unknown_tokens_narrower_than_email():
     # company_description is a valid EMAIL token but not an SMS one.
     assert sms_campaigns.unknown_tokens("{{company_description}}") == [
@@ -223,3 +242,50 @@ def test_ai_guard_sms_word_limit_narrower():
     assert ep.clean_ai_snippet(text, 25) == ""
     ok = " ".join(["word"] * 25)
     assert ep.clean_ai_snippet(ok, 25) == ok
+
+
+# --- outreach model resolution + provider dispatch ---------------------------
+
+
+def test_resolve_outreach_picks_cheap_model_insights_keep_full():
+    from app.services import ai_provider
+
+    # Outreach personalization/research runs the cheap per-provider model...
+    res = ai_provider.resolve_outreach()
+    assert res.provider == "anthropic"  # test env default
+    assert res.model == "claude-haiku-4-5"
+    # ...while AI insights keep the fuller default via resolve().
+    assert ai_provider.resolve().model == "claude-opus-4-8"
+    # Metering must price the outreach model, not fall back to DEFAULT_PRICE
+    # (which is Opus-priced and would over-bill every snippet).
+    assert "claude-haiku-4-5" in ai_provider.PRICING_MICRO_USD_PER_TOKEN
+    assert ai_provider.price("claude-haiku-4-5") != ai_provider.DEFAULT_PRICE
+
+
+def test_gemini_call_disables_thinking_budget(monkeypatch):
+    """gemini-2.5-flash is a thinking model: with a small max_output_tokens and
+    no thinking config, thinking tokens can eat the whole budget and return
+    EMPTY text — the call must pin thinking_budget=0."""
+    from app.services import ai_provider
+
+    captured = {}
+
+    class _FakeModels:
+        def generate_content(self, *, model, contents, config):
+            captured["config"] = config
+
+            class _R:
+                text = "ok"
+                usage_metadata = None
+
+            return _R()
+
+    class _FakeClient:
+        def __init__(self, api_key):
+            self.models = _FakeModels()
+
+    monkeypatch.setattr("google.genai.Client", _FakeClient)
+    res = ai_provider.AiResolution("gemini", "gemini-2.5-flash", "test-key")
+    text, _in, _out = ai_provider._gemini(res, "sys", "user", 300)
+    assert text == "ok"
+    assert captured["config"].thinking_config.thinking_budget == 0

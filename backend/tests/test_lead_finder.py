@@ -893,6 +893,156 @@ def test_profile_enrichment_pipeline(api, lf_org, monkeypatch):
     api.delete("/api/lead-finder/providers/apollo", headers=lf_org["headers"])
 
 
+def test_owner_extracted_from_own_site_without_provider(api, lf_org, monkeypatch):
+    """No Apollo key: the pipeline still identifies the owner from the
+    business's OWN site text via one grounded AI call — the contact becomes
+    the person (owner-first), business name stays secondary on the Company.
+    A hallucinated name (absent from the site text) is rejected."""
+    from app.models.crm import Company
+    from app.services import ai_provider
+
+    db = SessionLocal()
+    company = Company(
+        organization_id=lf_org["org"],
+        client_id=lf_org["client"],
+        name="Sunrise Roofing Co",
+        domain="sunriseroofing.com",
+    )
+    db.add(company)
+    db.flush()
+    contact = Contact(
+        organization_id=lf_org["org"],
+        client_id=lf_org["client"],
+        company_id=company.id,
+        first_name="Sunrise Roofing Co",  # Lead Finder placeholder
+        source="lead_finder",
+        source_external_id="pl_owner_site_1",
+        source_detail={"website": "https://sunriseroofing.com"},
+    )
+    db.add(contact)
+    db.commit()
+    cid = contact.id
+    db.close()
+
+    monkeypatch.setattr(
+        "app.services.enrichment.discover_site_emails", lambda website: []
+    )
+    monkeypatch.setattr(
+        "app.services.enrichment.discover_site_description", lambda website: None
+    )
+    monkeypatch.setattr(
+        "app.services.enrichment.fetch_site_text",
+        lambda website: (
+            "Sunrise Roofing Co — family owned. Meet Marco Delgado, "
+            "owner and lead estimator, serving Phoenix since 2009."
+        ),
+    )
+    monkeypatch.setattr(
+        ai_provider,
+        "resolve",
+        lambda db=None, org=None: ai_provider.AiResolution(
+            "anthropic", "claude-test", "test-key"
+        ),
+    )
+    monkeypatch.setattr(
+        lead_finder_svc,
+        "_call_model",
+        lambda system, user_content, max_tokens=150: (
+            '{"first_name": "Marco", "last_name": "Delgado", "title": "Owner"}',
+            100,
+            20,
+        ),
+    )
+    lead_finder_svc.enrich_and_verify(lf_org["org"], [cid])
+
+    db = SessionLocal()
+    c = db.get(Contact, cid)
+    assert (c.first_name, c.last_name) == ("Marco", "Delgado")
+    assert c.job_title == "Owner"
+    assert c.source_detail["owner_title"] == "Owner"
+    co = db.get(Company, c.company_id)
+    assert co.name == "Sunrise Roofing Co"  # business name stays secondary
+    db.close()
+
+    # Hallucination guard: a name that isn't in the site text is rejected.
+    db = SessionLocal()
+    contact2 = Contact(
+        organization_id=lf_org["org"],
+        client_id=lf_org["client"],
+        company_id=co.id,
+        first_name="Sunrise Roofing Co",
+        source="lead_finder",
+        source_external_id="pl_owner_site_2",
+        source_detail={"website": "https://sunriseroofing.com"},
+    )
+    db.add(contact2)
+    db.commit()
+    cid2 = contact2.id
+    db.close()
+    monkeypatch.setattr(
+        lead_finder_svc,
+        "_call_model",
+        lambda system, user_content, max_tokens=150: (
+            '{"first_name": "Janet", "last_name": "Fabricated", "title": "CEO"}',
+            100,
+            20,
+        ),
+    )
+    lead_finder_svc.enrich_and_verify(lf_org["org"], [cid2])
+    db = SessionLocal()
+    c2 = db.get(Contact, cid2)
+    assert c2.first_name == "Sunrise Roofing Co"  # placeholder kept
+    assert c2.last_name is None
+    db.close()
+
+
+def test_owner_extraction_skipped_without_ai_key(api, lf_org, monkeypatch):
+    """Fail-open: no AI key resolvable → no site fetch, no crash, placeholder
+    name kept (same posture as every other AI path)."""
+    from app.models.crm import Company
+
+    db = SessionLocal()
+    company = Company(
+        organization_id=lf_org["org"],
+        client_id=lf_org["client"],
+        name="No Key Plumbing",
+        domain="nokeyplumbing.com",
+    )
+    db.add(company)
+    db.flush()
+    contact = Contact(
+        organization_id=lf_org["org"],
+        client_id=lf_org["client"],
+        company_id=company.id,
+        first_name="No Key Plumbing",
+        source="lead_finder",
+        source_external_id="pl_owner_nokey_1",
+        source_detail={"website": "https://nokeyplumbing.com"},
+    )
+    db.add(contact)
+    db.commit()
+    cid = contact.id
+    db.close()
+
+    monkeypatch.setattr(
+        "app.services.enrichment.discover_site_emails", lambda website: []
+    )
+    monkeypatch.setattr(
+        "app.services.enrichment.discover_site_description", lambda website: None
+    )
+
+    def _explode(website):
+        raise AssertionError("site text must not be fetched when AI is unconfigured")
+
+    monkeypatch.setattr("app.services.enrichment.fetch_site_text", _explode)
+    lead_finder_svc.enrich_and_verify(lf_org["org"], [cid])
+
+    db = SessionLocal()
+    c = db.get(Contact, cid)
+    assert c.first_name == "No Key Plumbing"
+    db.close()
+
+
 def test_pitch_target_ranking():
     """Provider result order never trumps our priority list: the owner beats a
     marketing manager, a marketing decision-maker beats an unmatched title."""

@@ -13,7 +13,7 @@
  * dropping anyone, and the dashboard leads with that compliance note.
  */
 
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { memo, useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   activateSmsCampaign,
   addSmsSuppression,
@@ -80,6 +80,7 @@ import {
   SkeletonText,
   Switch,
   Tabs,
+  keepEqual,
 } from "./components/ui";
 import { Plus, Send } from "./components/icons";
 import { useToast } from "./components/Toast";
@@ -207,9 +208,13 @@ type Panel = "dashboard" | "campaigns" | "messages" | "accounts" | "suppression"
 export function SmsOutreachView({
   isAdmin,
   isOwner,
+  active = true,
 }: {
   isAdmin: boolean;
   isOwner: boolean;
+  /** False while the view is kept mounted but hidden behind another tab —
+   * gates the messages poll. */
+  active?: boolean;
 }) {
   const [panel, setPanel] = useState<Panel>("dashboard");
   const [accounts, setAccounts] = useState<SmsAccount[]>([]);
@@ -265,7 +270,9 @@ export function SmsOutreachView({
         <DashboardPanel accounts={accounts} isAdmin={isAdmin} isOwner={isOwner} />
       )}
       {panel === "campaigns" && isAdmin && <CampaignsPanel accounts={accounts} />}
-      {panel === "messages" && <MessagesPanel accounts={accounts} />}
+      {panel === "messages" && (
+        <MessagesPanel accounts={accounts} active={active} />
+      )}
       {panel === "accounts" && isAdmin && (
         <AccountsPanel accounts={accounts} onChanged={refreshAccounts} />
       )}
@@ -404,6 +411,16 @@ function DashboardPanel({
             {pct(t?.opt_out_rate)} of sends resulted in an opt-out (over{" "}
             {pct(OPT_OUT_RED_LINE)}). Review targeting and message content —
             a high opt-out rate risks carrier filtering.
+          </Alert>
+        </div>
+      )}
+
+      {!loading && data?.ai_configured === false && (
+        <div className="sms-redline">
+          <Alert tone="warn" title="AI personalization is off">
+            No AI provider key is configured, so {"{{ai_snippet}}"} renders as
+            empty text in every send. Add a key on the Integrations page (AI
+            provider card) to turn it on — sends are never blocked either way.
           </Alert>
         </div>
       )}
@@ -1808,7 +1825,56 @@ function EnrollDialog({
 // 3. Messages — conversation list keyed by contact (no threads)
 // ==========================================================================
 
-function MessagesPanel({ accounts }: { accounts: SmsAccount[] }) {
+/** One conversation row — memoized so the 15s poll (which keeps the messages
+ * array reference stable when nothing changed) skips unchanged rows. */
+const ConversationListItem = memo(function ConversationListItem({
+  id,
+  contact,
+  last,
+  unread,
+  isActive,
+  onOpen,
+}: {
+  id: string;
+  contact: SmsMessage["contact"];
+  last: SmsMessage | undefined;
+  unread: boolean;
+  isActive: boolean;
+  onOpen: (contactId: string) => void;
+}) {
+  return (
+    <button
+      type="button"
+      className={[
+        "sms-thread-item",
+        isActive ? "sms-thread-item--active" : "",
+        unread ? "sms-thread-item--unread" : "",
+      ]
+        .filter(Boolean)
+        .join(" ")}
+      onClick={() => onOpen(id)}
+    >
+      <div className="sms-thread-top">
+        <span className="sms-thread-name">
+          <span>{contact ? contactLabel(contact) : "Unknown contact"}</span>
+          {unread && <Badge tone="info">new</Badge>}
+        </span>
+        <time className="sms-thread-time" title={last?.sent_at ?? last?.received_at ?? undefined}>
+          {timeAgo(last?.sent_at || last?.received_at || null)}
+        </time>
+      </div>
+      <span className="sms-thread-snippet">{last?.body}</span>
+    </button>
+  );
+});
+
+function MessagesPanel({
+  accounts,
+  active = true,
+}: {
+  accounts: SmsAccount[];
+  active?: boolean;
+}) {
   const toast = useToast();
   const [messages, setMessages] = useState<SmsMessage[] | null>(null);
   const [selectedContactId, setSelectedContactId] = useState<string | null>(null);
@@ -1817,13 +1883,20 @@ function MessagesPanel({ accounts }: { accounts: SmsAccount[] }) {
   const [composing, setComposing] = useState(false);
 
   const refresh = useCallback(() => {
-    listSmsMessages().then(setMessages).catch(() => {});
+    // keepEqual: identical poll payloads keep the previous reference, so the
+    // conversations memo (and every memoized row) stays untouched.
+    listSmsMessages()
+      .then((rows) => setMessages((prev) => keepEqual(prev, rows)))
+      .catch(() => {});
   }, []);
+  // Poll only while the view is actually visible; re-activating refreshes
+  // immediately (the effect re-runs when `active` flips back to true).
   useEffect(() => {
+    if (!active) return;
     refresh();
     const t = setInterval(refresh, 15_000);
     return () => clearInterval(t);
-  }, [refresh]);
+  }, [refresh, active]);
 
   // Group the flat, newest-first message log by contact — SMS has no
   // threads, so a "conversation" here is just every message with a given
@@ -1843,16 +1916,19 @@ function MessagesPanel({ accounts }: { accounts: SmsAccount[] }) {
   const hasUnread = (c: (typeof conversations)[number]) =>
     c.messages.some((m) => m.direction === "in" && !m.read_at);
 
-  const open = (contactId: string) => {
-    setSelectedContactId(contactId);
-    if (contactId !== "unknown") {
-      markSmsRead(contactId)
-        .then((r) => {
-          if (r.marked > 0) refresh();
-        })
-        .catch(() => {});
-    }
-  };
+  const open = useCallback(
+    (contactId: string) => {
+      setSelectedContactId(contactId);
+      if (contactId !== "unknown") {
+        markSmsRead(contactId)
+          .then((r) => {
+            if (r.marked > 0) refresh();
+          })
+          .catch(() => {});
+      }
+    },
+    [refresh],
+  );
 
   // Auto-mark-read the conversation that lands selected by default (the
   // most-recent one), same as opening it explicitly — otherwise it would
@@ -1920,35 +1996,17 @@ function MessagesPanel({ accounts }: { accounts: SmsAccount[] }) {
               Sent and received texts show up here — nothing yet.
             </EmptyState>
           )}
-          {conversations.map((c) => {
-            const last = c.messages[0];
-            const unread = hasUnread(c);
-            return (
-              <button
-                key={c.id}
-                type="button"
-                className={[
-                  "sms-thread-item",
-                  selected?.id === c.id ? "sms-thread-item--active" : "",
-                  unread ? "sms-thread-item--unread" : "",
-                ]
-                  .filter(Boolean)
-                  .join(" ")}
-                onClick={() => open(c.id)}
-              >
-                <div className="sms-thread-top">
-                  <span className="sms-thread-name">
-                    <span>{c.contact ? contactLabel(c.contact) : "Unknown contact"}</span>
-                    {unread && <Badge tone="info">new</Badge>}
-                  </span>
-                  <time className="sms-thread-time" title={last?.sent_at ?? last?.received_at ?? undefined}>
-                    {timeAgo(last?.sent_at || last?.received_at || null)}
-                  </time>
-                </div>
-                <span className="sms-thread-snippet">{last?.body}</span>
-              </button>
-            );
-          })}
+          {conversations.map((c) => (
+            <ConversationListItem
+              key={c.id}
+              id={c.id}
+              contact={c.contact}
+              last={c.messages[0]}
+              unread={hasUnread(c)}
+              isActive={selected?.id === c.id}
+              onOpen={open}
+            />
+          ))}
         </GlassCard>
 
         {selected ? (

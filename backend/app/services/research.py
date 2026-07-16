@@ -178,7 +178,9 @@ def run_for_contact(
                 facts = _grounded_facts(db, org, contact)
             grounding = {**facts, "site_text": site_text}
             ai_insights.check_allowance(db, org)  # entitlement + monthly cap
-            res = ai_provider.resolve(db, org)
+            # Cheaper outreach model (Haiku on Anthropic) — a short grounded
+            # research answer, same class as the {{ai_snippet}} tasks.
+            res = ai_provider.resolve_outreach(db, org)
             user_content = (
                 f"GROUNDED_DATA:\n{json.dumps(grounding, sort_keys=True, default=str)}"
                 f"\n\nQUESTION:\n{d.prompt}"

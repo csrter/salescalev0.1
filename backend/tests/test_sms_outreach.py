@@ -863,9 +863,89 @@ def test_sms_ai_snippet_generated_cached_and_metered_once(
             select(SmsStep).where(SmsStep.campaign_id == camp["id"])
         ).scalars().first()
         snippet = sms_campaigns.generate_ai_snippet(db, org, c, step)
-        assert snippet == ""  # AI failure never blocks/crashes
+        # Transient failure → None (never cached, retried next render);
+        # the render path's `or ""` keeps sends unblocked either way.
+        assert snippet is None
     finally:
         db.close()
+
+
+def test_sms_transient_ai_failure_not_cached_and_retried(
+    sc_org, api, twilio_creds_ok, monkeypatch
+):
+    """Mirror of the email module's fix: a transient AI failure must NOT be
+    cached as an empty snippet on the enrollment — the next render retries
+    once the key/cap is fixed. Also pins the SMS snippet path to the cheap
+    OUTREACH model (resolve_outreach, Haiku on Anthropic)."""
+    from app.services import ai_provider
+
+    monkeypatch.setattr(
+        email_personalize.ai_insights, "check_allowance", lambda db, org: None
+    )
+    acct = _mk_account(sc_org, api, from_number="+14805550777")
+    camp = _mk_campaign(sc_org, api, acct["id"], **_ALWAYS)
+    contact = _mk_contact(sc_org, api, mobile_phone="4805558801", first="Rita")
+    _set_steps(
+        sc_org, api, camp["id"],
+        [{"position": 1, "body": "Hi {{first_name}}! {{ai_snippet}}", "ai_instructions": "Mention their city."}],
+    )
+    assert _activate(sc_org, api, camp["id"]).status_code == 200
+    _enroll(sc_org, api, camp["id"], [contact])
+
+    def _boom(system, user_content, max_tokens=300):
+        raise RuntimeError("model timeout")
+
+    monkeypatch.setattr(email_personalize, "_call_model", _boom)
+    db = SessionLocal()
+    try:
+        e = db.execute(
+            select(SmsEnrollment).where(
+                SmsEnrollment.campaign_id == camp["id"],
+                SmsEnrollment.contact_id == contact,
+            )
+        ).scalar_one()
+        org = db.get(Organization, sc_org["org"])
+        step = db.execute(
+            select(SmsStep).where(SmsStep.campaign_id == camp["id"])
+        ).scalars().first()
+        c = db.get(Contact, contact)
+        body = sms_campaigns.render_full(db, org, e, step, contact=c)
+        assert body.strip() == "Hi Rita!"  # send not blocked, just unpersonalized
+        assert not (e.ai_snippets or {})  # the failure was NOT cached
+        db.commit()
+    finally:
+        db.close()
+
+    # "Key fixed" — the next render generates and caches this time.
+    seen = {}
+
+    def _ok(system, user_content, max_tokens=300):
+        seen["model"] = ai_provider.current().model
+        return "Loved the new Mesa location.", 5, 3
+
+    monkeypatch.setattr(email_personalize, "_call_model", _ok)
+    db = SessionLocal()
+    try:
+        e = db.execute(
+            select(SmsEnrollment).where(
+                SmsEnrollment.campaign_id == camp["id"],
+                SmsEnrollment.contact_id == contact,
+            )
+        ).scalar_one()
+        org = db.get(Organization, sc_org["org"])
+        step = db.execute(
+            select(SmsStep).where(SmsStep.campaign_id == camp["id"])
+        ).scalars().first()
+        c = db.get(Contact, contact)
+        body = sms_campaigns.render_full(db, org, e, step, contact=c)
+        assert "Loved the new Mesa location." in body
+        assert e.ai_snippets and step.id in e.ai_snippets
+        # Exit — this enrollment is still active/due in the shared module DB.
+        sms_campaigns.exit_manual(db, e)
+        db.commit()
+    finally:
+        db.close()
+    assert seen["model"] == "claude-haiku-4-5"
 
 
 def test_sms_render_empty_exits_enrollment(sc_org, api, twilio_creds_ok, captured_sends):
@@ -1327,6 +1407,50 @@ def test_reactivation_rearms_parked_enrollments(sc_org, api, twilio_creds_ok, ca
         db.close()
 
 
+def test_account_reconnect_revives_errored_enrollments(
+    sc_org, api, twilio_creds_ok, monkeypatch
+):
+    """A hard provider failure ends its enrollment in `error` (broken
+    account). Reconnecting the account must revive it too — re-arming only
+    the PARKED rows would drop whoever hit the broken account first, forever
+    (mirror of the email module's fix)."""
+    acct = _mk_account(sc_org, api, from_number="+14805550778")
+    camp = _mk_campaign(sc_org, api, acct["id"], **_ALWAYS)
+    contact = _mk_contact(sc_org, api, mobile_phone="4805558802", first="Errol")
+    _set_steps(sc_org, api, camp["id"], [{"position": 1, "body": "Hi {{first_name}}"}])
+    assert _activate(sc_org, api, camp["id"]).status_code == 200
+    _enroll(sc_org, api, camp["id"], [contact])
+
+    # Hard provider failure at tick time → enrollment errors out.
+    monkeypatch.setattr(
+        gateway,
+        "_twilio_send",
+        lambda account, to_number, body: ("", "30001", "provider down"),
+    )
+    _tick()
+    e = _get_enrollment(camp["id"], contact)
+    assert e.status == "error" and e.next_run_at is None
+
+    # Account fixed → the /test button re-arms parked AND revives errored.
+    r = api.post(f"/api/sms/accounts/{acct['id']}/test", headers=sc_org["headers"])
+    assert r.status_code == 200 and r.json()["ok"] is True
+    e = _get_enrollment(camp["id"], contact)
+    assert e.status == "active"
+    assert e.exit_reason is None and e.ended_at is None
+    assert e.next_run_at is not None
+
+    # Exit so later tests' run_due in the shared module DB never sends it.
+    db = SessionLocal()
+    try:
+        en = db.execute(
+            select(SmsEnrollment).where(SmsEnrollment.id == e.id)
+        ).scalar_one()
+        sms_campaigns.exit_manual(db, en)
+        db.commit()
+    finally:
+        db.close()
+
+
 
 # --- lead SMS notifications (text-the-team alerts, services/lead_notify.py) --
 # Each test gets its OWN fresh org (unique signup email): notify_new_lead
@@ -1761,3 +1885,217 @@ def test_render_notification_body_default_and_custom_template():
 def test_unknown_tokens_rejects_unrecognized_placeholders():
     assert lead_notify.unknown_tokens("Hi {{name}}, brand {{brand}}") == []
     assert lead_notify.unknown_tokens("Hi {{nickname}} {{zip}}") == ["nickname"]
+
+
+# --- audit fixes: daily-cap counts receipts, footer-aware segment cap,
+# AI-config surfacing, inbound-webhook liveness --------------------------------
+
+
+def test_daily_cap_counts_delivered_rows(sc_org, api, twilio_creds_ok, captured_sends):
+    """A message flips sent -> delivered -> read within seconds of a status
+    webhook; the daily cap (TCPA volume + cost guard) must keep counting it
+    once delivered, or delivered messages fall out of the counter and the cap
+    becomes unbounded."""
+    import datetime as _dt
+
+    acct = _mk_account(sc_org, api, from_number="+14805550601")
+    camp = _mk_campaign(sc_org, api, acct["id"], daily_cap=1, **_ALWAYS)
+    a = _mk_contact(sc_org, api, mobile_phone="4805556601", first="Ada")
+    b = _mk_contact(sc_org, api, mobile_phone="4805556602", first="Bo")
+    _set_steps(sc_org, api, camp["id"], [{"position": 1, "body": "Hi {{first_name}}"}])
+    assert _activate(sc_org, api, camp["id"]).status_code == 200
+    _enroll(sc_org, api, camp["id"], [a, b])
+
+    _tick()  # daily_cap=1 → exactly ONE send, the other enrollment parks
+    assert len(captured_sends) == 1
+
+    # Flip the sent row to delivered (as the status webhook would) and free the
+    # parked enrollment. The cap must STILL count the delivered row.
+    db = SessionLocal()
+    try:
+        row = db.execute(
+            select(SmsMessage).where(
+                SmsMessage.campaign_id == camp["id"],
+                SmsMessage.direction == "out",
+            )
+        ).scalar_one()
+        row.status = "delivered"
+        parked = db.execute(
+            select(SmsEnrollment).where(
+                SmsEnrollment.campaign_id == camp["id"],
+                SmsEnrollment.status == SMS_ENROLL_ACTIVE,
+            )
+        ).scalar_one()
+        parked.next_run_at = utcnow() - _dt.timedelta(minutes=1)
+        db.commit()
+    finally:
+        db.close()
+
+    _tick()  # delivered row keeps counting → still capped, no new send
+    assert len(captured_sends) == 1
+
+
+def test_segment_cap_measured_with_compliance_footer(
+    sc_org, api, twilio_creds_ok, captured_sends
+):
+    """The gateway prepends "OrgName: " + the STOP footer on step 1, so a body
+    that fits at exactly 3 segments bare ships over the cap once the footer is
+    added — the guard must measure the footered form."""
+    body = "A" * 459  # exactly 3 segments bare (3 * 153)
+    assert sms_campaigns.segment_count(body) == sms_campaigns.MAX_RENDERED_SEGMENTS
+
+    # Footer ON (default): pushed over 3 segments → the enrollment exits
+    # too_long before any send.
+    acct = _mk_account(sc_org, api, from_number="+14805550602")
+    camp = _mk_campaign(sc_org, api, acct["id"], **_ALWAYS)
+    on = _mk_contact(sc_org, api, mobile_phone="4805556603", first="Cy")
+    _set_steps(sc_org, api, camp["id"], [{"position": 1, "body": body}])
+    assert _activate(sc_org, api, camp["id"]).status_code == 200
+    _enroll(sc_org, api, camp["id"], [on])
+    _tick()
+    e = _get_enrollment(camp["id"], on)
+    assert e.status == "exited"
+    assert e.exit_reason == "too_long"
+    assert captured_sends == []
+
+    # Footer OFF: the identical body stays at exactly 3 segments and sends —
+    # proving it was the footer, not the body, that tripped the cap.
+    acct2 = _mk_account(sc_org, api, from_number="+14805550603")
+    camp2 = _mk_campaign(
+        sc_org, api, acct2["id"], include_compliance_footer=False, **_ALWAYS
+    )
+    off = _mk_contact(sc_org, api, mobile_phone="4805556604", first="De")
+    _set_steps(sc_org, api, camp2["id"], [{"position": 1, "body": body}])
+    assert _activate(sc_org, api, camp2["id"]).status_code == 200
+    _enroll(sc_org, api, camp2["id"], [off])
+    _tick()
+    e2 = _get_enrollment(camp2["id"], off)
+    assert e2.status == "completed"
+    assert len(captured_sends) == 1
+
+
+def test_preview_flags_empty_ai_snippet(sc_org, api, twilio_creds_ok):
+    """A step with ai_instructions whose snippet came back empty (AI provider
+    unconfigured — fail-open) is flagged so the UI can warn; a plain step is
+    not."""
+    acct = _mk_account(sc_org, api, from_number="+14805550604")
+    camp = _mk_campaign(sc_org, api, acct["id"], **_ALWAYS)
+    contact = _mk_contact(sc_org, api, mobile_phone="4805556605", first="Fen")
+    _set_steps(
+        sc_org,
+        api,
+        camp["id"],
+        [
+            {
+                "position": 1,
+                "body": "Hi {{first_name}}. {{ai_snippet}}",
+                "ai_instructions": "Mention their business.",
+            },
+            {"position": 2, "body": "Plain follow-up {{first_name}}"},
+        ],
+    )
+    r1 = api.post(
+        f"/api/sms/campaigns/{camp['id']}/preview",
+        json={"contact_id": contact, "position": 1},
+        headers=sc_org["headers"],
+    )
+    assert r1.status_code == 200, r1.text
+    assert r1.json()["ai_snippet_empty"] is True
+    assert "{{" not in r1.json()["body"]  # empty snippet rendered, not left literal
+
+    r2 = api.post(
+        f"/api/sms/campaigns/{camp['id']}/preview",
+        json={"contact_id": contact, "position": 2},
+        headers=sc_org["headers"],
+    )
+    assert r2.status_code == 200, r2.text
+    assert r2.json()["ai_snippet_empty"] is False  # no ai_instructions on this step
+
+
+def test_analytics_reports_ai_configured(sc_org, api, twilio_creds_ok):
+    """The Dashboard payload carries whether the active AI provider resolves a
+    key — {{ai_snippet}} fails open to "" when it doesn't, so the org needs to
+    know it's inert. No AI key in the test env → False."""
+    r = api.get("/api/sms/analytics", headers=sc_org["headers"])
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert "ai_configured" in body
+    assert body["ai_configured"] is False
+
+
+def test_account_out_flags_stale_inbound_webhook(sc_org, api, twilio_creds_ok):
+    """A non-Twilio active account with real outbound volume but zero inbound
+    messages ever = its inbound webhook was never registered, so STOP is never
+    captured (no Twilio-21610-style self-heal exists for Sendblue/BlueBubbles).
+    _account_out surfaces last_inbound_at + inbound_webhook_stale."""
+    import datetime as _dt
+
+    from app.api.sms_outreach import _INBOUND_STALE_MIN_SENDS
+
+    acct = _mk_account(
+        sc_org,
+        api,
+        name="bb-stale",
+        provider="bluebubbles",
+        account_sid=None,
+        from_number="+14805556606",
+        relay_url="https://relay.example.com",
+        min_send_spacing_seconds=0,
+        max_send_spacing_seconds=0,
+    )
+    aid = acct["id"]
+    # Fresh account, no sends yet → not stale (a new account legitimately has
+    # no replies).
+    assert acct["last_inbound_at"] is None
+    assert acct["inbound_webhook_stale"] is False
+
+    # Log outbound sends up to the threshold, and no inbound.
+    db = SessionLocal()
+    try:
+        for i in range(_INBOUND_STALE_MIN_SENDS):
+            db.add(
+                SmsMessage(
+                    organization_id=sc_org["org"],
+                    account_id=aid,
+                    direction="out",
+                    kind="campaign",
+                    to_number=f"+1480555{7000 + i:04d}",
+                    from_number="+14805556606",
+                    body="hello",
+                    status="sent",
+                )
+            )
+        db.commit()
+    finally:
+        db.close()
+
+    accts = api.get("/api/sms/accounts", headers=sc_org["headers"]).json()
+    row = next(a for a in accts if a["id"] == aid)
+    assert row["inbound_webhook_stale"] is True
+    assert row["last_inbound_at"] is None
+
+    # An inbound message clears the warning and sets last_inbound_at.
+    db = SessionLocal()
+    try:
+        db.add(
+            SmsMessage(
+                organization_id=sc_org["org"],
+                account_id=aid,
+                direction="in",
+                kind="inbound",
+                to_number="+14805556606",
+                from_number="+14805557999",
+                body="hey there",
+                status="received",
+                created_at=utcnow() - _dt.timedelta(minutes=5),
+            )
+        )
+        db.commit()
+    finally:
+        db.close()
+
+    accts = api.get("/api/sms/accounts", headers=sc_org["headers"]).json()
+    row = next(a for a in accts if a["id"] == aid)
+    assert row["inbound_webhook_stale"] is False
+    assert row["last_inbound_at"] is not None
+

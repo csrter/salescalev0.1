@@ -77,10 +77,11 @@
 
   /* ---- brand primitives (FROZEN names — see contract above) ----------- */
   --brand-blue: #2b62e0;
-  --accent: light-dark(#4f46e5, #7c78f0);
+  /* Accent = the logo's cobalt (--brand-blue), lifted for dark surfaces. */
+  --accent: light-dark(#2b62e0, #6d95f2);
   /* literal fallbacks; re-derived from --accent in the @supports block */
-  --accent-strong: light-dark(#4338ca, #938ff5);
-  --accent-soft: light-dark(#e7e8fb, #262d55);
+  --accent-strong: light-dark(#2050c2, #8fb0f6);
+  --accent-soft: light-dark(#e2eafc, #1e2c55);
 
   /* ---- derived brand helpers (never tenant-written; always computed) -- */
   --accent-ghost: color-mix(in srgb, var(--accent) 8%, transparent);   /* hover washes, drag ghosts */
@@ -207,7 +208,7 @@
   /* ---- charts (VALIDATED palette — verbatim, deliberately NOT derived
           from --accent: tenant rebrands must not repaint series identity.
           Chart surface is --card.) ---------------------------------------- */
-  --chart-1: light-dark(#4f46e5, #7c78f0);
+  --chart-1: light-dark(#2b62e0, #6d95f2);
   --chart-2: #0d9488;
   --chart-3: #d97706;
   --chart-4: light-dark(#be185d, #db2777);

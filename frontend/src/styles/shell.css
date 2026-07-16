@@ -32,6 +32,34 @@
   }
 }
 
+/* View entrance — the Dialog/Toast @starting-style pattern applied to the
+   content well. Fires on first mount AND when a kept-mounted view flips from
+   hidden (display:none) back to visible, so every tab switch gets the same
+   subtle fade/rise. Durations are the motion tokens (0s under reduced
+   motion); transform is tiny and never blocks input. */
+.view-host {
+  opacity: 1;
+  transform: translateY(0);
+  transition:
+    opacity var(--dur-med) var(--ease-out),
+    transform var(--dur-med) var(--ease-out);
+}
+
+@starting-style {
+  .view-host {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+}
+
+/* Suspense fallback while a lazy view chunk loads. */
+.view-fallback {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  max-width: 520px;
+}
+
 /* ---- sidebar (§5.1) — dark brand field, NEVER glass --------------------- */
 
 .sidebar {

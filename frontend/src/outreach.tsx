@@ -7,6 +7,7 @@
  */
 
 import {
+  memo,
   useCallback,
   useEffect,
   useRef,
@@ -73,6 +74,8 @@ import {
   Segmented,
   SkeletonText,
   Tabs,
+  keepEqual,
+  useDebouncedValue,
 } from "./components/ui";
 import { Plus, Send } from "./components/icons";
 import { useToast } from "./components/Toast";
@@ -122,7 +125,15 @@ type Panel = "inbox" | "rules" | "sequences" | "prospects" | "analytics" | "sett
 // attached to it to a name rather than a bare id.
 const HOUSE_CLIENT_LABEL = "My agency (house CRM)";
 
-export function OutreachView({ isAdmin }: { isAdmin: boolean }) {
+export function OutreachView({
+  isAdmin,
+  active = true,
+}: {
+  isAdmin: boolean;
+  /** False while the view is kept mounted but hidden behind another tab —
+   * gates the inbox polls. */
+  active?: boolean;
+}) {
   const [panel, setPanel] = useState<Panel>("inbox");
   const [clients, setClients] = useState<Client[]>([]);
   const [clientId, setClientId] = useState<string>("");
@@ -209,7 +220,12 @@ export function OutreachView({ isAdmin }: { isAdmin: boolean }) {
       </div>
 
       {panel === "inbox" && (
-        <InboxPanel clientId={clientId} isAdmin={isAdmin} accounts={accounts} />
+        <InboxPanel
+          clientId={clientId}
+          isAdmin={isAdmin}
+          accounts={accounts}
+          active={active}
+        />
       )}
       {panel === "rules" && isAdmin && (
         <RulesPanel clientId={clientId} accounts={accounts} />
@@ -235,14 +251,49 @@ export function OutreachView({ isAdmin }: { isAdmin: boolean }) {
 
 // --- Inbox ---
 
+/** One conversation row — memoized so the 10s poll (ref-stable when data is
+ * unchanged) skips re-rendering unchanged rows. */
+const ConvoListItem = memo(function ConvoListItem({
+  c,
+  isActive,
+  onOpen,
+}: {
+  c: OutreachConvo;
+  isActive: boolean;
+  onOpen: (c: OutreachConvo) => void;
+}) {
+  return (
+    <button
+      type="button"
+      className={`or-convo ${isActive ? "or-convo--active" : ""}`.trim()}
+      onClick={() => onOpen(c)}
+    >
+      <div className="or-convo-top">
+        <span className="or-convo-name">
+          <span>{c.contact_name || c.peer.username || c.ig_user_id}</span>
+          {c.unread_count > 0 && <Badge tone="info">{c.unread_count}</Badge>}
+        </span>
+        <time className="or-convo-time" title={c.last_message_at ?? undefined}>
+          {timeAgo(c.last_message_at)}
+        </time>
+      </div>
+      <span className="or-convo-preview">
+        {(c.last_message_preview || "").slice(0, 64)}
+      </span>
+    </button>
+  );
+});
+
 function InboxPanel({
   clientId,
   isAdmin,
   accounts,
+  active = true,
 }: {
   clientId: string;
   isAdmin: boolean;
   accounts: IgAccount[];
+  active?: boolean;
 }) {
   const toast = useToast();
   const [convos, setConvos] = useState<OutreachConvo[] | null>(null);
@@ -256,25 +307,33 @@ function InboxPanel({
   const [sequences, setSequences] = useState<OutreachSequence[]>([]);
   const selectedRef = useRef<string | null>(null);
 
+  // Debounced: typing in the search box refetches after a pause, not per
+  // keystroke.
+  const debouncedSearch = useDebouncedValue(search, 250);
   const refresh = useCallback(() => {
-    outreachInbox(clientId || undefined, search || undefined)
+    outreachInbox(clientId || undefined, debouncedSearch || undefined)
       .then((rows) => {
-        setConvos(rows);
+        // keepEqual: an unchanged poll keeps the previous array reference so
+        // memoized rows skip re-rendering.
+        setConvos((prev) => keepEqual(prev, rows));
         const cur = selectedRef.current;
         if (cur) {
           const updated = rows.find((r) => r.id === cur);
-          if (updated) setSelected(updated);
+          if (updated) setSelected((prevSel) => keepEqual(prevSel, updated));
         }
       })
       .catch(() => {});
-  }, [clientId, search]);
+  }, [clientId, debouncedSearch]);
 
-  // Auto-updating inbox: webhook events land server-side; poll to reflect them.
+  // Auto-updating inbox: webhook events land server-side; poll to reflect
+  // them — but only while the view is actually visible (re-activating
+  // refreshes immediately via the effect re-run).
   useEffect(() => {
+    if (!active) return;
     refresh();
     const t = setInterval(refresh, 10_000);
     return () => clearInterval(t);
-  }, [refresh]);
+  }, [refresh, active]);
 
   useEffect(() => {
     if (isAdmin) listOutreachSequences(clientId || undefined).then(setSequences).catch(() => {});
@@ -290,12 +349,14 @@ function InboxPanel({
   }, []);
 
   useEffect(() => {
-    if (!selected) return;
+    if (!selected || !active) return;
     const t = setInterval(() => {
-      outreachMessages(selected.id).then(setMessages).catch(() => {});
+      outreachMessages(selected.id)
+        .then((rows) => setMessages((prev) => keepEqual(prev, rows)))
+        .catch(() => {});
     }, 10_000);
     return () => clearInterval(t);
-  }, [selected]);
+  }, [selected, active]);
 
   const send = async () => {
     if (!selected || !draft.trim()) return;
@@ -362,25 +423,12 @@ function InboxPanel({
           </EmptyState>
         )}
         {convos?.map((c) => (
-          <button
+          <ConvoListItem
             key={c.id}
-            type="button"
-            className={`or-convo ${selected?.id === c.id ? "or-convo--active" : ""}`.trim()}
-            onClick={() => openConvo(c)}
-          >
-            <div className="or-convo-top">
-              <span className="or-convo-name">
-                <span>{c.contact_name || c.peer.username || c.ig_user_id}</span>
-                {c.unread_count > 0 && <Badge tone="info">{c.unread_count}</Badge>}
-              </span>
-              <time className="or-convo-time" title={c.last_message_at ?? undefined}>
-                {timeAgo(c.last_message_at)}
-              </time>
-            </div>
-            <span className="or-convo-preview">
-              {(c.last_message_preview || "").slice(0, 64)}
-            </span>
-          </button>
+            c={c}
+            isActive={selected?.id === c.id}
+            onOpen={openConvo}
+          />
         ))}
       </GlassCard>
 

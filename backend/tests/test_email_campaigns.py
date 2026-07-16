@@ -33,7 +33,7 @@ from app.models.email_outreach import (
     EmailThread,
     EmailWarmupPeer,
 )
-from app.services import email_campaigns, email_personalize, email_warmup
+from app.services import ai_provider, email_campaigns, email_personalize, email_warmup
 from app.services import email_outreach_send as gateway
 from app.services import email_outreach_sync as sync
 from app.services import email_transport
@@ -601,7 +601,8 @@ def test_ai_snippet_generated_cached_and_fails_open(cc_org, api, probe_ok, monke
     finally:
         db.close()
 
-    # AI failure → snippet is "" and the template still renders (no crash).
+    # Transient AI failure → None (never cached, retried next render); the
+    # render path's `or ""` keeps the template rendering without a crash.
     def _boom(system, user_content, max_tokens=300):
         raise RuntimeError("model timeout")
 
@@ -614,7 +615,138 @@ def test_ai_snippet_generated_cached_and_fails_open(cc_org, api, probe_ok, monke
             select(EmailStep).where(EmailStep.campaign_id == camp["id"])
         ).scalars().first()
         snippet = email_personalize.generate_ai_snippet(db, org, c, step)
-        assert snippet == ""
+        assert snippet is None
+    finally:
+        db.close()
+
+
+def test_transient_ai_failure_not_cached_and_retried(
+    cc_org, api, probe_ok, monkeypatch
+):
+    """A transient AI failure (missing key, monthly-cap hit, timeout) must NOT
+    be cached as an empty snippet on the enrollment — the next render retries
+    and personalizes once the key/cap is fixed. Also pins the snippet path to
+    the cheap OUTREACH model (resolve_outreach, Haiku on Anthropic)."""
+    monkeypatch.setattr(
+        email_personalize.ai_insights, "check_allowance", lambda db, org: None
+    )
+    acct = _mk_account(cc_org, api, from_email="airetry@campaignco.com")
+    camp = _mk_campaign(cc_org, api, acct["id"], **_ALWAYS)
+    contact = _mk_contact(cc_org, api, email_addr="airetry-lead@example.com")
+    _set_steps(
+        cc_org, api, camp["id"],
+        [{"position": 1, "body": "Intro. {{ai_snippet}}", "ai_instructions": "Mention their city."}],
+    )
+    assert _activate(cc_org, api, camp["id"]).status_code == 200
+    api.post(
+        f"/api/email-outreach/campaigns/{camp['id']}/enroll",
+        json={"contact_ids": [contact]},
+        headers=cc_org["headers"],
+    )
+
+    def _boom(system, user_content, max_tokens=300):
+        raise RuntimeError("model timeout")
+
+    monkeypatch.setattr(email_personalize, "_call_model", _boom)
+    db = SessionLocal()
+    try:
+        e = db.execute(select_enrollment(camp["id"], contact)).scalar_one()
+        org = db.get(Organization, cc_org["org"])
+        step = db.execute(
+            select(EmailStep).where(EmailStep.campaign_id == camp["id"])
+        ).scalars().first()
+        c = db.get(Contact, contact)
+        _subj, body = email_personalize.render_full(db, org, e, step, None, contact=c)
+        assert body.strip() == "Intro."  # send not blocked, just unpersonalized
+        assert not (e.ai_snippets or {})  # the failure was NOT cached
+        db.commit()
+    finally:
+        db.close()
+
+    # "Key fixed" — the next render generates and caches this time.
+    seen = {}
+
+    def _ok(system, user_content, max_tokens=300):
+        seen["model"] = ai_provider.current().model
+        return "A grounded line.", 5, 3
+
+    monkeypatch.setattr(email_personalize, "_call_model", _ok)
+    db = SessionLocal()
+    try:
+        e = db.execute(select_enrollment(camp["id"], contact)).scalar_one()
+        org = db.get(Organization, cc_org["org"])
+        step = db.execute(
+            select(EmailStep).where(EmailStep.campaign_id == camp["id"])
+        ).scalars().first()
+        c = db.get(Contact, contact)
+        _subj, body = email_personalize.render_full(db, org, e, step, None, contact=c)
+        assert "A grounded line." in body
+        assert e.ai_snippets and step.id in e.ai_snippets
+        # Exit so later tests' run_due in the shared module DB never sends it.
+        email_campaigns.exit_manual(db, e)
+        db.commit()
+    finally:
+        db.close()
+    assert seen["model"] == "claude-haiku-4-5"
+
+
+def test_analytics_reports_ai_configured(cc_org, api, probe_ok, monkeypatch):
+    """The email dashboard/campaign view fetch analytics — ai_configured rides
+    it so the frontend can banner "AI personalization off" instead of users
+    discovering empty {{ai_snippet}}s in sent mail."""
+    r = api.get("/api/email-outreach/analytics", headers=cc_org["headers"])
+    assert r.status_code == 200
+    assert r.json()["ai_configured"] is False  # test env has no AI key
+
+    monkeypatch.setattr(
+        ai_provider,
+        "resolve",
+        lambda db=None, org=None: ai_provider.AiResolution(
+            "anthropic", "claude-test", "test-key"
+        ),
+    )
+    r = api.get("/api/email-outreach/analytics", headers=cc_org["headers"])
+    assert r.json()["ai_configured"] is True
+
+
+def test_account_reconnect_revives_errored_enrollments(
+    cc_org, api, probe_ok, monkeypatch
+):
+    """A hard send failure ends its enrollment in `error` while the mailbox
+    flips to error (parking the siblings). Reconnecting the mailbox must
+    revive the errored enrollment too — re-arming only the PARKED rows would
+    drop whoever happened to hit the broken mailbox first, forever."""
+    acct = _mk_account(cc_org, api, from_email="revive@campaignco.com")
+    camp = _mk_campaign(cc_org, api, acct["id"], **_ALWAYS)
+    contact = _mk_contact(cc_org, api, email_addr="revive-lead@example.com")
+    _enroll_and_activate(
+        cc_org, api, camp, [{"position": 1, "body": "hi"}], [contact]
+    )
+
+    def _boom(account, msg):
+        raise email_transport.EmailTransportError("smtp down")
+
+    monkeypatch.setattr(email_transport, "smtp_send", _boom)
+    _tick()
+    e = _get_enrollment(camp["id"], contact)
+    assert e.status == "error" and e.next_run_at is None
+
+    # Mailbox fixed → the /test reprobe re-arms parked AND revives errored.
+    r = api.post(
+        f"/api/email-outreach/accounts/{acct['id']}/test", headers=cc_org["headers"]
+    )
+    assert r.status_code == 200 and r.json()["ok"] is True
+    e = _get_enrollment(camp["id"], contact)
+    assert e.status == "active"
+    assert e.exit_reason is None and e.ended_at is None
+    assert e.next_run_at is not None
+
+    # Exit so later tests' run_due in the shared module DB never sends it.
+    db = SessionLocal()
+    try:
+        en = db.execute(select_enrollment(camp["id"], contact)).scalar_one()
+        email_campaigns.exit_manual(db, en)
+        db.commit()
     finally:
         db.close()
 

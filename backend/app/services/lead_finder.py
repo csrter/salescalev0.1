@@ -167,6 +167,103 @@ def import_places(
     return created, skipped
 
 
+_OWNER_EXTRACT_SYSTEM = (
+    "You identify the OWNER or top decision-maker of a small business from "
+    "text taken from the business's own website. Use ONLY the SITE_TEXT "
+    "given — never invent a person, never guess a name that is not in the "
+    "text. If no individual owner/founder/principal is named in SITE_TEXT, "
+    "every field must be null. Reply with STRICT JSON only, no prose, no "
+    'markdown fences, exactly: {"first_name": "..."|null, '
+    '"last_name": "..."|null, "title": "..."|null}. title is the person\'s '
+    "role as stated in the text (e.g. Owner, Founder, President)."
+)
+
+
+def _call_model(system: str, user_content: str, max_tokens: int = 150):
+    """Isolated monkeypatch seam (mirrors research._call_model, kept separate
+    per module so tests can patch owner extraction independently)."""
+    from . import ai_provider
+
+    return ai_provider.complete(system, user_content, max_tokens)
+
+
+def _record_owner_usage(
+    db: Session, org: Organization, model: str, input_tokens: int, output_tokens: int
+) -> None:
+    from ..models.ai import AiUsage
+    from . import ai_provider
+
+    in_price, out_price = ai_provider.price(model)
+    db.add(
+        AiUsage(
+            organization_id=org.id,
+            client_id=None,
+            user_id=None,
+            feature="lead_owner_extract",
+            model=model,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            cost_micro_usd=int(input_tokens * in_price + output_tokens * out_price),
+        )
+    )
+    db.flush()
+
+
+def extract_owner_from_site(
+    db: Session, org: Organization, website: Optional[str], business_name: Optional[str]
+) -> Optional[Dict[str, Optional[str]]]:
+    """Fallback owner discovery when no profile provider (Apollo) filled a
+    real name: one grounded AI extraction over the business's OWN site text
+    (guardrail 6 — enrichment.fetch_site_text's polite-crawler posture;
+    guardrail 7 — the model may only repeat a name present in that text, and
+    the returned name is verified to appear in it verbatim before use).
+    Metered as AiUsage feature="lead_owner_extract". Fail-open: entitlement
+    stop, missing key, network or model failure all return None — the AI
+    resolution is checked BEFORE the site fetch so orgs with no AI key never
+    pay the crawl."""
+    import json
+
+    from . import ai_insights, ai_provider
+    from .enrichment import fetch_site_text
+
+    if not website:
+        return None
+    try:
+        ai_insights.check_allowance(db, org)
+        res = ai_provider.resolve(db, org)
+        if not res.configured:
+            return None
+        site_text = fetch_site_text(website)
+        if not site_text:
+            return None
+        user_content = (
+            f"BUSINESS_NAME: {business_name or ''}\n\nSITE_TEXT:\n{site_text}"
+        )
+        with ai_provider.using(res):
+            text, input_tokens, output_tokens = _call_model(
+                _OWNER_EXTRACT_SYSTEM, user_content
+            )
+        _record_owner_usage(db, org, res.model, input_tokens, output_tokens)
+        data = json.loads(text)
+        if not isinstance(data, dict):
+            return None
+        first = str(data.get("first_name") or "").strip()
+        last = str(data.get("last_name") or "").strip()
+        title = str(data.get("title") or "").strip() or None
+        if not first:
+            return None
+        # Hallucination guard: every name part must literally appear in the
+        # site text the model was given.
+        haystack = site_text.casefold()
+        for part in [first] + ([last] if last else []):
+            if len(part) > 40 or "{{" in part or part.casefold() not in haystack:
+                return None
+        return {"first_name": first, "last_name": last or None, "title": title}
+    except Exception as e:
+        log.info("owner extraction skipped for %s: %s", website, e)
+        return None
+
+
 def enrich_and_verify(organization_id: str, contact_ids: List[str]) -> None:
     """Background pipeline (task 11): website email + description discovery →
     optional licensed-provider enrichment (emails via Hunter; owner contact +
@@ -262,6 +359,29 @@ def enrich_and_verify(organization_id: str, contact_ids: List[str]) -> None:
                             "owner_title": owner.title,
                         }
                     owner_email = owner.email
+
+            # -- fallback owner discovery from the business's own site when
+            # no profile provider produced a real name: the contact should be
+            # the OWNER, with the business name secondary (on the Company).
+            still_placeholder = (
+                company is not None
+                and c.first_name == company.name
+                and not c.last_name
+            )
+            if still_placeholder or not c.first_name:
+                extracted = extract_owner_from_site(
+                    db, org, website, company.name if company else c.first_name
+                )
+                if extracted is not None:
+                    c.first_name = extracted["first_name"]
+                    c.last_name = extracted["last_name"]
+                    if extracted["title"] and not c.job_title:
+                        c.job_title = extracted["title"]
+                    if extracted["title"]:
+                        c.source_detail = {
+                            **(c.source_detail or {}),
+                            "owner_title": extracted["title"],
+                        }
 
             if c.email or not website:
                 continue

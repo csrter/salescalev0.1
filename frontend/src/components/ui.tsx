@@ -5,14 +5,41 @@
  */
 
 import {
+  useEffect,
   useId,
   useRef,
+  useState,
   type ButtonHTMLAttributes,
   type KeyboardEvent,
   type ReactNode,
 } from "react";
 import { ArrowDownRight, ArrowUpRight } from "./icons";
 import "./ui.css";
+
+// --- shared micro-hooks / helpers -------------------------------------------
+
+/** Debounced mirror of a fast-changing value (text-input-driven filters):
+ * re-renders with the latest value only after `delay` ms of quiet. */
+export function useDebouncedValue<T>(value: T, delay = 220): T {
+  const [debounced, setDebounced] = useState(value);
+  useEffect(() => {
+    const t = setTimeout(() => setDebounced(value), delay);
+    return () => clearTimeout(t);
+  }, [value, delay]);
+  return debounced;
+}
+
+/** For polled lists: keep the previous array/object reference when the fresh
+ * fetch is deep-equal, so an unchanged poll tick doesn't re-render memoized
+ * rows. Cheap JSON compare — fine at inbox/conversation-list sizes. */
+export function keepEqual<T>(prev: T | null | undefined, next: T): T {
+  if (prev == null) return next;
+  try {
+    return JSON.stringify(prev) === JSON.stringify(next) ? prev : next;
+  } catch {
+    return next;
+  }
+}
 
 // --- Button (§4.1) ---
 

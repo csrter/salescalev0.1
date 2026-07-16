@@ -290,12 +290,14 @@ h1, h2, h3, h4 {
 }
 
 .nav-item.active {
-  background: rgba(124, 120, 240, 0.18);
+  background: color-mix(in srgb, var(--accent) 24%, transparent);
   color: #fff;
 }
 
 .nav-item.active .icon {
-  color: #a9a6ff;
+  /* Sidebar is dark in both modes — lift the accent toward white so the
+     active icon stays legible whatever the tenant primary is. */
+  color: color-mix(in oklab, var(--accent) 60%, white);
   opacity: 1;
 }
 
@@ -323,7 +325,7 @@ h1, h2, h3, h4 {
   font-size: 0.75rem;
   font-weight: 700;
   color: #fff;
-  background: linear-gradient(135deg, var(--accent), #8b5cf6);
+  background: linear-gradient(135deg, var(--accent), var(--accent-strong));
   flex-shrink: 0;
 }
 
@@ -616,7 +618,7 @@ button:focus-visible {
   background:
     radial-gradient(
       800px 500px at 15% 10%,
-      color-mix(in srgb, #8b5cf6 50%, transparent),
+      color-mix(in srgb, var(--accent-strong) 50%, transparent),
       transparent 60%
     ),
     radial-gradient(
@@ -685,7 +687,7 @@ button:focus-visible {
   left: 4px;
   top: 0;
   font-size: 0.7rem;
-  color: #b7b3ff;
+  color: color-mix(in oklab, var(--accent) 60%, white);
 }
 
 .auth-card {
@@ -1896,7 +1898,7 @@ p.notice {
   font-weight: 700;
   font-size: 0.95rem;
   color: #fff;
-  background: linear-gradient(135deg, var(--accent), #8b5cf6);
+  background: linear-gradient(135deg, var(--accent), var(--accent-strong));
   flex-shrink: 0;
 }
 

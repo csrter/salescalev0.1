@@ -201,6 +201,22 @@ def _unknown_tokens_against(
     if len(_IF_OPEN_RE.findall(template)) != len(_IF_CLOSE_RE.findall(template)):
         out.append("#if without {{/if}}")
 
+    # Structural: nested {{#if}} is unsupported. The renderer's regex is
+    # single-level, so balanced nesting like
+    # "{{#if a}}{{#if b}}x{{/if}}{{/if}}" passes the open/close COUNT check
+    # above yet render-errors at send time (leftover braces) — exiting live
+    # enrollments. Catch it at save time by scanning opener/closer order and
+    # flagging any opener seen while already inside an open #if.
+    depth = 0
+    for m in re.finditer(r"\{\{#if\s+[a-zA-Z0-9_.]+\s*\}\}|\{\{/if\}\}", template):
+        if m.group(0).startswith("{{#if"):
+            depth += 1
+            if depth > 1:
+                out.append("nested {{#if}}")
+                break
+        elif depth > 0:
+            depth -= 1
+
     # Structural: every spin block needs at least 2 variants.
     for _full, inner, _start, _end in _iter_spin_blocks(template):
         if len(_split_variants(inner)) < 2 and "spin with <2 variants" not in out:
@@ -487,11 +503,17 @@ def generate_ai_snippet(
     contact: Contact,
     step: EmailStep,
     campaign: Optional[EmailCampaign] = None,
-) -> str:
-    """One/two grounded sentences for this contact, or "" on any failure
-    (unconfigured key, over the monthly AI cap, model/timeout error, or the
-    output guard discarding an unsafe response). A send is never blocked on
-    AI — the template still goes out without the snippet.
+) -> Optional[str]:
+    """One/two grounded sentences for this contact. Returns:
+    - the snippet text on success,
+    - "" when the model RAN but produced nothing usable (empty output, or the
+      output guard discarded an unsafe response) — a real, cacheable result,
+    - None when the model never ran (unconfigured key, over the monthly AI cap,
+      model/timeout error) — a TRANSIENT failure the caller must NOT cache, so
+      the next render/tick retries once the key/cap is fixed.
+
+    A send is never blocked on AI either way — the caller coerces None to ""
+    and the template still goes out without the snippet.
 
     Grounding gains the org's standing outreach_context (when set) and the
     contact's filled AI research fields (Feature A). When `campaign` carries
@@ -500,7 +522,7 @@ def generate_ai_snippet(
     touching the (cache-friendly, byte-stable) system prompt beyond its one
     fixed "match TONE/EXAMPLE_EMAIL" sentence."""
     if not (step.ai_instructions or "").strip():
-        return ""
+        return ""  # nothing to generate — a real empty result, not a failure
     grounding = {
         "contact": {
             "first_name": contact.first_name,
@@ -524,7 +546,9 @@ def generate_ai_snippet(
         grounding["research"] = research
     try:
         ai_insights.check_allowance(db, org)  # entitlement + monthly cap
-        res = ai_provider.resolve(db, org)  # provider + model + BYO/operator key
+        # Cheaper outreach model (Haiku on Anthropic) — a one-sentence task
+        # doesn't warrant the insights-tier ai_model.
+        res = ai_provider.resolve_outreach(db, org)  # provider + model + BYO/operator key
         user_content = (
             f"GROUNDED_DATA:\n{json.dumps(grounding, sort_keys=True, default=str)}\n\n"
             f"INSTRUCTIONS:\n{step.ai_instructions}"
@@ -539,10 +563,14 @@ def generate_ai_snippet(
         cleaned = clean_ai_snippet(text, 60)
         if not cleaned:
             log.info("outreach AI snippet discarded by output guard for contact %s", contact.id)
+        # The model ran (and billed) — "" here is a real result, cacheable so a
+        # re-render doesn't re-bill for the same discarded/empty output.
         return cleaned
     except Exception as e:  # never let AI failure stop a send
+        # Transient — the model never ran. Return None so the caller doesn't
+        # cache an empty snippet permanently; the next tick retries.
         log.info("outreach AI snippet skipped for contact %s: %s", contact.id, e)
-        return ""
+        return None
 
 
 def _cached_or_generate(
@@ -555,7 +583,11 @@ def _cached_or_generate(
 ) -> str:
     """Enrollment-cached snippet (ai_snippets: step_id -> text). Idempotent: a
     second render of the same enrollment/step reuses the cache and never
-    re-bills. Preview (enrollment=None) generates fresh without caching."""
+    re-bills. Preview (enrollment=None) generates fresh without caching.
+
+    Only a non-None result is cached: a transient AI failure (None) is NOT
+    written, so a missing key / cap hit doesn't permanently kill this
+    enrollment's personalization — it retries on the next render/tick."""
     if not (step.ai_instructions or "").strip():
         return ""
     if enrollment is not None:
@@ -563,10 +595,11 @@ def _cached_or_generate(
         if step.id in cache:
             return cache[step.id] or ""
         snippet = generate_ai_snippet(db, org, contact, step, campaign)
-        cache[step.id] = snippet
-        enrollment.ai_snippets = cache  # reassign so SQLAlchemy tracks the JSON
-        return snippet
-    return generate_ai_snippet(db, org, contact, step, campaign)
+        if snippet is not None:
+            cache[step.id] = snippet
+            enrollment.ai_snippets = cache  # reassign so SQLAlchemy tracks the JSON
+        return snippet or ""
+    return generate_ai_snippet(db, org, contact, step, campaign) or ""
 
 
 def render_full(

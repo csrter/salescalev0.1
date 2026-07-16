@@ -31,15 +31,15 @@ import "./styles/views/settings.css";
  * These hexes are DATA (grep-gate allowlisted), also seeded into the live
  * preview so an un-staged palette still renders coherently. */
 const COLOR_FIELDS: { key: string; label: string; fallback: string }[] = [
-  { key: "primary", label: "Primary", fallback: "#4f46e5" },
-  { key: "primary_strong", label: "Primary (hover)", fallback: "#4338ca" },
-  { key: "primary_soft", label: "Primary (tint)", fallback: "#e7e8fb" },
+  { key: "primary", label: "Primary", fallback: "#2b62e0" },
+  { key: "primary_strong", label: "Primary (hover)", fallback: "#2050c2" },
+  { key: "primary_soft", label: "Primary (tint)", fallback: "#e2eafc" },
   { key: "header_start", label: "Sidebar top", fallback: "#10152e" },
   { key: "header_end", label: "Sidebar bottom", fallback: "#0b0f21" },
 ];
 
 const fallbackFor = (key: string) =>
-  COLOR_FIELDS.find((f) => f.key === key)?.fallback ?? "#4f46e5";
+  COLOR_FIELDS.find((f) => f.key === key)?.fallback ?? "#2b62e0";
 
 export function BrandingSettings() {
   const toast = useToast();

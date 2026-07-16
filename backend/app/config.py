@@ -137,6 +137,15 @@ class Settings(BaseSettings):
     # inference, research fields), not the pricier gemini-3.5-flash "frontier"
     # tier aimed at agentic/coding workloads.
     gemini_model: str = "gemini-2.5-flash"
+    # Cheaper per-provider models for high-volume OUTREACH personalization
+    # (a one-sentence {{ai_snippet}}) and research fields — routed via
+    # ai_provider.resolve_outreach() instead of resolve(). AI insights keep
+    # using the fuller ai_model above. Anthropic drops from the (expensive)
+    # Opus default to Haiku; OpenAI/Gemini already run their cheap tiers, so
+    # these just mirror the insights models but stay independently overridable.
+    ai_outreach_model: str = "claude-haiku-4-5"
+    openai_outreach_model: str = "gpt-4o"
+    gemini_outreach_model: str = "gemini-2.5-flash"
     # Global default monthly cap on AI queries per Organization until Phase 8
     # wires real tier limits into services/entitlements.py.
     ai_monthly_query_limit: int = 200

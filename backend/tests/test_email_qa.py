@@ -200,6 +200,8 @@ def test_preview_batch_rows_issues_and_snippet_cached(
     assert by_contact["good@example.com"]["overridden"] is False
     assert "no_first_name" not in by_contact["good@example.com"]["issues"]
     assert "no_first_name" in by_contact["blank@example.com"]["issues"]
+    # The snippet generated fine here — no ai_snippet_empty flag.
+    assert "ai_snippet_empty" not in by_contact["good@example.com"]["issues"]
 
     # The AI snippet is cached on the enrollment — no leftover braces either.
     db = SessionLocal()
@@ -213,6 +215,41 @@ def test_preview_batch_rows_issues_and_snippet_cached(
         assert e.ai_snippets
     finally:
         db.close()
+
+
+def test_preview_batch_flags_empty_ai_snippet(qa_org, api, probe_ok, monkeypatch):
+    """A step that ASKS for an AI snippet (ai_instructions set) but rendered
+    without one — unconfigured provider, cap hit, output-guard discard —
+    surfaces "ai_snippet_empty" in the preview issues so QA sees the emails
+    going out unpersonalized instead of discovering it in sent mail."""
+
+    def _boom(system, user_content, max_tokens=300):
+        raise RuntimeError("no key configured")
+
+    monkeypatch.setattr(email_personalize, "_call_model", _boom)
+    monkeypatch.setattr(
+        email_personalize.ai_insights, "check_allowance", lambda db, org: None
+    )
+
+    acct = _mk_account(qa_org, api, from_email="aiempty@qaoutreachco.com")
+    camp = _mk_campaign(qa_org, api, acct["id"], **_ALWAYS)
+    lead = _mk_contact(qa_org, api, email_addr="aiempty@example.com", first="Ava")
+    _set_steps(
+        qa_org, api, camp["id"],
+        [{"position": 1, "subject": "Hi", "body": "Intro {{ai_snippet}}", "ai_instructions": "Say hi."}],
+    )
+    _enroll(qa_org, api, camp["id"], [lead])
+
+    r = api.post(
+        f"/api/email-outreach/campaigns/{camp['id']}/preview-batch",
+        json={"position": 1, "limit": 25, "offset": 0},
+        headers=qa_org["headers"],
+    )
+    assert r.status_code == 200, r.text
+    row = r.json()["rows"][0]
+    assert "ai_snippet_empty" in row["issues"]
+    # The body still rendered (send never blocks on AI) — no leftover braces.
+    assert "leftover_tokens" not in row["issues"]
 
 
 # --- override -----------------------------------------------------------------

@@ -256,8 +256,14 @@ def test_gateway_unsubscribe_token_rendered_in_place(
     body = captured_sends[-1].get_content()
     assert "{{unsubscribe_url}}" not in body
     assert "Opt out any time: http" in body
-    # Rendered in place → no appended footer block.
-    assert "\n--\n" not in body
+    # Rendered in place → no SECOND unsubscribe link appended...
+    assert "Unsubscribe:" not in body
+    # ...but the CAN-SPAM identity block (org name + postal address) still
+    # is — the inline token supplies the opt-out link, not the address.
+    assert "\n--\n" in body
+    assert "Cold Email Co" in body  # org name
+    # Mailing address set by the footer test above (same module-scoped org).
+    assert "500 Market St, Denver CO 80202" in body
 
 
 def test_gateway_suppressed(ce_org, api, probe_ok, captured_sends):

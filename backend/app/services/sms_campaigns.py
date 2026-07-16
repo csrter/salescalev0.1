@@ -188,7 +188,7 @@ def infer_city_failsafe(db: Session, org: Organization, contact: Contact) -> str
     }
     try:
         ai_insights.check_allowance(db, org)
-        res = ai_provider.resolve(db, org)
+        res = ai_provider.resolve_outreach(db, org)  # cheap outreach model
         user_content = f"FACTS:\n{json.dumps(grounding, sort_keys=True, default=str)}"
         with ai_provider.using(res):
             text, input_tokens, output_tokens = email_personalize._call_model(
@@ -236,7 +236,11 @@ def _cached_or_generate(
 ) -> str:
     """Enrollment-cached snippet (ai_snippets: step_id -> text), mirroring
     email_personalize._cached_or_generate. Preview (enrollment=None)
-    generates fresh without caching."""
+    generates fresh without caching.
+
+    Only a non-None result is cached: a transient AI failure (None) is NOT
+    written, so a missing key / cap hit doesn't permanently kill this
+    enrollment's personalization — it retries on the next render/tick."""
     if not (step.ai_instructions or "").strip():
         return ""
     if enrollment is not None:
@@ -244,18 +248,21 @@ def _cached_or_generate(
         if step.id in cache:
             return cache[step.id] or ""
         snippet = generate_ai_snippet(db, org, contact, step)
-        cache[step.id] = snippet
-        enrollment.ai_snippets = cache  # reassign so SQLAlchemy tracks the JSON
-        return snippet
-    return generate_ai_snippet(db, org, contact, step)
+        if snippet is not None:
+            cache[step.id] = snippet
+            enrollment.ai_snippets = cache  # reassign so SQLAlchemy tracks the JSON
+        return snippet or ""
+    return generate_ai_snippet(db, org, contact, step) or ""
 
 
 def generate_ai_snippet(
     db: Session, org: Organization, contact: Contact, step: SmsStep
-) -> str:
-    """One short grounded sentence for this contact, or "" on any failure —
-    unconfigured key, over the monthly AI cap, model/timeout error, or the
-    output guard discarding an unsafe response. A send is never blocked on
+) -> Optional[str]:
+    """One short grounded sentence for this contact. Returns the text on
+    success, "" when the model RAN but produced nothing usable (empty output /
+    output-guard discard — a real cacheable result), or None on a TRANSIENT
+    failure (unconfigured key, over the monthly AI cap, model/timeout error) —
+    which the caller must NOT cache so it retries. A send is never blocked on
     AI (mirrors email_personalize.generate_ai_snippet)."""
     if not (step.ai_instructions or "").strip():
         return ""
@@ -280,7 +287,8 @@ def generate_ai_snippet(
         grounding["org_context"] = org.outreach_context
     try:
         ai_insights.check_allowance(db, org)  # entitlement + monthly cap
-        res = ai_provider.resolve(db, org)  # provider + model + BYO/operator key
+        # Cheaper outreach model (Haiku on Anthropic) — mirrors email's snippet.
+        res = ai_provider.resolve_outreach(db, org)  # provider + model + BYO/operator key
         user_content = (
             f"GROUNDED_DATA:\n{json.dumps(grounding, sort_keys=True, default=str)}\n\n"
             f"INSTRUCTIONS:\n{step.ai_instructions}"
@@ -293,10 +301,12 @@ def generate_ai_snippet(
         cleaned = email_personalize.clean_ai_snippet(text, 25)
         if not cleaned:
             log.info("sms outreach AI snippet discarded by output guard for contact %s", contact.id)
+        # The model ran (and billed) — "" here is a real, cacheable result.
         return cleaned
     except Exception as e:  # never let AI failure stop a send
+        # Transient — the model never ran; None so the caller doesn't cache it.
         log.info("sms outreach AI snippet skipped for contact %s: %s", contact.id, e)
-        return ""
+        return None
 
 
 def render_full(
@@ -465,10 +475,36 @@ def rearm_parked(db: Session, campaign: SmsCampaign) -> int:
     return len(parked)
 
 
+def _revive_errored(db: Session, campaign: SmsCampaign) -> int:
+    """A hard send FAILURE ends its enrollment in SMS_ENROLL_ERROR (broken
+    account). Reconnecting the account must resume THOSE contacts too, not
+    just the parked ones — otherwise whoever hit the broken account first is
+    dropped forever. Returns them to ACTIVE at the campaign's next valid send
+    window (mirrors email_campaigns._revive_errored)."""
+    now = utcnow()
+    when = _next_valid_send_time(now, campaign) or now
+    errored = (
+        db.execute(
+            select(SmsEnrollment).where(
+                SmsEnrollment.campaign_id == campaign.id,
+                SmsEnrollment.status == SMS_ENROLL_ERROR,
+            )
+        )
+        .scalars()
+        .all()
+    )
+    for e in errored:
+        e.status = SMS_ENROLL_ACTIVE
+        e.exit_reason = None
+        e.ended_at = None
+        e.next_run_at = when
+    return len(errored)
+
+
 def rearm_account(db: Session, account_id: str) -> int:
-    """Account reconnected: re-arm parked enrollments across all of the
-    account's ACTIVE campaigns (the \"reconnect flow re-arms\" contract in
-    process_enrollment)."""
+    """Account reconnected: re-arm parked enrollments — and revive send-FAILURE
+    errored ones — across all of the account's ACTIVE campaigns (the
+    \"reconnect flow re-arms\" contract in process_enrollment)."""
     campaigns = (
         db.execute(
             select(SmsCampaign).where(
@@ -479,7 +515,7 @@ def rearm_account(db: Session, account_id: str) -> int:
         .scalars()
         .all()
     )
-    return sum(rearm_parked(db, c) for c in campaigns)
+    return sum(rearm_parked(db, c) + _revive_errored(db, c) for c in campaigns)
 
 
 def _end(enrollment: SmsEnrollment, status: str, reason: Optional[str] = None) -> None:
@@ -545,11 +581,24 @@ def process_enrollment(db: Session, enrollment: SmsEnrollment) -> None:
         )
         _end(enrollment, SMS_ENROLL_EXITED, "render_error")
         return
-    if segment_count(body) > MAX_RENDERED_SEGMENTS:
+    # Segment cap must be measured on what ACTUALLY ships: the gateway prepends
+    # "OrgName: " and appends the STOP footer on step 1 (when the campaign's
+    # compliance footer is on), so a body that fits at 3 segments bare can ship
+    # over the cap once the footer is added. Check the footered form — reusing
+    # the real gateway.apply_compliance_suffix so the two never drift on the
+    # exact suffix text — with the same first_step/include_footer inputs the
+    # gateway itself derives for this send.
+    metered_body = gateway.apply_compliance_suffix(
+        body,
+        org.name if org else "",
+        first_step=(current.position == 1),
+        include_footer=campaign.include_compliance_footer,
+    )
+    if segment_count(metered_body) > MAX_RENDERED_SEGMENTS:
         log.warning(
             "sms enrollment %s render guard: %d segments > cap %d; exiting",
             enrollment.id,
-            segment_count(body),
+            segment_count(metered_body),
             MAX_RENDERED_SEGMENTS,
         )
         _end(enrollment, SMS_ENROLL_EXITED, "too_long")

@@ -31,7 +31,16 @@
   transition:
     background-color var(--dur-fast) var(--ease-out),
     border-color var(--dur-fast) var(--ease-out),
-    color var(--dur-fast) var(--ease-out);
+    color var(--dur-fast) var(--ease-out),
+    transform var(--dur-fast) var(--ease-out),
+    filter var(--dur-fast) var(--ease-out);
+}
+
+/* Press feedback: a half-pixel dip + slight darken. Duration comes from the
+   motion tokens (0s under reduced motion), so this respects the user pref. */
+.btn:active:not(:disabled) {
+  transform: translateY(0.5px);
+  filter: brightness(0.97);
 }
 
 .btn--sm {
@@ -800,6 +809,15 @@ input[type="radio"].input {
   width: 60%;
 }
 
+/* Stale-in-place: shown while a widget refetches but still holds prior data.
+   Dim the existing content rather than flashing a skeleton over it
+   (DESIGN §4.4/§4.13). Duration comes from the motion tokens (0s under
+   reduced motion). */
+.widget-refetching {
+  opacity: 0.5;
+  transition: opacity var(--dur-med) var(--ease-out);
+}
+
 /* ==========================================================================
    §4.14 Tree rows — .tree
    ========================================================================== */
@@ -819,6 +837,7 @@ input[type="radio"].input {
   font-size: var(--text-sm);
   color: var(--ink);
   cursor: pointer;
+  transition: background-color var(--dur-fast) var(--ease-out);
 }
 
 .tree-row:hover {
@@ -1049,6 +1068,10 @@ table.table td.align-right {
 
 table.table tr.clickable {
   cursor: pointer;
+}
+
+table.table tr.clickable td {
+  transition: background-color var(--dur-fast) var(--ease-out);
 }
 
 table.table tr.clickable:hover td {

@@ -62,6 +62,7 @@ import {
   Skeleton,
   SkeletonText,
   Switch,
+  useDebouncedValue,
 } from "./components/ui";
 import { useToast } from "./components/Toast";
 import { ChevronRight, Inbox, Pencil, Plus, Settings, Trash2 } from "./components/icons";
@@ -238,9 +239,13 @@ function AttributionChips({ contact }: { contact?: ContactRow | null }) {
 export function CrmView({
   clientId,
   session,
+  active = true,
 }: {
   clientId: string;
   session: Session;
+  /** False while the view is kept mounted but hidden behind another tab —
+   * gates the enrichment card's live poll. */
+  active?: boolean;
 }) {
   const isTeam = TEAM_ROLES.includes(session.role);
   const isAdmin = ADMIN_ROLES.includes(session.role);
@@ -383,7 +388,7 @@ export function CrmView({
         toast={toast}
       />
 
-      {isTeam && <EnrichmentStatusCard />}
+      {isTeam && <EnrichmentStatusCard active={active} />}
 
       <LeadList
         contacts={contacts}
@@ -857,7 +862,7 @@ const ENRICH_STATUS_TONE: Record<EnrichmentJob["status"], "ok" | "warn" | "dange
 /** Enrichment status: whether a run is processing right now, live progress
  * with a pace-based ETA, and recent history. Polls while a job is running;
  * renders nothing until the org has ever enriched. */
-function EnrichmentStatusCard() {
+function EnrichmentStatusCard({ active = true }: { active?: boolean }) {
   const [jobs, setJobs] = useState<EnrichmentJob[] | null>(null);
   const [processing, setProcessing] = useState(false);
 
@@ -875,12 +880,15 @@ function EnrichmentStatusCard() {
     window.addEventListener(ENRICH_QUEUED_EVENT, load);
     return () => window.removeEventListener(ENRICH_QUEUED_EVENT, load);
   }, [load]);
-  // Live poll only while something is actually running.
+  // Live poll only while something is actually running AND the view is
+  // visible — a hidden (kept-mounted) CRM tab never polls; re-activating
+  // resumes and catches up immediately.
   useEffect(() => {
-    if (!processing) return;
+    if (!processing || !active) return;
+    load();
     const t = setInterval(load, 4000);
     return () => clearInterval(t);
-  }, [processing, load]);
+  }, [processing, load, active]);
 
   if (!jobs || jobs.length === 0) return null;
   // A running job is always the hero, even if a newer run already finished.
@@ -900,7 +908,10 @@ function EnrichmentStatusCard() {
       {running ? (
         <>
           <div className="crm-enrich-bar" role="progressbar" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100}>
-            <div className="crm-enrich-bar-fill" style={{ width: `${pct}%` }} />
+            <div
+              className="crm-enrich-bar-fill"
+              style={{ transform: `scaleX(${pct / 100})` }}
+            />
           </div>
           <p className="crm-enrich-line">
             {latest.phase === "verifying"
@@ -1035,18 +1046,21 @@ function LeadList({
     [cols, defByKey]
   );
 
+  // Debounced: typing in a text filter re-filters (and re-renders the whole
+  // table) only after a ~220ms pause, not per keystroke.
+  const debouncedFilters = useDebouncedValue(filters);
   const rows = useMemo(() => {
     let out = contacts;
     if (verifFilter)
       out = out.filter((c) => (c.verification_status ?? "unverified") === verifFilter);
-    if (filters.length === 0) return out;
+    if (debouncedFilters.length === 0) return out;
     return out.filter((c) =>
-      filters.every((f) => {
+      debouncedFilters.every((f) => {
         const d = defByKey[f.key];
         return d ? matchesFilter(c, d, f) : true;
       })
     );
-  }, [contacts, filters, defByKey, verifFilter]);
+  }, [contacts, debouncedFilters, defByKey, verifFilter]);
 
   // --- bulk selection (admin-only) ---
   const visibleIds = useMemo(() => rows.map((r) => r.id), [rows]);
@@ -1126,7 +1140,20 @@ function LeadList({
     {
       key: "lead",
       header: "Lead",
-      render: (c) => <strong>{contactName(c)}</strong>,
+      // Owner-first display: the person is primary; their business name
+      // renders as a secondary line (skipped when the contact is still the
+      // business-name placeholder, so the name never duplicates itself).
+      render: (c) => {
+        const name = contactName(c);
+        const biz =
+          c.company_name && c.company_name !== name ? c.company_name : null;
+        return (
+          <span className="crm-lead-cell">
+            <strong>{name}</strong>
+            {biz && <span className="crm-muted crm-lead-cell-biz">{biz}</span>}
+          </span>
+        );
+      },
       sortValue: (c) => contactName(c),
     },
     {

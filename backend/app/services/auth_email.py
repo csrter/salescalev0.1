@@ -27,7 +27,7 @@ def _html(product: str, heading: str, intro: str, button: str, link: str, note: 
       <tr><td style="padding:28px 32px 8px;font-size:18px;font-weight:700;color:#111530">◆ {escape(product)}</td></tr>
       <tr><td style="padding:0 32px"><h1 style="font-size:22px;margin:12px 0 6px">{escape(heading)}</h1>
         <p style="color:#5b6280;font-size:15px;line-height:1.5;margin:0 0 20px">{escape(intro)}</p>
-        <a href="{escape(link)}" style="display:inline-block;background:#4f46e5;color:#fff;text-decoration:none;font-weight:600;padding:11px 22px;border-radius:10px">{escape(button)}</a>
+        <a href="{escape(link)}" style="display:inline-block;background:#2b62e0;color:#fff;text-decoration:none;font-weight:600;padding:11px 22px;border-radius:10px">{escape(button)}</a>
         <p style="color:#98a0b8;font-size:12px;line-height:1.5;margin:22px 0 0">{escape(note)}</p>
         <p style="color:#98a0b8;font-size:12px;word-break:break-all;margin:8px 0 28px">Or paste this link: {escape(link)}</p>
       </td></tr>
