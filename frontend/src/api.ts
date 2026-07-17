@@ -1921,7 +1921,12 @@ export const listEmailThreads = (
     })}`,
   );
 export const listEmailThreadMessages = (threadId: string) =>
-  api<EmailMessage[]>(`${EO}/threads/${threadId}/messages`);
+  // The endpoint returns { thread, messages } — unwrap to the array the
+  // inbox pane renders. (Returning the object made messages.map crash the
+  // whole view to a blank background when a real thread was first opened.)
+  api<{ messages: EmailMessage[] }>(
+    `${EO}/threads/${threadId}/messages`,
+  ).then((r) => r.messages);
 export const replyEmailThread = (threadId: string, body: string) =>
   api<{ status: string }>(`${EO}/threads/${threadId}/reply`, {
     method: "POST",
