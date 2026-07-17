@@ -1887,6 +1887,30 @@ live activation + the entitlement flip, the Outreach module build
       hash-matched), installed to /Applications, launched — desktop boot
       alembic no-op'd (already at head), /api/health ok, app renders
       logged-in against the live org.
+- [x] CSV import bad-row isolation (2026-07-16): user hit "An unexpected
+      error occurred" on CSV CRM import. Root cause: a cell longer than a
+      Postgres column cap (zip String(20), state 64, phone 50, city 120,
+      name 150…) raised DataError at the per-row db.flush(), which sat
+      OUTSIDE the loop's only try (CustomFieldError-only) → aborted the whole
+      import transaction → generic 500. NEVER reproduced in tests because
+      SQLite silently ignores String length caps; only Postgres (prod)
+      enforces them — the exact "works in tests, 500s in prod" trap the
+      generic-500 catch-all lesson warned about. Fix (api/crm.py
+      import_contacts): each row's DB writes (Contact build, company resolve,
+      validate_and_merge, add, flush) run in db.begin_nested() — any row
+      exception (DataError/IntegrityError/anything) rolls back just that
+      savepoint, records the row in `failed`, and the good rows still commit;
+      company ids cached only AFTER a row's savepoint releases so a
+      rolled-back row can't leave a stale cache id. test_platform_error_
+      surfacing's catch-all-CORS test was repointed off CSV import (now
+      guarded) onto contact-create (still calls get_or_create_company
+      unguarded) so the generic-500-with-CORS guarantee stays covered.
+      Tests 536 → 537 (test_crm_contacts.test_csv_import_bad_row_isolated_
+      not_500 injects the flush-time error SQLite can't produce). DEPLOYED
+      2026-07-16 (c31fbf1) web + desktop, backend-only (no migration, no
+      frontend change): VPS backend rebuilt + recreated, health green,
+      alembic still e7b4a9d2c6f1; desktop PyInstaller backend + DMG (148MB,
+      hash-matched) reinstalled + launch-verified.
 - [ ] Stripe live activation + entitlement flip (after 12–14, so real
       limits land everywhere in one pass)
 - [ ] Outreach module build (dev-mode) — go-live gated on Meta App
