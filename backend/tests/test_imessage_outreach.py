@@ -175,6 +175,83 @@ def test_send_dispatches_to_bluebubbles(im_org, api, bb_creds_ok, captured_bb):
     assert len(captured_bb) == 1 and captured_bb[0]["to"] == "+14805559003"
 
 
+class _FakeResp:
+    def __init__(self, status_code, payload=None, text=""):
+        self.status_code = status_code
+        self._payload = payload
+        self.text = text
+
+    def json(self):
+        if self._payload is None:
+            raise ValueError("no json")
+        return self._payload
+
+
+def test_bluebubbles_first_message_creates_chat_when_missing(monkeypatch):
+    """A first-ever message to a recipient 500s with 'Chat does not exist!' on
+    message/text; the transport must fall back to chat/new and succeed, instead
+    of surfacing a hard FAILED."""
+    calls = []
+
+    def _fake_post(url, params=None, json=None, timeout=None):
+        calls.append(url)
+        if url.endswith("/message/text"):
+            return _FakeResp(
+                500,
+                {
+                    "status": 500,
+                    "message": "Message Send Error",
+                    "error": {"type": "iMessage Error", "message": "Chat does not exist!"},
+                },
+            )
+        if url.endswith("/chat/new"):
+            return _FakeResp(
+                200,
+                {"status": 200, "data": {"messages": [{"guid": "NEWCHAT_guid"}]}},
+            )
+        raise AssertionError(f"unexpected url {url}")
+
+    monkeypatch.setattr(gateway.httpx, "post", _fake_post)
+    acct = SmsAccount(
+        provider="bluebubbles",
+        account_sid="bluebubbles",
+        name="x",
+        relay_url="https://relay.example.com",
+        auth_token_encrypted=None,
+    )
+    monkeypatch.setattr(gateway, "decrypt_secret", lambda s: "pw")
+    guid, code, detail = gateway._bluebubbles_send(acct, "+14805559999", "hi")
+    assert guid == "NEWCHAT_guid" and code is None and detail is None
+    assert any(u.endswith("/message/text") for u in calls)
+    assert any(u.endswith("/chat/new") for u in calls)
+
+
+def test_bluebubbles_send_surfaces_specific_error_not_generic(monkeypatch):
+    """A non-chat-missing failure keeps the specific nested error.message, not
+    the generic top-level 'Message Send Error'."""
+
+    def _fake_post(url, params=None, json=None, timeout=None):
+        return _FakeResp(
+            500,
+            {
+                "status": 500,
+                "message": "Message Send Error",
+                "error": {"type": "iMessage Error", "message": "Some other reason"},
+            },
+        )
+
+    monkeypatch.setattr(gateway.httpx, "post", _fake_post)
+    monkeypatch.setattr(gateway, "decrypt_secret", lambda s: "pw")
+    acct = SmsAccount(
+        provider="bluebubbles",
+        account_sid="bluebubbles",
+        name="x",
+        relay_url="https://relay.example.com",
+    )
+    guid, code, detail = gateway._bluebubbles_send(acct, "+14805559999", "hi")
+    assert guid == "" and code == "500" and detail == "Some other reason"
+
+
 def test_verify_credentials_dispatches_bluebubbles(monkeypatch):
     calls = []
 

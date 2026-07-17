@@ -353,10 +353,45 @@ def _verify_sendblue(account: SmsAccount) -> Tuple[bool, str]:
 # thin httpx client against the org's own VPS relay) ---
 
 
+def _bb_json(resp) -> dict:
+    try:
+        return resp.json() or {}
+    except Exception:
+        return {}
+
+
+def _bb_error_message(payload: dict) -> str:
+    """BlueBubbles nests the real reason under error.message, with a generic
+    top-level message ('Message Send Error'); prefer the specific one."""
+    err = payload.get("error")
+    if isinstance(err, dict) and err.get("message"):
+        return str(err["message"])
+    return str(payload.get("message") or "")
+
+
+def _bb_chat_missing(resp, payload: dict) -> bool:
+    """A first-ever message to a recipient fails with 500 'Chat does not
+    exist!' because message/text targets an EXISTING chat guid. Detect that
+    exact case so we can create the chat instead."""
+    if resp.status_code != 500:
+        return False
+    text = _bb_error_message(payload) or ""
+    if not text:
+        try:
+            text = resp.text
+        except Exception:
+            text = ""
+    return "chat does not exist" in text.lower()
+
+
 def _bluebubbles_send(
     account: SmsAccount, to_number: str, body: str
 ) -> Tuple[str, Optional[str], Optional[str]]:
-    """One POST {relay}/api/v1/message/text. Returns (message guid,
+    """Send via the org's BlueBubbles relay. For an EXISTING conversation we
+    POST message/text with the chat guid so follow-up steps stay threaded; for
+    a first-time recipient that chat doesn't exist yet (BlueBubbles 500s with
+    'Chat does not exist!'), so we fall back to chat/new which creates the
+    conversation AND sends the opener in one call. Returns (message guid,
     error_code, error_detail). Raises SmsProviderError on a network-level
     failure talking to the relay."""
     base = (account.relay_url or "").rstrip("/")
@@ -378,18 +413,53 @@ def _bluebubbles_send(
         )
     except httpx.HTTPError as e:
         raise SmsProviderError(f"BlueBubbles is unreachable: {e}")
-    payload = {}
-    try:
-        payload = resp.json()
-    except Exception:
-        pass
+    payload = _bb_json(resp)
     if resp.status_code // 100 == 2:
         d = payload.get("data") or {}
         return d.get("guid") or data["tempGuid"], None, None
+    if _bb_chat_missing(resp, payload):
+        return _bluebubbles_create_chat_send(base, pw, to_number, body)
     return (
         "",
         str(payload.get("status") or resp.status_code),
-        payload.get("message") or f"BlueBubbles HTTP {resp.status_code}",
+        _bb_error_message(payload) or f"BlueBubbles HTTP {resp.status_code}",
+    )
+
+
+def _bluebubbles_create_chat_send(
+    base: str, pw: str, to_number: str, body: str
+) -> Tuple[str, Optional[str], Optional[str]]:
+    """POST {relay}/api/v1/chat/new — creates the iMessage conversation and
+    sends the first message. Only reachable for iMessage-registered numbers;
+    a non-iMessage number (no SMS-forwarding on the host Mac) still fails here,
+    which is a recipient-reachability fact, not a transport bug."""
+    data = {
+        "addresses": [to_number],
+        "message": body,
+        "method": "private-api",
+        "service": "iMessage",
+    }
+    try:
+        resp = httpx.post(
+            f"{base}/api/v1/chat/new",
+            params={"password": pw},
+            json=data,
+            timeout=25,
+        )
+    except httpx.HTTPError as e:
+        raise SmsProviderError(f"BlueBubbles is unreachable: {e}")
+    payload = _bb_json(resp)
+    if resp.status_code // 100 == 2:
+        d = payload.get("data") or {}
+        guid = ""
+        msgs = d.get("messages")
+        if isinstance(msgs, list) and msgs:
+            guid = (msgs[-1] or {}).get("guid") or ""
+        return guid or d.get("guid") or "", None, None
+    return (
+        "",
+        str(payload.get("status") or resp.status_code),
+        _bb_error_message(payload) or f"BlueBubbles HTTP {resp.status_code}",
     )
 
 
