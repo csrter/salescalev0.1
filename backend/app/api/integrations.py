@@ -7,7 +7,7 @@ by whom (this org's own credentials vs the operator's global fallback).
 """
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -15,9 +15,9 @@ from sqlalchemy.orm import Session
 from .. import platforms as platform_registry
 from ..config import get_settings
 from ..db import get_db
-from ..deps import require_admin
+from ..deps import require_admin, require_owner
 from ..models.base import utcnow
-from ..models.core import User
+from ..models.core import Organization, User
 from ..models.integrations import IntegrationCredential
 from ..security import encrypt_secret
 from ..services import ai_provider, integration_creds
@@ -114,24 +114,58 @@ def list_redirect_uris(user: User = Depends(require_admin)):
 AI_KEY_PROVIDERS = ("anthropic", "openai", "gemini")
 
 
+class AiProviderSelectionIn(BaseModel):
+    provider: str
+    # None → use the provider's recommended default model (SELECTABLE_MODELS[p][0]).
+    model: Optional[str] = None
+
+
+def _ai_provider_status(db: Session, org: Organization) -> dict:
+    """Active provider/model (org override → operator default) + this org's
+    BYO-key status per provider + the selectable-model menu for the UI."""
+    providers = []
+    for p in AI_KEY_PROVIDERS:
+        src = integration_creds.key_source(db, org.id, p)
+        providers.append({"provider": p, "configured": src != "none", "source": src})
+    return {
+        "active": ai_provider.active_provider(org),
+        "model": ai_provider.active_model(org),
+        # True when THIS org picked the provider, vs inheriting the operator default.
+        "org_selected": org.ai_provider in ai_provider.PROVIDERS,
+        "available": {p: list(m) for p, m in ai_provider.SELECTABLE_MODELS.items()},
+        "providers": providers,
+    }
+
+
 @router.get("/ai-provider")
 def ai_provider_status(
     user: User = Depends(require_admin), db: Session = Depends(get_db)
 ):
-    """The operator-selected active AI provider plus this org's BYO-key status
-    for each. Keys themselves are write-only (stored via the shared
-    /api/lead-finder/providers endpoints, owner-only for AI providers)."""
-    providers = []
-    for p in AI_KEY_PROVIDERS:
-        src = integration_creds.key_source(db, user.organization_id, p)
-        providers.append(
-            {"provider": p, "configured": src != "none", "source": src}
-        )
-    return {
-        "active": ai_provider.active_provider(),
-        "model": ai_provider.active_model(),
-        "providers": providers,
-    }
+    org = db.get(Organization, user.organization_id)
+    return _ai_provider_status(db, org)
+
+
+@router.put("/ai-provider")
+def set_ai_provider(
+    body: AiProviderSelectionIn,
+    user: User = Depends(require_owner),
+    db: Session = Depends(get_db),
+):
+    """Owner-only: choose this org's active AI provider and model (overrides
+    the operator default). A model of None resets to the provider's default.
+    An explicit model applies to both insights and outreach for this org."""
+    provider = body.provider.strip().lower()
+    if provider not in ai_provider.PROVIDERS:
+        raise HTTPException(400, f"Unknown provider '{body.provider}'")
+    model = (body.model or "").strip() or None
+    if model is not None and not ai_provider.is_selectable_model(provider, model):
+        raise HTTPException(400, f"Model '{model}' is not available for {provider}")
+    org = db.get(Organization, user.organization_id)
+    org.ai_provider = provider
+    org.ai_model = model
+    db.commit()
+    db.refresh(org)
+    return _ai_provider_status(db, org)
 
 
 @router.get("", response_model=List[IntegrationStatusOut])

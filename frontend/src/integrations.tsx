@@ -16,8 +16,10 @@ import {
   getRedirectUris,
   listIntegrations,
   setGoogleCreds,
+  setAiProvider,
   setLeadProviderKey,
   setMetaCreds,
+  type AiProvider,
   type AiProviderStatus,
   type IntegrationStatus,
   type Platform,
@@ -164,6 +166,22 @@ function AiProviderKeysCard({ isOwner }: { isOwner: boolean }) {
     }
   };
 
+  const selectProvider = async (provider: AiProvider, model: string | null) => {
+    setBusy(true);
+    try {
+      const next = await setAiProvider(provider, model);
+      setStatus(next);
+      toast(
+        `Active model: ${AI_PROVIDER_LABELS[provider]} · ${next.model}`,
+        "ok"
+      );
+    } catch (e) {
+      toast((e as Error).message, "error");
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
     <div className="card mg-integration">
       <div className="mg-integration-head">
@@ -171,9 +189,8 @@ function AiProviderKeysCard({ isOwner }: { isOwner: boolean }) {
           <h3 className="mg-redirects-title">AI provider</h3>
           <p className="mg-sub">
             Powers AI insights, email/SMS personalization and AI research
-            fields. Active provider: {AI_PROVIDER_LABELS[status.active]} (
-            {status.model}) — your own key is used when set, otherwise the
-            platform's. Keys are stored encrypted and never shown again.
+            fields. Your own key is used when set, otherwise the platform's.
+            Keys are stored encrypted and never shown again.
           </p>
         </div>
         {active?.source === "organization" ? (
@@ -186,9 +203,57 @@ function AiProviderKeysCard({ isOwner }: { isOwner: boolean }) {
       </div>
       {!isOwner && (
         <p className="mg-sub">
-          Only the organization owner can add or remove AI provider keys.
+          Only the organization owner can change the active model or add and
+          remove AI provider keys.
         </p>
       )}
+
+      <div className="mg-ai-active">
+        <div className="mg-ai-active-row">
+          <span className="mg-ai-active-label">Active provider</span>
+          <div className="mg-ai-provider-pick">
+            {(Object.keys(status.available) as AiProvider[]).map((p) => (
+              <button
+                key={p}
+                type="button"
+                className={`mg-ai-pill${p === status.active ? " is-on" : ""}`}
+                aria-pressed={p === status.active}
+                disabled={!isOwner || busy || p === status.active}
+                onClick={() => void selectProvider(p, null)}
+              >
+                {AI_PROVIDER_LABELS[p]}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className="mg-ai-active-row">
+          <span className="mg-ai-active-label">Active model</span>
+          <select
+            className="input mg-ai-model-select"
+            aria-label="Active AI model"
+            value={status.model}
+            disabled={!isOwner || busy}
+            onChange={(e) => void selectProvider(status.active, e.target.value)}
+          >
+            {(status.available[status.active] ?? []).map((m, i) => (
+              <option key={m} value={m}>
+                {m}
+                {i === 0 ? " (default)" : ""}
+              </option>
+            ))}
+            {/* An operator env-set model outside the menu still shows as current. */}
+            {!(status.available[status.active] ?? []).includes(status.model) && (
+              <option value={status.model}>{status.model}</option>
+            )}
+          </select>
+        </div>
+        <p className="mg-sub mg-ai-active-note">
+          {status.org_selected
+            ? "Your organization has selected this model."
+            : "Using the platform default. Pick a provider or model to override it for your organization."}
+        </p>
+      </div>
+
       <ul className="mg-ai-provider-list">
         {status.providers.map((p) => (
           <li key={p.provider} className="mg-ai-provider-row">

@@ -945,7 +945,8 @@ def test_sms_transient_ai_failure_not_cached_and_retried(
         db.commit()
     finally:
         db.close()
-    assert seen["model"] == "claude-haiku-4-5"
+    # Default provider is gemini; outreach snippets use its cheap tier.
+    assert seen["model"] == "gemini-2.5-flash"
 
 
 def test_sms_render_empty_exits_enrollment(sc_org, api, twilio_creds_ok, captured_sends):

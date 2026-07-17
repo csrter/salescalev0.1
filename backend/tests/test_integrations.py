@@ -176,6 +176,68 @@ def test_ai_provider_status_lists_all_three(api, team_headers):
         assert set(p) == {"provider", "configured", "source"}
 
 
+def test_ai_provider_defaults_to_gemini_and_exposes_model_menu(api, team_headers):
+    data = api.get("/api/integrations/ai-provider", headers=team_headers).json()
+    # Operator default is gemini (org hasn't picked one yet).
+    assert data["active"] == "gemini"
+    assert data["org_selected"] is False
+    assert data["model"] == "gemini-2.5-flash"
+    # The selectable-model menu is present for every provider, defaults first.
+    assert data["available"]["gemini"][0] == "gemini-2.5-flash"
+    assert set(data["available"]) == {"anthropic", "openai", "gemini"}
+
+
+def test_owner_selects_provider_and_model(api, team_headers):
+    # Pick OpenAI with a specific model.
+    r = api.put(
+        "/api/integrations/ai-provider",
+        headers=team_headers,
+        json={"provider": "openai", "model": "gpt-4o-mini"},
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["active"] == "openai"
+    assert body["model"] == "gpt-4o-mini"
+    assert body["org_selected"] is True
+
+    # Model omitted → provider's default model.
+    r2 = api.put(
+        "/api/integrations/ai-provider",
+        headers=team_headers,
+        json={"provider": "anthropic"},
+    )
+    assert r2.json()["model"] == "claude-opus-4-8"
+
+    # An unknown model for the provider is rejected.
+    bad = api.put(
+        "/api/integrations/ai-provider",
+        headers=team_headers,
+        json={"provider": "gemini", "model": "gpt-4o"},
+    )
+    assert bad.status_code == 400, bad.text
+
+    # Reset to gemini default so downstream shared-org tests see a clean slate.
+    api.put(
+        "/api/integrations/ai-provider",
+        headers=team_headers,
+        json={"provider": "gemini", "model": None},
+    )
+
+
+def test_ai_provider_selection_is_owner_only(api, team_headers):
+    admin = _admin_headers(api)
+    r = api.put(
+        "/api/integrations/ai-provider",
+        headers=admin,
+        json={"provider": "openai"},
+    )
+    assert r.status_code == 403, r.text
+    # A non-owner admin can still READ the status.
+    assert (
+        api.get("/api/integrations/ai-provider", headers=admin).status_code == 200
+    )
+
+
 def test_owner_manages_ai_key_and_status_reflects_it(api, team_headers):
     r = api.put(
         "/api/lead-finder/providers/anthropic",

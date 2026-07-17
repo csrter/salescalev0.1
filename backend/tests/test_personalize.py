@@ -247,19 +247,43 @@ def test_ai_guard_sms_word_limit_narrower():
 # --- outreach model resolution + provider dispatch ---------------------------
 
 
-def test_resolve_outreach_picks_cheap_model_insights_keep_full():
+def test_default_provider_is_gemini():
     from app.services import ai_provider
 
-    # Outreach personalization/research runs the cheap per-provider model...
-    res = ai_provider.resolve_outreach()
-    assert res.provider == "anthropic"  # test env default
-    assert res.model == "claude-haiku-4-5"
-    # ...while AI insights keep the fuller default via resolve().
-    assert ai_provider.resolve().model == "claude-opus-4-8"
-    # Metering must price the outreach model, not fall back to DEFAULT_PRICE
-    # (which is Opus-priced and would over-bill every snippet).
-    assert "claude-haiku-4-5" in ai_provider.PRICING_MICRO_USD_PER_TOKEN
+    # Operator default (no org override) is gemini.
+    assert ai_provider.active_provider() == "gemini"
+    assert ai_provider.resolve().model == "gemini-2.5-flash"
+    assert ai_provider.resolve_outreach().model == "gemini-2.5-flash"
+
+
+class _FakeOrg:
+    def __init__(self, provider=None, model=None):
+        self.id = "org-fake"
+        self.ai_provider = provider
+        self.ai_model = model
+
+
+def test_org_override_selects_provider_and_model():
+    from app.services import ai_provider
+
+    # An org that picked anthropic gets the cheap-vs-full split (outreach =
+    # Haiku, insights = Opus) — exercises the owner-selectable override path.
+    org = _FakeOrg(provider="anthropic")
+    assert ai_provider.resolve_outreach(org=org).model == "claude-haiku-4-5"
+    assert ai_provider.resolve(org=org).model == "claude-opus-4-8"
+    assert ai_provider.active_provider(org) == "anthropic"
+
+    # An explicit model applies to BOTH insights and outreach for that org.
+    pinned = _FakeOrg(provider="openai", model="gpt-4o-mini")
+    assert ai_provider.resolve(org=pinned).model == "gpt-4o-mini"
+    assert ai_provider.resolve_outreach(org=pinned).model == "gpt-4o-mini"
+
+    # Metering prices the outreach model, not DEFAULT_PRICE (Opus-priced).
     assert ai_provider.price("claude-haiku-4-5") != ai_provider.DEFAULT_PRICE
+    # Every selectable model is priced (no silent DEFAULT_PRICE over-bill).
+    for models in ai_provider.SELECTABLE_MODELS.values():
+        for m in models:
+            assert m in ai_provider.PRICING_MICRO_USD_PER_TOKEN
 
 
 def test_gemini_call_disables_thinking_budget(monkeypatch):

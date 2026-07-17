@@ -687,7 +687,8 @@ def test_transient_ai_failure_not_cached_and_retried(
         db.commit()
     finally:
         db.close()
-    assert seen["model"] == "claude-haiku-4-5"
+    # Default provider is gemini; outreach snippets use its cheap tier.
+    assert seen["model"] == "gemini-2.5-flash"
 
 
 def test_analytics_reports_ai_configured(cc_org, api, probe_ok, monkeypatch):

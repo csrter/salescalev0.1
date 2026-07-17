@@ -1320,14 +1320,28 @@ export const deleteLeadProviderKey = (provider: string) =>
 /** Active AI provider (operator-selected) + this org's BYO-key status for
  * each. Key writes go through setLeadProviderKey/deleteLeadProviderKey and
  * are owner-only for the AI providers (server-enforced). */
+export type AiProvider = "anthropic" | "openai" | "gemini";
+
 export interface AiProviderStatus {
-  active: "anthropic" | "openai" | "gemini";
+  active: AiProvider;
   model: string;
+  /** True when this org has explicitly picked a provider (vs the operator default). */
+  org_selected: boolean;
+  /** Selectable models per provider — first entry is the recommended default. */
+  available: Record<AiProvider, string[]>;
   providers: LeadProviderStatus[];
 }
 
 export const getAiProviderStatus = () =>
   api<AiProviderStatus>("/api/integrations/ai-provider");
+
+/** Owner-only: set this org's active AI provider + model (model omitted →
+ * the provider's default). Returns the refreshed status. */
+export const setAiProvider = (provider: AiProvider, model: string | null) =>
+  api<AiProviderStatus>("/api/integrations/ai-provider", {
+    method: "PUT",
+    body: JSON.stringify({ provider, model }),
+  });
 
 /** Re-run enrichment (owner name/title/mobile via the org's profile
  * provider, site discovery, verification) on existing leads — backfills

@@ -133,6 +133,12 @@ class Organization(Base):
     # each an optional string capped 2000 chars server-side. None means no
     # org-level context is injected into grounding.
     outreach_context: Mapped[Optional[dict]] = mapped_column(JSON)
+    # Owner-selectable AI provider + model overrides (services/ai_provider).
+    # NULL = fall back to the operator-global default (settings.ai_provider and
+    # that provider's default model). ai_model, when set, applies to BOTH
+    # insights and outreach calls for this org.
+    ai_provider: Mapped[Optional[str]] = mapped_column(String(20))
+    ai_model: Mapped[Optional[str]] = mapped_column(String(80))
     created_at: Mapped[dt.datetime] = created_at_column()
 
 

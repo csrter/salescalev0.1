@@ -124,7 +124,11 @@ class Settings(BaseSettings):
     # for the active provider (BYO via /api/lead-finder/providers, resolved
     # BYO-first with these env values as the operator fallback). The default
     # models are conservative, stable IDs — override per provider via env.
-    ai_provider: str = "anthropic"  # anthropic | openai | gemini
+    # Operator-global DEFAULT provider (gemini). An Organization can override
+    # both provider and model in-app (Organization.ai_provider / .ai_model,
+    # owner-only, via /api/integrations/ai-provider); this env value is the
+    # fallback for any org that hasn't chosen.
+    ai_provider: str = "gemini"  # anthropic | openai | gemini
     anthropic_api_key: str = ""
     ai_model: str = "claude-opus-4-8"
     openai_api_key: str = ""

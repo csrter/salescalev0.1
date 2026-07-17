@@ -31,6 +31,20 @@ from ..config import get_settings
 
 PROVIDERS = ("anthropic", "openai", "gemini")
 
+# Models an org owner may pick per provider (the in-app dropdown + the
+# save-time validation whitelist). Every entry MUST also exist in
+# PRICING_MICRO_USD_PER_TOKEN so a selected model still meters/prices. The
+# first entry of each list is that provider's recommended default.
+SELECTABLE_MODELS = {
+    "gemini": ("gemini-2.5-flash", "gemini-1.5-pro", "gemini-1.5-flash"),
+    "anthropic": ("claude-opus-4-8", "claude-sonnet-5", "claude-haiku-4-5"),
+    "openai": ("gpt-4o", "gpt-4o-mini", "gpt-4.1", "gpt-4.1-mini"),
+}
+
+
+def is_selectable_model(provider: str, model: str) -> bool:
+    return model in SELECTABLE_MODELS.get(provider, ())
+
 # Approx list price, USD per 1M tokens (input, output) — which is conveniently
 # micro-USD per token. A model not listed (e.g. an operator override) falls
 # back to DEFAULT_PRICE; metering never blocks on an unknown price.
@@ -96,46 +110,57 @@ def _env_key(provider: str) -> str:
     }.get(provider, "")
 
 
-def active_provider() -> str:
+def active_provider(org=None) -> str:
+    """The active provider for `org`: the org's own selection when set, else
+    the operator-global default (settings.ai_provider, now gemini)."""
+    if org is not None:
+        p = getattr(org, "ai_provider", None)
+        if p in PROVIDERS:
+            return p
     p = get_settings().ai_provider
-    return p if p in PROVIDERS else "anthropic"
+    return p if p in PROVIDERS else "gemini"
 
 
-def active_model() -> str:
-    """The model recorded on AiUsage rows and used for pricing. Provider is
-    operator-global, so this is the same for every org."""
-    return _model_for(active_provider())
+def active_model(org=None) -> str:
+    """The model recorded on AiUsage rows and used for pricing — the org's
+    explicit pick when set, else the active provider's default model."""
+    provider = active_provider(org)
+    if org is not None:
+        m = getattr(org, "ai_model", None)
+        if m:
+            return m
+    return _model_for(provider)
+
+
+def _resolve(db, org, default_model_for) -> AiResolution:
+    """Shared resolution: provider + model honor the org's owner-selected
+    override (Organization.ai_provider / .ai_model) and otherwise fall back to
+    the operator default. An explicit org model applies to BOTH insights and
+    outreach; only the fallback differs (default_model_for). The key is the
+    org's BYO key for the resolved provider when (db, org) are supplied, else
+    the operator's env fallback."""
+    provider = active_provider(org)
+    override = getattr(org, "ai_model", None) if org is not None else None
+    model = override or default_model_for(provider)
+    if db is not None and org is not None:
+        from . import integration_creds
+
+        api_key = integration_creds.resolve_key(db, org.id, provider)
+    else:
+        api_key = _env_key(provider)
+    return AiResolution(provider, model, api_key)
 
 
 def resolve(db=None, org=None) -> AiResolution:
-    """(provider, model, api_key) for a call. Provider + model are
-    operator-global; the key is the org's BYO key for the active provider when
-    (db, org) are supplied, else the operator's env fallback."""
-    provider = active_provider()
-    model = _model_for(provider)
-    if db is not None and org is not None:
-        from . import integration_creds
-
-        api_key = integration_creds.resolve_key(db, org.id, provider)
-    else:
-        api_key = _env_key(provider)
-    return AiResolution(provider, model, api_key)
+    """(provider, model, api_key) for an insights-tier call."""
+    return _resolve(db, org, _model_for)
 
 
 def resolve_outreach(db=None, org=None) -> AiResolution:
-    """Like resolve(), but selects the cheaper per-provider OUTREACH model for
-    high-volume, one-sentence personalization/research calls. Same provider +
-    BYO/operator key resolution — only the model differs from resolve(), so
-    tenant isolation and the AiUsage/pricing path are otherwise identical."""
-    provider = active_provider()
-    model = _outreach_model_for(provider)
-    if db is not None and org is not None:
-        from . import integration_creds
-
-        api_key = integration_creds.resolve_key(db, org.id, provider)
-    else:
-        api_key = _env_key(provider)
-    return AiResolution(provider, model, api_key)
+    """Like resolve(), but the fallback model is the cheaper per-provider
+    OUTREACH model for high-volume one-sentence personalization/research. An
+    org that has explicitly picked a model gets that model here too."""
+    return _resolve(db, org, _outreach_model_for)
 
 
 _var: contextvars.ContextVar = contextvars.ContextVar("ai_resolution", default=None)
