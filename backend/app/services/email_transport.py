@@ -41,6 +41,13 @@ class EmailTransportError(Exception):
     """Any SMTP/IMAP connect/auth/protocol failure, normalized."""
 
 
+class EmailRecipientError(EmailTransportError):
+    """The RECIPIENT address was refused (bad/undeliverable/malformed) — a
+    per-message problem, not a mailbox auth/connection failure. The caller
+    must fail just this one send and leave the mailbox ACTIVE, so one bad
+    address in an audience can't take the whole campaign's sending down."""
+
+
 def _run_with_deadline(host: str, fn, *args, **kwargs):
     """Run fn(*args, **kwargs) in a worker thread with a hard wall-clock
     deadline, so a stuck DNS lookup can't wedge the caller. If fn raises, that
@@ -122,7 +129,8 @@ def smtp_send(account, msg: Message) -> str:
             server.login(account.smtp_username, _smtp_password(account))
             refused = server.send_message(msg, account.from_email, recipients)
             if refused:
-                raise EmailTransportError(f"Recipients refused: {refused}")
+                # Server accepted the session but rejected the address(es).
+                raise EmailRecipientError(f"Recipients refused: {refused}")
             return "250 OK"
         finally:
             try:
@@ -134,6 +142,9 @@ def smtp_send(account, msg: Message) -> str:
         return _run_with_deadline(account.smtp_host, _do)
     except EmailTransportError:
         raise
+    except smtplib.SMTPRecipientsRefused as e:
+        # All recipients refused — a per-address problem, not the mailbox.
+        raise EmailRecipientError(f"Recipients refused: {e.recipients}") from e
     except (smtplib.SMTPException, OSError, ssl.SSLError) as e:
         raise EmailTransportError(str(e)) from e
 

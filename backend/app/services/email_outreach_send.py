@@ -27,6 +27,7 @@ link) is appended.
 
 import datetime as dt
 import logging
+import re
 from email.message import EmailMessage as MimeEmailMessage
 from email.utils import make_msgid
 from typing import Optional, Tuple
@@ -67,6 +68,15 @@ BLOCKED = "blocked"
 CAP_REACHED = "cap"
 
 _UNSUB_TOKEN = "{{unsubscribe_url}}"
+
+# A single deliverable address: exactly one @, no comma/semicolon/whitespace
+# (a contact whose email is two addresses joined by ", " — seen from
+# enrichment — otherwise reaches SMTP as one RCPT and gets a 501).
+_ADDR_RE = re.compile(r"^[^@\s,;<>]+@[^@\s,;<>]+\.[^@\s,;<>]+$")
+
+
+def _valid_single_address(email: Optional[str]) -> bool:
+    return bool(email and _ADDR_RE.match(email.strip()))
 
 
 # --- suppression ledger (the opt-out truth every send consults) ---
@@ -335,10 +345,32 @@ def send(
     db.flush()
 
     try:
+        # Guard a malformed recipient BEFORE hitting SMTP (a comma-joined
+        # address would 501 and, treated as a mailbox error, take the whole
+        # pool down). Flows through the recipient-error branch below.
+        if to_contact is not None and not _valid_single_address(to_contact.email):
+            raise email_transport.EmailRecipientError(
+                f"malformed recipient address: {to_contact.email!r}"
+            )
         response = email_transport.smtp_send(account, mime)
+    except email_transport.EmailRecipientError as e:
+        # BAD ADDRESS, not a mailbox failure. Fail just this send, mark the
+        # address undeliverable, and leave the mailbox ACTIVE so the rest of
+        # the audience keeps sending. Returns BLOCKED → the engine exits this
+        # enrollment like a bounce (no retry), never disabling the account.
+        msg.status = MSG_FAILED
+        msg.error_detail = str(e)
+        if to_contact is not None:
+            to_contact.verification_status = "invalid"
+        log.info(
+            "email recipient refused (contact %s): %s",
+            to_contact.id if to_contact is not None else None,
+            e,
+        )
+        return BLOCKED, msg
     except email_transport.EmailTransportError as e:
-        # A send failure is almost always an auth/connection problem with the
-        # mailbox — surface it as a reconnect banner and stop.
+        # Auth/connection/protocol problem with the MAILBOX — surface it as a
+        # reconnect banner and stop.
         msg.status = MSG_FAILED
         msg.error_detail = str(e)
         account.status = "error"

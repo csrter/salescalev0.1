@@ -296,6 +296,60 @@ def test_gateway_blocked_on_verified_invalid(ce_org, api, probe_ok, captured_sen
     assert captured_sends == []
 
 
+def test_malformed_recipient_blocks_without_disabling_mailbox(
+    ce_org, api, probe_ok, captured_sends
+):
+    """A contact whose email is two addresses comma-joined (seen from
+    enrichment) must fail ONLY that send — the mailbox stays active so the
+    rest of the audience keeps sending. Regression for the Q2 CPA cascade
+    where one bad address 501'd and disabled all three pool mailboxes."""
+    acct = _create_account(ce_org, api, from_email="pool@coldemailco.com")
+    bad = _make_contact(ce_org, api, email_addr="a@knollcpa.com")
+    good = _make_contact(ce_org, api, email_addr="clean@example.com")
+    db = SessionLocal()
+    try:
+        db.get(Contact, bad).email = "a@knollcpa.com, b@knollcpa.com"
+        db.commit()
+    finally:
+        db.close()
+
+    # Bad address → BLOCKED (not FAILED), never handed to SMTP, marked invalid.
+    code, _ = _send_via_gateway(acct["id"], bad)
+    assert code == gateway.BLOCKED
+    assert captured_sends == []
+    db = SessionLocal()
+    try:
+        assert db.get(Contact, bad).verification_status == "invalid"
+        assert db.get(EmailAccount, acct["id"]).status == "active"  # NOT disabled
+    finally:
+        db.close()
+
+    # The mailbox still sends to a good address afterwards.
+    assert _send_via_gateway(acct["id"], good)[0] == gateway.SENT
+    assert len(captured_sends) == 1
+
+
+def test_recipients_refused_at_smtp_blocks_not_fails(
+    ce_org, api, probe_ok, captured_sends, monkeypatch
+):
+    """When SMTP itself refuses the recipient (a valid-looking address the
+    server rejects), it's still per-address: BLOCKED, mailbox stays active."""
+    acct = _create_account(ce_org, api, from_email="refuse@coldemailco.com")
+    contact_id = _make_contact(ce_org, api, email_addr="rejected@example.com")
+
+    def _refuse(account, msg):
+        raise email_transport.EmailRecipientError("Recipients refused: {...}")
+
+    monkeypatch.setattr(email_transport, "smtp_send", _refuse)
+    code, _ = _send_via_gateway(acct["id"], contact_id)
+    assert code == gateway.BLOCKED
+    db = SessionLocal()
+    try:
+        assert db.get(EmailAccount, acct["id"]).status == "active"
+    finally:
+        db.close()
+
+
 def test_gateway_cap_reached(ce_org, api, probe_ok, captured_sends):
     acct = _create_account(ce_org, api, from_email="cap@coldemailco.com", daily_send_cap=1)
     c1 = _make_contact(ce_org, api, email_addr="cap1@example.com")
