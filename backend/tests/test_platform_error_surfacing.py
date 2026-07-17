@@ -45,11 +45,14 @@ def test_arbitrary_unhandled_exception_becomes_readable_500_with_cors(
     team_headers, seeded, monkeypatch
 ):
     """The three platform-error types above are only special-cased —
-    anything else unhandled (a bug in CSV import, a plain RuntimeError from
-    any service call) must hit the generic catch-all and come back as a
-    normal, CORS-safe 500, not a bare crash the browser reports as an opaque
-    NetworkError. Reproduces the actual CSV-import symptom: an unguarded
-    service call (get_or_create_company) throwing mid-row.
+    anything else unhandled (a plain RuntimeError from any service call) must
+    hit the generic catch-all and come back as a normal, CORS-safe 500, not a
+    bare crash the browser reports as an opaque NetworkError. Vehicle: an
+    unguarded service call (get_or_create_company) throwing inside contact
+    create. (CSV import used to be the vehicle here, but it now guards every
+    row in a savepoint and reports bad rows in `failed` instead of 500ing —
+    see test_crm_contacts.test_csv_import_bad_row_isolated_not_500 — so it no
+    longer reaches this catch-all.)
 
     Critically asserts the Access-Control-Allow-Origin header is actually
     present (with an Origin header on the request, mimicking a real
@@ -76,11 +79,12 @@ def test_arbitrary_unhandled_exception_becomes_readable_500_with_cors(
     monkeypatch.setattr(crm_svc, "get_or_create_company", boom)
     with TestClient(app, raise_server_exceptions=False) as client:
         resp = client.post(
-            "/api/crm/contacts/import",
+            "/api/crm/contacts",
             json={
                 "client_id": seeded["client_a"],
-                "mapping": {"Name": "full_name", "Email": "email", "Org": "company"},
-                "rows": [{"Name": "Jane Doe", "Email": "jane@example.com", "Org": "Acme"}],
+                "first_name": "Jane",
+                "email": "jane-catchall@example.com",
+                "company_name": "Acme",
             },
             headers={**team_headers, "Origin": "http://localhost:5173"},
         )

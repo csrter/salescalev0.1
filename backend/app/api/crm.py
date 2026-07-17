@@ -18,6 +18,7 @@ CRM writes never touch a live ad platform, so they are not staged changes
 
 import datetime as dt
 import json
+import logging
 from typing import Dict, List, Optional
 
 from fastapi import (
@@ -92,6 +93,7 @@ from ..services import sms_consent
 from ..models.base import utcnow
 
 router = APIRouter(prefix="/api/crm", tags=["crm"])
+log = logging.getLogger("salescale.crm")
 
 # Public, secret-authenticated inbound sync — tight per-IP cap so the per-client
 # secret can't be brute-forced online (and to blunt DoS).
@@ -784,40 +786,60 @@ def import_contacts(
                 {"row": idx, "error": "no identity field (name/email/phone) mapped"}
             )
             continue
-        contact = Contact(
-            organization_id=client.organization_id,
-            client_id=client.id,
-            first_name=identity.get("first_name"),
-            last_name=identity.get("last_name"),
-            email=(identity["email"].lower() if identity.get("email") else None),
-            phone=identity.get("phone"),
-            mobile_phone=identity.get("mobile_phone"),
-            job_title=identity.get("job_title"),
-            city=identity.get("city"),
-            state=identity.get("state"),
-            zip=identity.get("zip"),
-            source="csv_import",
-        )
-        if row_opted_in:
-            sms_consent.record_opt_in(contact, "csv_import:website_attested")
-        else:
-            sms_consent.apply_org_default(org, contact)
-        if company_name:
-            cache_key = company_name.lower()
-            if cache_key not in company_cache:
-                company_cache[cache_key] = crm_svc.get_or_create_company(
-                    db, client.organization_id, client.id, company_name
-                )
-            contact.company_id = company_cache[cache_key]
+
+        # Everything that touches the DB for this row runs inside a SAVEPOINT.
+        # A single bad row — a value longer than a Postgres column cap (e.g. a
+        # 30-char string mapped to zip/String(20)), an integrity violation,
+        # any driver error — then rolls back only that row and lands in
+        # `failed`, instead of aborting the whole import transaction (which
+        # surfaced to the user as a bare "unexpected error"). SQLite ignores
+        # String length caps, so this class only ever reproduced on prod.
         try:
-            custom_fields_svc.validate_and_merge(
-                db, scope.organization_id, contact, custom, enforce_required=True
-            )
+            with db.begin_nested():
+                contact = Contact(
+                    organization_id=client.organization_id,
+                    client_id=client.id,
+                    first_name=identity.get("first_name"),
+                    last_name=identity.get("last_name"),
+                    email=(identity["email"].lower() if identity.get("email") else None),
+                    phone=identity.get("phone"),
+                    mobile_phone=identity.get("mobile_phone"),
+                    job_title=identity.get("job_title"),
+                    city=identity.get("city"),
+                    state=identity.get("state"),
+                    zip=identity.get("zip"),
+                    source="csv_import",
+                )
+                if row_opted_in:
+                    sms_consent.record_opt_in(contact, "csv_import:website_attested")
+                else:
+                    sms_consent.apply_org_default(org, contact)
+                if company_name:
+                    cache_key = company_name.lower()
+                    company_id = company_cache.get(cache_key)
+                    if company_id is None:
+                        company_id = crm_svc.get_or_create_company(
+                            db, client.organization_id, client.id, company_name
+                        )
+                    contact.company_id = company_id
+                custom_fields_svc.validate_and_merge(
+                    db, scope.organization_id, contact, custom, enforce_required=True
+                )
+                db.add(contact)
+                db.flush()
         except custom_fields_svc.CustomFieldError as e:
             failed.append({"row": idx, "error": str(e)})
             continue
-        db.add(contact)
-        db.flush()
+        except Exception as e:  # DataError, IntegrityError, anything else
+            log.warning("csv import row %s failed", idx, exc_info=True)
+            failed.append(
+                {"row": idx, "error": f"could not import this row ({type(e).__name__})"}
+            )
+            continue
+        # Row committed to the savepoint: any company it created persists, so
+        # its id is safe to cache for reuse by later rows.
+        if company_name and contact.company_id:
+            company_cache[company_name.lower()] = contact.company_id
         created_contacts.append(contact)
         imported += 1
 

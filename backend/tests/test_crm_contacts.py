@@ -221,6 +221,47 @@ def test_csv_import_explicit_name_columns_win_over_full_name(api, cc_org):
         db.close()
 
 
+def test_csv_import_bad_row_isolated_not_500(api, cc_org, monkeypatch):
+    """A row that raises while its DB writes flush (e.g. a value longer than a
+    Postgres column cap — SQLite ignores caps, so we inject the driver error)
+    must land in `failed` and let the good rows import, never abort the whole
+    request with a bare 500. Regression for the prod CSV-import "unexpected
+    error"."""
+    from app.api import crm as crm_api
+
+    real = crm_api.custom_fields_svc.validate_and_merge
+
+    def _boom(db, org_id, contact, custom, enforce_required=True):
+        if contact.email == "boom-badrow@example.com":
+            raise RuntimeError("value too long for type character varying(20)")
+        return real(db, org_id, contact, custom, enforce_required=enforce_required)
+
+    monkeypatch.setattr(crm_api.custom_fields_svc, "validate_and_merge", _boom)
+
+    body = {
+        "client_id": cc_org["client"],
+        "mapping": {"Email": "email"},
+        "rows": [
+            {"Email": "goodrow1@example.com"},
+            {"Email": "boom-badrow@example.com"},
+            {"Email": "goodrow2@example.com"},
+        ],
+    }
+    r = api.post("/api/crm/contacts/import", json=body, headers=cc_org["headers"])
+    assert r.status_code == 200, r.text
+    out = r.json()
+    assert out["imported"] == 2
+    assert [f["row"] for f in out["failed"]] == [1]
+    assert "RuntimeError" in out["failed"][0]["error"]
+    db = SessionLocal()
+    try:
+        assert db.query(Contact).filter(Contact.email == "goodrow1@example.com").count() == 1
+        assert db.query(Contact).filter(Contact.email == "goodrow2@example.com").count() == 1
+        assert db.query(Contact).filter(Contact.email == "boom-badrow@example.com").count() == 0
+    finally:
+        db.close()
+
+
 def test_delete_contact_cascades_and_audits(api, cc_org):
     created = _create_contact(api, cc_org, first_name="Gone", last_name="Soon")
     cid = created["id"]
