@@ -2042,6 +2042,26 @@ live activation + the entitlement flip, the Outreach module build
       rebuilt, installed, health ok). Note: the ~11 exited bad-address
       contacts in Q2 CPA are now cleaned/deliverable but NOT re-enrolled —
       re-enrolling them is the user's call.
+- [x] Inbox thread-open crash fix (2026-07-17): clicking an email in the
+      Email → Inbox tab blanked the whole view to the bare drafting-grid
+      background. Root cause: GET /email-outreach/threads/{id}/messages
+      returns {thread, messages} (has since the module was first built), but
+      api.ts's listEmailThreadMessages was typed AND used as a bare
+      EmailMessage[] — so setMessages got the wrapper object and the render's
+      messages.map(...) threw, crashing the React subtree to just the
+      Schematic canvas. Never surfaced until now because until the Q2 CPA
+      campaign actually sent, the org had ZERO real threads to click (warmup
+      messages are threadless/excluded), so nobody ever opened one. Fix:
+      listEmailThreadMessages now unwraps .messages. Frontend-only, no
+      backend change, no migration. Verified live on alt2 by seeding one
+      sent thread + message: clicking it now opens the thread pane with the
+      subject, contact line, message bubble ("sent · just now"), and reply
+      composer — zero console errors (only pre-existing controlled-input
+      warnings). Seed cleaned up after. DEPLOYED to production 2026-07-17
+      (bd91810) web (frontend image rebuilt/recreated, app + api 200) +
+      desktop (frontend rebuilt, DMG 155MB rebuilt reusing the unchanged
+      backend binary, installed to /Applications, launch-verified backend
+      :8000 health 200).
 - [ ] Stripe live activation + entitlement flip (after 12–14, so real
       limits land everywhere in one pass)
 - [ ] Outreach module build (dev-mode) — go-live gated on Meta App
