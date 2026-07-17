@@ -194,6 +194,31 @@ def test_csv_import_city_state_company_full_name(api, cc_org):
         db.close()
 
 
+def test_csv_import_multi_address_email_cell_takes_first(api, cc_org):
+    """A CSV email cell with two comma-joined addresses (two guesses at one
+    person) imports the FIRST as the deliverable email and keeps both as
+    candidates — not the un-sendable comma-joined string that SMTP 501s."""
+    body = {
+        "client_id": cc_org["client"],
+        "mapping": {"Email": "email", "First": "first_name"},
+        "rows": [
+            {"First": "Carolina", "Email": "carolina@2atax.com, carolinasanto@2atax.com"},
+        ],
+    }
+    r = api.post("/api/crm/contacts/import", json=body, headers=cc_org["headers"])
+    assert r.status_code == 200, r.text
+    assert r.json()["imported"] == 1
+    db = SessionLocal()
+    try:
+        c = db.query(Contact).filter(Contact.first_name == "Carolina").one()
+        assert c.email == "carolina@2atax.com"  # first, deliverable
+        assert "," not in (c.email or "")
+        cands = {x["email"] for x in (c.candidate_emails or [])}
+        assert cands == {"carolina@2atax.com", "carolinasanto@2atax.com"}
+    finally:
+        db.close()
+
+
 def test_csv_import_explicit_name_columns_win_over_full_name(api, cc_org):
     body = {
         "client_id": cc_org["client"],

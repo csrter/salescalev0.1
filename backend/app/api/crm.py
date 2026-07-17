@@ -19,6 +19,7 @@ CRM writes never touch a live ad platform, so they are not staged changes
 import datetime as dt
 import json
 import logging
+import re
 from typing import Dict, List, Optional
 
 from fastapi import (
@@ -687,6 +688,18 @@ _CSV_TRUTHY = {"1", "true", "yes", "y", "x", "opted in", "opt-in", "opt in"}
 # a city isn't one.
 _CSV_IDENTITY_TARGETS = ("first_name", "last_name", "email", "phone")
 
+_EMAIL_ADDR_RE = re.compile(r"[^@\s,;<>]+@[^@\s,;<>]+\.[^@\s,;<>]+")
+
+
+def _split_email_cell(cell: Optional[str]):
+    """A CSV email cell can hold several addresses ("a@x.com, b@x.com" — two
+    guesses at one person's address). Return (primary, all_lowercased) where
+    primary is the first syntactically-valid address so the contact is
+    deliverable; the alternates are kept as candidate_emails rather than
+    stored as one un-sendable comma-joined string (which SMTP 501s)."""
+    found = [m.group(0).lower() for m in _EMAIL_ADDR_RE.finditer(cell or "")]
+    return (found[0] if found else None), found
+
 
 @router.post("/contacts/import")
 def import_contacts(
@@ -794,6 +807,7 @@ def import_contacts(
         # `failed`, instead of aborting the whole import transaction (which
         # surfaced to the user as a bare "unexpected error"). SQLite ignores
         # String length caps, so this class only ever reproduced on prod.
+        primary_email, email_candidates = _split_email_cell(identity.get("email"))
         try:
             with db.begin_nested():
                 contact = Contact(
@@ -801,7 +815,7 @@ def import_contacts(
                     client_id=client.id,
                     first_name=identity.get("first_name"),
                     last_name=identity.get("last_name"),
-                    email=(identity["email"].lower() if identity.get("email") else None),
+                    email=primary_email,
                     phone=identity.get("phone"),
                     mobile_phone=identity.get("mobile_phone"),
                     job_title=identity.get("job_title"),
@@ -810,6 +824,12 @@ def import_contacts(
                     zip=identity.get("zip"),
                     source="csv_import",
                 )
+                # Keep alternate addresses (a multi-address cell) as candidates
+                # so nothing is lost, without making `email` un-sendable.
+                if len(email_candidates) > 1:
+                    contact.candidate_emails = [
+                        {"email": e, "source": "csv_import"} for e in email_candidates
+                    ]
                 if row_opted_in:
                     sms_consent.record_opt_in(contact, "csv_import:website_attested")
                 else:
