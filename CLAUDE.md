@@ -1879,6 +1879,14 @@ live activation + the entitlement flip, the Outreach module build
       account_id mirror + PATCH-while-active). Verified live on alt2:
       create dialog pool, Config-tab PATCH round-trip (account_ids grew
       to both mailboxes via the real UI), zero console errors.
+      DEPLOYED 2026-07-16 (d192fca), web + desktop: web first so
+      migration e7b4a9d2c6f1 applied through the standard container-boot
+      flow (docker exec alembic current = e7b4a9d2c6f1 head on live
+      Supabase), health green, campaigns route auth-gated, fresh bundle
+      served; then PyInstaller backend + DMG rebuilt (148MB, binary
+      hash-matched), installed to /Applications, launched — desktop boot
+      alembic no-op'd (already at head), /api/health ok, app renders
+      logged-in against the live org.
 - [ ] Stripe live activation + entitlement flip (after 12–14, so real
       limits land everywhere in one pass)
 - [ ] Outreach module build (dev-mode) — go-live gated on Meta App
