@@ -1911,6 +1911,43 @@ live activation + the entitlement flip, the Outreach module build
       frontend change): VPS backend rebuilt + recreated, health green,
       alembic still e7b4a9d2c6f1; desktop PyInstaller backend + DMG (148MB,
       hash-matched) reinstalled + launch-verified.
+- [x] Gemini default + owner-selectable AI provider/model (2026-07-16):
+      user asked to make Gemini the default and let users pick the active
+      model. (1) settings.ai_provider default anthropic → gemini (operator
+      global fallback). (2) Organizations gained owner-selectable ai_provider
+      + ai_model columns (migration f1c3e9a7b2d4, nullable = inherit operator
+      default; an explicit ai_model applies to BOTH insights and outreach for
+      that org). services/ai_provider: active_provider/active_model/resolve/
+      resolve_outreach are now org-aware via a shared _resolve(db, org,
+      default_model_fn) — org override wins, else operator default; new
+      SELECTABLE_MODELS registry is the per-provider dropdown menu AND the
+      save-time whitelist (every entry also in PRICING so metering never
+      falls back to DEFAULT_PRICE). API: PUT /api/integrations/ai-provider
+      (require_owner) sets provider+model (400 on unknown provider/model,
+      model=null resets to the provider default); GET returns active +
+      model + org_selected + available{provider:[models]}. Frontend: the
+      Integrations "AI provider" card gained provider pills (Gemini/
+      Anthropic/OpenAI, active = accent-wash disabled) + a model dropdown
+      (owner-editable, default marked, mono), both calling the PUT and
+      showing a toast; non-owners see it read-only. Tests 537 → 541
+      (test_integrations: default-is-gemini + model-menu, owner selects
+      provider/model, unknown-model 400, owner-only gate; test_personalize:
+      default-is-gemini + org-override split replacing the old anthropic-
+      default cheap-model test; test_email_campaigns/test_sms_outreach
+      outreach-model assertions updated haiku → gemini-2.5-flash for the new
+      default). Verified live on alt2 end-to-end: card shows Gemini active,
+      clicking the Anthropic pill persisted (active=anthropic, model=
+      claude-opus-4-8 default, org_selected=true, model menu re-keyed to
+      Claude models), reset returns to gemini/gemini-2.5-flash; zero console
+      errors. DEPLOYED 2026-07-16 (a7c1e26) web + desktop: migration
+      f1c3e9a7b2d4 applied to live Supabase via the container-boot flow
+      (alembic current = f1c3e9a7b2d4 head), health green, endpoint
+      auth-gated; desktop PyInstaller backend + DMG (148MB, hash-matched)
+      reinstalled + launch-verified (boot alembic no-op'd, already at head).
+      NOTE: prod still has no AI key in backend/.env, so AI features stay
+      off until an operator/owner adds a Gemini key (Integrations → AI
+      provider card, or GEMINI_API_KEY on the VPS) — the default flip just
+      changes WHICH provider a key is expected for.
 - [ ] Stripe live activation + entitlement flip (after 12–14, so real
       limits land everywhere in one pass)
 - [ ] Outreach module build (dev-mode) — go-live gated on Meta App
