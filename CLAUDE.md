@@ -1802,6 +1802,24 @@ live activation + the entitlement flip, the Outreach module build
       spec-sheet token hints all verified; zero console errors). Aurora
       tokens remain defined in theme.css but unused on shipped surfaces —
       candidates for deletion in a future sweep.
+      DEPLOYED 2026-07-16 (b6c2701), web + desktop, together with the
+      2026-07-16 outreach-hardening commit 187a077 (both were undeployed):
+      no migrations pending (alembic head c4e8f1a6b9d3 unchanged), git
+      archive → VPS, backend/frontend images rebuilt, /api/health ok,
+      app.salescale.lol serves the Schematic bundle (Plex @font-face +
+      woff2 200s + --grid-line confirmed via curl), new analytics routes
+      auth-gated. DESKTOP: font-path fix first (b6c2701 — public/fonts +
+      absolute /fonts/ URLs break under file://; moved to src/assets/fonts
+      through Vite's pipeline → emitted url(./<hash>.woff2) relative, loads
+      from web AND file://; static preloads dropped, font-display swap
+      covers first paint); PyInstaller backend + electron-builder DMG
+      (141MB, Resources/backend/main hash-matched, 7 woff2 in asar),
+      launch-verified from the packaged app (own backend bound :8000,
+      health ok, alembic no-op against live Supabase) with the Schematic
+      UI rendering under file:// against real prod data (mono readouts,
+      numbered widget labels, grid, ticks — screenshot-verified), then
+      installed to /Applications and re-verified. DMG artifact:
+      electron-app/dist/Salescale-0.1.0-arm64.dmg.
 - [ ] Stripe live activation + entitlement flip (after 12–14, so real
       limits land everywhere in one pass)
 - [ ] Outreach module build (dev-mode) — go-live gated on Meta App
