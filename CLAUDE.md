@@ -1948,6 +1948,32 @@ live activation + the entitlement flip, the Outreach module build
       off until an operator/owner adds a Gemini key (Integrations → AI
       provider card, or GEMINI_API_KEY on the VPS) — the default flip just
       changes WHICH provider a key is expected for.
+- [x] Branding mailing-address field (2026-07-16): user couldn't activate a
+      cold-email campaign — "Set your organization's mailing address
+      (Branding)" — despite having "set the email". Root cause: the
+      Branding page had NO mailing-address input at all; the org.branding
+      .mailing_address the activation gate reads (api/email_outreach.py:955)
+      was unsettable. The user had set email_from_address (sender), a
+      different field. Backend already accepted+stored mailing_address
+      (BrandingIn + PUT /api/orgs/me/branding do org.branding = payload);
+      three frontend gaps fixed: OrgBranding type lacked mailing_address,
+      save()'s PUT body OMITTED it (so it'd be wiped on every save), and
+      there was no input. Added a "Mailing address" field to the Branded
+      email section with a CAN-SPAM footnote (not client-facing), threaded
+      into save(), and guarded product_name's input value against null
+      (pre-existing console warning on the same page). Frontend-only — no
+      backend change, no migration. Verified on alt2: the exact save() body
+      persists the address (PUT 200, stored), field renders in the tree
+      with its footnote; the activation gate reads the same field so it now
+      passes once set. DEPLOYED 2026-07-16 (d04c445) web (frontend image
+      rebuilt/recreated, app 200) + desktop (DMG 148MB rebuilt, installed,
+      health ok). LATENT FLAG (not fixed — out of scope, touches
+      entitlements): PUT /api/orgs/me/branding is gated by
+      _require_white_labeling, currently a `True` stub so harmless, but when
+      the entitlement flip wires tiers this compliance field (needed by
+      every cold-email tier) would be trapped behind the white-label
+      paywall — decouple mailing_address from that gate as part of the
+      Stripe/entitlements pass.
 - [ ] Stripe live activation + entitlement flip (after 12–14, so real
       limits land everywhere in one pass)
 - [ ] Outreach module build (dev-mode) — go-live gated on Meta App
