@@ -2062,6 +2062,46 @@ live activation + the entitlement flip, the Outreach module build
       desktop (frontend rebuilt, DMG 155MB rebuilt reusing the unchanged
       backend binary, installed to /Applications, launch-verified backend
       :8000 health 200).
+- [x] SMS "not sending" diagnosis — BlueBubbles chat-creation + SMS routing
+      (2026-07-17): user's active "CPA OUTREACH" campaign (BlueBubbles/iMessage
+      account, +16232967782, relay imessage-relay.salescale.lol) was NOT
+      dead — the scheduler picked it up every tick and fired sends, but every
+      one 500'd. Diagnosed live on prod: the relay ping/verify + server/info
+      were healthy (private_api:true, helper_connected, iMessage signed in as
+      salescale@icloud.com), but message/text returned
+      {"message":"Message Send Error","error":{"message":"Chat does not
+      exist!"}} — because services/sms_send._bluebubbles_send targeted an
+      EXISTING chat guid (iMessage;-;<num>) and a cold prospect has never been
+      messaged from that Mac, so no chat exists. Reproduced the exact 500.
+      SECOND finding (the bigger one): swept handle/availability across the
+      26 active recipients — only 2 are iMessage-registered; 24 are plain cell
+      numbers. iMessage physically can't reach them without SMS Text Message
+      Forwarding on the host Mac. FIXES (backend-only, no migration, web
+      deploy only — desktop runs no schedulers so SMS sending is server-side):
+      (1) _bluebubbles_send now resolves each recipient's service via
+      handle/availability/imessage (iMessage if registered, else SMS; defaults
+      iMessage on lookup failure) and builds the chat guid with that service;
+      (2) on the first message it falls back from message/text to chat/new
+      (_bluebubbles_create_chat_send, service-aware) which CREATES the
+      conversation and sends the opener — so first-contact no longer fails;
+      threaded follow-ups still reuse the now-existing chat; (3) surfaces the
+      relay's specific nested error.message instead of the generic "Message
+      Send Error". Verified live: resolve returns SMS for a non-iMessage
+      prospect and iMessage for a registered number. Tests: 2 new unit tests
+      (create-chat-on-missing, non-iMessage→SMS routing, specific-error) —
+      test_imessage_outreach 20→22, sms suites 74 pass. DEPLOYED to production
+      2026-07-17 (a15b57f chat-creation, then service/SMS routing) — backend
+      rebuilt/recreated on the VPS, /api/health 200. USER-SIDE PREREQUISITE
+      for the 24 SMS numbers: enable "Text Message Forwarding" on the Mac via
+      a paired iPhone (Settings → Messages → Text Message Forwarding → allow
+      carter's MacBook), iPhone online w/ cellular — until then SMS-service
+      sends fail (chat/new can't send SMS without forwarding). The 2
+      iMessage-capable prospects now send on the next tick; the errored/parked
+      SMS enrollments are NOT re-armed yet (would re-fail pre-forwarding) —
+      re-arm once forwarding is confirmed. Caveat noted to user: bulk SMS via
+      a personal iPhone's number is far less robust than the connected
+      Sendblue account (carrier spam-flagging / TCPA) — Sendblue remains the
+      alternative if iMessage+forwarding underperforms.
 - [ ] Stripe live activation + entitlement flip (after 12–14, so real
       limits land everywhere in one pass)
 - [ ] Outreach module build (dev-mode) — go-live gated on Meta App
