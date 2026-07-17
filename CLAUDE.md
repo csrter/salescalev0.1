@@ -2001,6 +2001,47 @@ live activation + the entitlement flip, the Outreach module build
       2026-07-16 (62d3e7f) web (backend+frontend rebuilt/recreated, health
       green, filter endpoint auth-gated) + desktop (PyInstaller backend +
       DMG 148MB, installed, health ok).
+- [x] "Q2 CPA campaign isn't sending" — three cascading bugs (2026-07-16,
+      diagnosed live on prod). (1) TIMEZONE: the campaign's timezone was
+      saved as "MST", which zoneinfo can't load (abbreviations aren't IANA
+      keys + absent from slim-container tzdata), so email_campaigns._tz()
+      swallowed the error and fell back to UTC — the 8am-5pm window was
+      evaluated as 8-17 UTC (=1am-10am Mountain), already closed, so all 87
+      enrollments parked to the next UTC window (the following Monday), never
+      sending. New services/timezones (normalize() maps MST/EST/PST/… →
+      IANA city zones + validates; resolve() is the runtime lookup that also
+      rescues abbreviations already stored, no migration). email + SMS _tz()
+      use it (SMS: also protects TCPA quiet-hours from wrong-zone eval).
+      Email + SMS campaign create/patch now VALIDATE + canonicalize the
+      timezone (422 on garbage) instead of silently storing an unloadable
+      one. (2) CASCADING MAILBOX-DISABLE: after re-arming, sends started but
+      several contacts had two emails comma-joined ("a@x.com, b@x.com" from
+      CSV import) → SMTP 501; the gateway treated EVERY send failure as a
+      mailbox auth problem and set account.status="error", so ONE bad
+      address disabled all 3 pool mailboxes and parked the other 80
+      enrollments. Fix: new email_transport.EmailRecipientError (recipient-
+      refused: send_message `refused` dict + SMTPRecipientsRefused); gateway
+      pre-flight rejects a malformed/multi-address recipient before SMTP and
+      catches EmailRecipientError separately → marks the contact email
+      invalid + returns BLOCKED (engine exits that enrollment like a bounce,
+      no retry) while leaving the mailbox ACTIVE. Only true mailbox
+      auth/connection errors still flip account.status. (3) ROOT DATA/IMPORT
+      BUG: CSV import stored a multi-address email cell verbatim. Import now
+      takes the first valid address as `email` and keeps all in
+      candidate_emails; the 19 existing such prod contacts were cleaned up
+      the same way (first address, both kept as candidates, verification
+      reset). Tests 542 → 549 (test_timezones; email campaign tz
+      validation; malformed-recipient isolation keeps mailbox active +
+      SMTP-refused → BLOCKED; CSV multi-address split). PROD OUTCOME: fixed
+      the campaign's timezone → America/Phoenix (its Arizona zone, matching
+      the warmup mailboxes), re-armed all 87 — the campaign then sent
+      cleanly: 77 delivered, 76 advanced to the follow-up step, ~11
+      bad-address contacts exited as bounced, all 3 mailboxes stayed
+      ACTIVE throughout. DEPLOYED 2026-07-16 (timezone ab63334, recipient
+      isolation bbacef2, CSV split 13bed7c) web + desktop (DMG 148MB
+      rebuilt, installed, health ok). Note: the ~11 exited bad-address
+      contacts in Q2 CPA are now cleaned/deliverable but NOT re-enrolled —
+      re-enrolling them is the user's call.
 - [ ] Stripe live activation + entitlement flip (after 12–14, so real
       limits land everywhere in one pass)
 - [ ] Outreach module build (dev-mode) — go-live gated on Meta App
