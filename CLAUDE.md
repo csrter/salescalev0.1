@@ -1820,6 +1820,25 @@ live activation + the entitlement flip, the Outreach module build
       numbered widget labels, grid, ticks — screenshot-verified), then
       installed to /Applications and re-verified. DMG artifact:
       electron-app/dist/Salescale-0.1.0-arm64.dmg.
+      SAME-DAY FOLLOW-UP — desktop Google Ads sync fix: the dashboard's
+      "Synced with issues: google: Specified service GoogleAdsService"
+      does not exist in Google Ads API v24" is google-ads-python's
+      CLIENT-SIDE get_service() error (mismatched quote is verbatim from
+      their client.py), raised when the versioned service module fails to
+      IMPORT — not a Google server/version problem. google-ads loads
+      google.ads.googleads.v{N}.* dynamically, so PyInstaller never
+      bundled them (same class as the 07-12 AI-SDK gap; prod container
+      imports v24 fine, web was never affected). main.spec now
+      collect_submodules('google.ads.googleads.v24') — bump alongside
+      library upgrades, google.ads.googleads.client._DEFAULT_VERSION is
+      the authority (lib 31.1.0 = v24; requirements.txt leaves google-ads
+      unpinned and the Docker layer cache means prod only picks up new
+      libs when requirements.txt changes). Binary 55→59MB, DMG 148MB,
+      1,711 v24 modules verified in the PYZ. Proven END-TO-END on the
+      installed app via CDP (relaunched with --remote-debugging-port,
+      Runtime.evaluate fetch with the app's own session; port closed +
+      normal relaunch after): POST /api/insights/sync returned google
+      ok:true with real row counts for both Google-connected clients.
 - [ ] Stripe live activation + entitlement flip (after 12–14, so real
       limits land everywhere in one pass)
 - [ ] Outreach module build (dev-mode) — go-live gated on Meta App

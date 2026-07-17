@@ -22,6 +22,13 @@ for _ai_pkg in ('anthropic', 'openai', 'google.genai'):
     datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 # Starlette imports this lazily in request.form() (Twilio webhook parsing).
 hiddenimports += ['multipart']
+# google-ads loads its versioned service/enum/type modules DYNAMICALLY inside
+# GoogleAdsClient.get_service(), so static analysis misses them — without this
+# every Google Ads call in the packaged app fails with the library's
+# (client-side) "Specified service X does not exist in Google Ads API v24".
+# Collect the default version's whole subpackage; bump alongside library
+# upgrades (google.ads.googleads.client._DEFAULT_VERSION is the authority).
+hiddenimports += collect_submodules('google.ads.googleads.v24')
 
 
 a = Analysis(
