@@ -1974,6 +1974,33 @@ live activation + the entitlement flip, the Outreach module build
       every cold-email tier) would be trapped behind the white-label
       paywall — decouple mailing_address from that gate as part of the
       Stripe/entitlements pass.
+- [x] View sent cold emails in the Email inbox (2026-07-16): user couldn't
+      see sent cold emails in the Inbox tab. Diagnosed on prod: 99 outbound
+      email_messages but 0 threads — all 99 were WARMUP (correctly threadless
+      /excluded), i.e. no real campaign sends had happened yet, and the inbox
+      (which lists EmailThreads) was framed reply-only (empty state "Replies
+      to your campaigns show up here"). Every campaign/manual send DOES upsert
+      a thread (email_outreach_send send() line ~277, to_contact != None), so
+      sent cold emails already land in the inbox — the gap was surfacing +
+      filtering them. Added: GET /api/email-outreach/inbox `filter` param
+      (all | awaiting | replied) driven by the thread's existing
+      last_inbound_at (awaiting = sent, no reply yet; replied = has inbound);
+      inbox "All / Sent / Replied" Segmented control; per-thread Sent
+      (neutral) / Replied (ok) badge (.eml-thread-foot); filter-aware empty
+      states; EmailThread type + listEmailThreads gained last_inbound_at /
+      filter. Backend param + frontend only — NO migration. Tests 541 → 542
+      (test_email_outreach.test_inbox_filter_awaiting_vs_replied: two sent
+      threads, one gets a synced reply → All shows both, awaiting excludes
+      the replied, replied returns only it). Verified live on alt2 with two
+      seeded sent threads (one replied+unread, one awaiting): All showed both
+      with correct badges, Sent filter narrowed to the unanswered one, the
+      sent message body opened in the thread pane; seed cleaned up after.
+      NOTE surfaced during diagnosis: the running alt2 uvicorn has no
+      --reload, so a backend edit needs a preview restart before live API
+      checks reflect it (pytest already covered the logic). DEPLOYED
+      2026-07-16 (62d3e7f) web (backend+frontend rebuilt/recreated, health
+      green, filter endpoint auth-gated) + desktop (PyInstaller backend +
+      DMG 148MB, installed, health ok).
 - [ ] Stripe live activation + entitlement flip (after 12–14, so real
       limits land everywhere in one pass)
 - [ ] Outreach module build (dev-mode) — go-live gated on Meta App
