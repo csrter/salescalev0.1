@@ -1347,7 +1347,11 @@ def _valid_send_days(v):
 
 class EmailCampaignIn(BaseModel):
     name: str = Field(min_length=1, max_length=200)
-    account_id: str
+    # Sending pool: either the legacy single account_id or account_ids (1-10,
+    # rotation order). At least one of the two must be given; account_ids
+    # wins when both are.
+    account_id: Optional[str] = None
+    account_ids: Optional[List[str]] = Field(default=None, min_length=1, max_length=10)
     timezone: str = Field(default="UTC", max_length=64)
     send_window_start: int = Field(default=8, ge=0, le=23)
     send_window_end: int = Field(default=17, ge=1, le=24)
@@ -1367,10 +1371,22 @@ class EmailCampaignIn(BaseModel):
     def _days(cls, v):
         return _valid_send_days(v)
 
+    @model_validator(mode="after")
+    def _pool(self):
+        if not self.account_id and not self.account_ids:
+            raise ValueError("account_id or account_ids is required")
+        if self.account_ids is not None:
+            deduped = list(dict.fromkeys(self.account_ids))
+            if not deduped:
+                raise ValueError("account_ids must name at least one mailbox")
+            self.account_ids = deduped
+        return self
+
 
 class EmailCampaignPatch(BaseModel):
     name: Optional[str] = Field(default=None, min_length=1, max_length=200)
     account_id: Optional[str] = None
+    account_ids: Optional[List[str]] = Field(default=None, min_length=1, max_length=10)
     timezone: Optional[str] = Field(default=None, max_length=64)
     send_window_start: Optional[int] = Field(default=None, ge=0, le=23)
     send_window_end: Optional[int] = Field(default=None, ge=1, le=24)
@@ -1386,6 +1402,16 @@ class EmailCampaignPatch(BaseModel):
     @classmethod
     def _days(cls, v):
         return _valid_send_days(v)
+
+    @field_validator("account_ids")
+    @classmethod
+    def _dedupe_pool(cls, v):
+        if v is None:
+            return v
+        deduped = list(dict.fromkeys(v))
+        if not deduped:
+            raise ValueError("account_ids must name at least one mailbox")
+        return deduped
 
 
 class EmailStepIn(BaseModel):

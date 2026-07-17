@@ -1238,3 +1238,258 @@ def test_reactivation_rearms_parked_enrollments(cc_org, api, probe_ok, captured_
         db.commit()
     finally:
         db.close()
+
+
+# --- multi-mailbox sending pool ----------------------------------------------
+
+
+def _senders(captured):
+    """from_email per captured MIME send, in order."""
+    out = []
+    for m in captured:
+        frm = m["From"]
+        out.append(frm.split("<")[-1].rstrip(">") if "<" in frm else frm)
+    return out
+
+
+def test_pool_rotation_distributes_and_pins_per_contact(
+    cc_org, api, probe_ok, captured_sends
+):
+    """Contacts spread across the pool (least-loaded rotation), and every
+    follow-up step sends from the SAME mailbox as the contact's first step —
+    thread continuity is the whole point of per-contact assignment."""
+    a = _mk_account(cc_org, api, from_email="pool-a@campaignco.com")
+    b = _mk_account(cc_org, api, from_email="pool-b@campaignco.com")
+    camp = _mk_campaign(
+        cc_org, api, a["id"], account_ids=[a["id"], b["id"]], **_ALWAYS
+    )
+    assert set(camp["account_ids"]) == {a["id"], b["id"]}
+    contacts = [
+        _mk_contact(cc_org, api, email_addr=f"pool-l{i}@example.com")
+        for i in range(4)
+    ]
+    _enroll_and_activate(
+        cc_org,
+        api,
+        camp,
+        [
+            {"position": 1, "wait_days": 0, "subject": "Hi", "body": "One {{first_name}}"},
+            {"position": 2, "wait_days": 0, "subject": None, "body": "Two {{first_name}}"},
+        ],
+        contacts,
+    )
+    _tick()  # step 1 for all four
+    first = _senders(captured_sends)
+    assert len(first) == 4
+    assert sorted([first.count("pool-a@campaignco.com"), first.count("pool-b@campaignco.com")]) == [2, 2]
+
+    # Pinned: enrollment.account_id recorded, and step 2 reuses it per contact.
+    db = SessionLocal()
+    try:
+        pins = {
+            e.contact_id: e.account_id
+            for e in db.execute(
+                select(EmailEnrollment).where(EmailEnrollment.campaign_id == camp["id"])
+            ).scalars()
+        }
+        assert all(pins.values())
+    finally:
+        db.close()
+    to_by_msg = [m["To"] for m in captured_sends]
+    step1_sender_by_to = dict(zip(to_by_msg, first))
+    captured_sends.clear()
+    _tick()  # step 2 for all four (wait_days 0)
+    second = _senders(captured_sends)
+    assert len(second) == 4
+    for m, sender in zip(captured_sends, second):
+        assert step1_sender_by_to[m["To"]] == sender
+    # Everyone completed the two-step sequence.
+    db = SessionLocal()
+    try:
+        statuses = [
+            e.status
+            for e in db.execute(
+                select(EmailEnrollment).where(EmailEnrollment.campaign_id == camp["id"])
+            ).scalars()
+        ]
+        assert statuses == ["completed"] * 4
+    finally:
+        db.close()
+
+
+def test_pool_failover_when_one_mailbox_capped(
+    cc_org, api, probe_ok, captured_sends
+):
+    """Combined pool capacity is fully used before anything defers: with caps
+    1 + 2 and three contacts, every contact sends this tick — the picker
+    spills onto the smaller mailbox exactly when the bigger one runs dry."""
+    a = _mk_account(
+        cc_org, api, from_email="cap-a@campaignco.com", daily_send_cap=1
+    )
+    b = _mk_account(
+        cc_org, api, from_email="cap-b@campaignco.com", daily_send_cap=2
+    )
+    camp = _mk_campaign(
+        cc_org, api, a["id"], account_ids=[a["id"], b["id"]], **_ALWAYS
+    )
+    contacts = [
+        _mk_contact(cc_org, api, email_addr=f"cap-l{i}@example.com") for i in range(3)
+    ]
+    _enroll_and_activate(
+        cc_org,
+        api,
+        camp,
+        [{"position": 1, "wait_days": 0, "subject": "Hi", "body": "B {{first_name}}"}],
+        contacts,
+    )
+    _tick()
+    senders = _senders(captured_sends)
+    assert len(senders) == 3  # nothing deferred — the pool absorbed all three
+    assert senders.count("cap-a@campaignco.com") == 1
+    assert senders.count("cap-b@campaignco.com") == 2
+
+
+def test_pool_all_capped_defers_unpinned_contacts(
+    cc_org, api, probe_ok, captured_sends
+):
+    a = _mk_account(
+        cc_org, api, from_email="full-a@campaignco.com", daily_send_cap=1
+    )
+    b = _mk_account(
+        cc_org, api, from_email="full-b@campaignco.com", daily_send_cap=1
+    )
+    camp = _mk_campaign(
+        cc_org, api, a["id"], account_ids=[a["id"], b["id"]], **_ALWAYS
+    )
+    contacts = [
+        _mk_contact(cc_org, api, email_addr=f"full-l{i}@example.com") for i in range(3)
+    ]
+    _enroll_and_activate(
+        cc_org,
+        api,
+        camp,
+        [{"position": 1, "wait_days": 0, "subject": "Hi", "body": "B {{first_name}}"}],
+        contacts,
+    )
+    _tick()
+    assert len(captured_sends) == 2  # one per mailbox
+    db = SessionLocal()
+    try:
+        waiting = [
+            e
+            for e in db.execute(
+                select(EmailEnrollment).where(EmailEnrollment.campaign_id == camp["id"])
+            ).scalars()
+            if e.status == "active"
+        ]
+        assert len(waiting) == 1
+        assert waiting[0].account_id is None  # never pinned to a capped mailbox
+        assert waiting[0].next_run_at is not None  # deferred, not parked
+        email_campaigns.exit_manual(db, waiting[0])  # keep shared-DB ticks clean
+        db.commit()
+    finally:
+        db.close()
+
+
+def test_pinned_mailbox_error_parks_only_its_contacts_and_test_revives(
+    cc_org, api, probe_ok, captured_sends
+):
+    """B (a NON-primary pool member) breaking parks only B's contacts; the
+    account /test reconnect finds the campaign through the pool table and
+    re-arms them."""
+    a = _mk_account(cc_org, api, from_email="err-a@campaignco.com")
+    b = _mk_account(cc_org, api, from_email="err-b@campaignco.com")
+    camp = _mk_campaign(
+        cc_org, api, a["id"], account_ids=[a["id"], b["id"]], **_ALWAYS
+    )
+    contacts = [
+        _mk_contact(cc_org, api, email_addr=f"err-l{i}@example.com") for i in range(2)
+    ]
+    _enroll_and_activate(
+        cc_org,
+        api,
+        camp,
+        [
+            {"position": 1, "wait_days": 0, "subject": "Hi", "body": "S1 {{first_name}}"},
+            {"position": 2, "wait_days": 0, "subject": None, "body": "S2 {{first_name}}"},
+        ],
+        contacts,
+    )
+    _tick()  # step 1: one contact on each mailbox
+    assert sorted(
+        [
+            _senders(captured_sends).count("err-a@campaignco.com"),
+            _senders(captured_sends).count("err-b@campaignco.com"),
+        ]
+    ) == [1, 1]
+
+    db = SessionLocal()
+    try:
+        db.get(EmailAccount, b["id"]).status = "error"
+        db.commit()
+    finally:
+        db.close()
+    captured_sends.clear()
+    _tick()  # step 2: A's contact sends; B's parks
+    assert _senders(captured_sends) == ["err-a@campaignco.com"]
+    db = SessionLocal()
+    try:
+        parked = db.execute(
+            select(EmailEnrollment).where(
+                EmailEnrollment.campaign_id == camp["id"],
+                EmailEnrollment.account_id == b["id"],
+            )
+        ).scalar_one()
+        assert parked.status == "active" and parked.next_run_at is None
+    finally:
+        db.close()
+
+    # Reconnect B via the /test endpoint (probe_ok) → pooled re-arm.
+    r = api.post(
+        f"/api/email-outreach/accounts/{b['id']}/test", headers=cc_org["headers"]
+    )
+    assert r.status_code == 200, r.text
+    db = SessionLocal()
+    try:
+        revived = db.execute(
+            select(EmailEnrollment).where(
+                EmailEnrollment.campaign_id == camp["id"],
+                EmailEnrollment.account_id == b["id"],
+            )
+        ).scalar_one()
+        assert revived.next_run_at is not None
+    finally:
+        db.close()
+    captured_sends.clear()
+    _tick()
+    assert _senders(captured_sends) == ["err-b@campaignco.com"]
+
+
+def test_campaign_pool_api_contract(cc_org, api, probe_ok):
+    """Legacy single account_id still creates a one-mailbox pool; account_ids
+    round-trips in order; PATCHing account_ids works while ACTIVE."""
+    a = _mk_account(cc_org, api, from_email="api-a@campaignco.com")
+    b = _mk_account(cc_org, api, from_email="api-b@campaignco.com")
+    legacy = _mk_campaign(cc_org, api, a["id"], **_ALWAYS)
+    assert legacy["account_ids"] == [a["id"]]
+
+    camp = _mk_campaign(
+        cc_org, api, a["id"], account_ids=[b["id"], a["id"]], **_ALWAYS
+    )
+    assert camp["account_ids"] == [b["id"], a["id"]]
+    assert camp["account_id"] == b["id"]  # legacy mirror = first pool entry
+
+    _set_steps(
+        cc_org,
+        api,
+        camp["id"],
+        [{"position": 1, "wait_days": 0, "subject": "Hi", "body": "X {{first_name}}"}],
+    )
+    assert _activate(cc_org, api, camp["id"]).status_code == 200
+    r = api.patch(
+        f"/api/email-outreach/campaigns/{camp['id']}",
+        json={"account_ids": [a["id"]]},
+        headers=cc_org["headers"],
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["account_ids"] == [a["id"]]

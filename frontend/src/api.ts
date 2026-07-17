@@ -1590,6 +1590,9 @@ export interface EmailCampaign {
   name: string;
   status: EmailCampaignStatus;
   account_id: string;
+  /** Sending pool, rotation order. Each contact is assigned one mailbox at
+   * first send and keeps it for the whole sequence (thread continuity). */
+  account_ids: string[];
   steps_count: number;
   enrolled: number;
   active_enrollments: number;
@@ -1631,6 +1634,7 @@ export interface EmailCampaignDetail extends EmailCampaign {
 export interface EmailCampaignBody {
   name?: string;
   account_id?: string;
+  account_ids?: string[];
   timezone?: string;
   send_window_start?: number;
   send_window_end?: number;
@@ -1779,7 +1783,7 @@ export const testEmailAccount = (id: string) =>
 export const listEmailCampaigns = () => api<EmailCampaign[]>(`${EO}/campaigns`);
 export const getEmailCampaign = (id: string) =>
   api<EmailCampaignDetail>(`${EO}/campaigns/${id}`);
-export const createEmailCampaign = (body: EmailCampaignBody & { name: string; account_id: string }) =>
+export const createEmailCampaign = (body: EmailCampaignBody & { name: string; account_ids: string[] }) =>
   api<EmailCampaignDetail>(`${EO}/campaigns`, { method: "POST", body: JSON.stringify(body) });
 export const updateEmailCampaign = (id: string, body: EmailCampaignBody) =>
   api<EmailCampaignDetail>(`${EO}/campaigns/${id}`, {

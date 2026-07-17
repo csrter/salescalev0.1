@@ -205,6 +205,36 @@ class EmailCampaign(Base):
     created_at: Mapped[dt.datetime] = created_at_column()
 
 
+class EmailCampaignAccount(Base):
+    """One mailbox in a campaign's sending pool. A campaign may send from
+    several mailboxes to raise total throughput: each CONTACT is assigned one
+    mailbox at first send (cap-aware, least-loaded first) and keeps it for the
+    whole sequence — follow-up steps must come from the same sender or the
+    thread breaks for the recipient. `position` is the display/rotation order.
+    EmailCampaign.account_id stays as the pool's first entry (legacy single-
+    mailbox campaigns simply have one row here)."""
+
+    __tablename__ = "email_campaign_accounts"
+    __table_args__ = (
+        UniqueConstraint(
+            "campaign_id", "account_id", name="uq_email_campaign_account"
+        ),
+    )
+
+    id: Mapped[str] = id_column()
+    organization_id: Mapped[str] = mapped_column(
+        ForeignKey("organizations.id"), nullable=False, index=True
+    )
+    campaign_id: Mapped[str] = mapped_column(
+        ForeignKey("email_campaigns.id"), nullable=False, index=True
+    )
+    account_id: Mapped[str] = mapped_column(
+        ForeignKey("email_accounts.id"), nullable=False, index=True
+    )
+    position: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    created_at: Mapped[dt.datetime] = created_at_column()
+
+
 class EmailStep(Base):
     """One step in a campaign sequence. A step with a null/blank
     subject_template threads as a "Re:" reply to the previous step's thread;
@@ -262,6 +292,13 @@ class EmailEnrollment(Base):
         DateTime(timezone=True), index=True
     )
     thread_id: Mapped[Optional[str]] = mapped_column(ForeignKey("email_threads.id"))
+    # The mailbox this contact's sequence sends from. Assigned on the FIRST
+    # successful send (cap-aware pick from the campaign's pool) and sticky
+    # thereafter: replies-in-thread must keep the same sender. NULL = not yet
+    # sent — the engine picks fresh each attempt until one lands.
+    account_id: Mapped[Optional[str]] = mapped_column(
+        ForeignKey("email_accounts.id"), index=True
+    )
     ai_snippets: Mapped[Optional[dict]] = mapped_column(JSON)
     # QA/preview (Feature B): step_id -> {"subject": str|None, "body": str} —
     # a human-edited override, used VERBATIM by process_enrollment instead of

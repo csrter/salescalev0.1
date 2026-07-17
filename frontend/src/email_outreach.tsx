@@ -793,17 +793,24 @@ function CreateCampaignDialog({
 }) {
   const toast = useToast();
   const [name, setName] = useState("");
-  const [accountId, setAccountId] = useState(accounts[0]?.id ?? "");
+  const [accountIds, setAccountIds] = useState<string[]>(
+    accounts[0] ? [accounts[0].id] : [],
+  );
   const [busy, setBusy] = useState(false);
 
+  const toggleAccount = (id: string) =>
+    setAccountIds((prev) =>
+      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id],
+    );
+
   const create = async () => {
-    if (!name.trim() || !accountId) {
-      toast("Name and mailbox are required", "error");
+    if (!name.trim() || accountIds.length === 0) {
+      toast("Name and at least one mailbox are required", "error");
       return;
     }
     setBusy(true);
     try {
-      const c = await createEmailCampaign({ name: name.trim(), account_id: accountId });
+      const c = await createEmailCampaign({ name: name.trim(), account_ids: accountIds });
       toast("Campaign created", "ok");
       onCreated(c.id);
     } catch (e) {
@@ -837,14 +844,25 @@ function CreateCampaignDialog({
             placeholder="Q3 HVAC contractors"
           />
         </Field>
-        <Field label="Send from mailbox">
-          <select value={accountId} onChange={(e) => setAccountId(e.target.value)}>
+        <Field label="Send from mailboxes">
+          <div className="eml-days">
             {accounts.map((a) => (
-              <option key={a.id} value={a.id}>
+              <label key={a.id} className="eml-check">
+                <input
+                  type="checkbox"
+                  checked={accountIds.includes(a.id)}
+                  onChange={() => toggleAccount(a.id)}
+                />
                 {a.from_name} — {a.from_email}
-              </option>
+              </label>
             ))}
-          </select>
+          </div>
+          <p className="eml-hint">
+            Sends rotate across the selected inboxes: each contact is assigned
+            one mailbox for their whole sequence, and rotation respects every
+            mailbox's daily cap and warmup ramp — total throughput is the sum
+            of the pool.
+          </p>
         </Field>
       </div>
     </Dialog>
@@ -1105,19 +1123,37 @@ function ConfigForm({
     onPatch({ send_days: [...set].sort((a, b) => a - b) });
   };
 
+  const pool = detail.account_ids ?? [detail.account_id];
+  const toggleMailbox = (id: string) => {
+    const next = pool.includes(id)
+      ? pool.filter((x) => x !== id)
+      : [...pool, id];
+    if (next.length === 0) return; // a campaign always keeps ≥1 mailbox
+    onPatch({ account_ids: next });
+  };
+
   return (
     <div className="eml-form">
-      <Field label="Send from mailbox">
-        <select
-          value={detail.account_id}
-          onChange={(e) => onPatch({ account_id: e.target.value })}
-        >
+      <Field label="Send from mailboxes">
+        <div className="eml-days">
           {accounts.map((a) => (
-            <option key={a.id} value={a.id}>
+            <label key={a.id} className="eml-check">
+              <input
+                type="checkbox"
+                checked={pool.includes(a.id)}
+                onChange={() => toggleMailbox(a.id)}
+              />
               {a.from_name} — {a.from_email}
-            </option>
+            </label>
           ))}
-        </select>
+        </div>
+        <p className="eml-hint">
+          Each contact is assigned one of these at first send and keeps it for
+          the whole sequence (replies must thread from the same sender).
+          Rotation is cap- and warmup-aware, so total daily throughput is the
+          sum of the pool. Contacts already mid-sequence keep their mailbox
+          even if it's unchecked here.
+        </p>
       </Field>
 
       <div className="eml-form-row">

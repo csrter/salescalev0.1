@@ -41,6 +41,7 @@ from ..models.email_outreach import (
     SUPPRESS_MANUAL,
     EmailAccount,
     EmailCampaign,
+    EmailCampaignAccount,
     EmailEnrollment,
     EmailMessage,
     EmailStep,
@@ -336,9 +337,13 @@ def delete_account(
     scope: TenantScope = Depends(get_scope),
 ):
     account = _scoped_get(db, scope, EmailAccount, account_id)
+    pooled = select(EmailCampaignAccount.campaign_id).where(
+        EmailCampaignAccount.account_id == account.id
+    )
     live_campaign = db.execute(
         select(EmailCampaign.id).where(
-            EmailCampaign.account_id == account.id,
+            (EmailCampaign.account_id == account.id)
+            | EmailCampaign.id.in_(pooled),
             EmailCampaign.status != CAMPAIGN_ARCHIVED,
         ).limit(1)
     ).scalar_one_or_none()
@@ -372,10 +377,27 @@ def delete_account(
             EmailStep.__table__.delete().where(EmailStep.campaign_id.in_(campaign_ids))
         )
         db.execute(
+            EmailCampaignAccount.__table__.delete().where(
+                EmailCampaignAccount.campaign_id.in_(campaign_ids)
+            )
+        )
+        db.execute(
             EmailCampaign.__table__.delete().where(
                 EmailCampaign.account_id == account.id
             )
         )
+    # Pool rows / enrollment pins on OTHER (archived) campaigns that merely
+    # included this mailbox: drop the membership, un-pin the history.
+    db.execute(
+        EmailCampaignAccount.__table__.delete().where(
+            EmailCampaignAccount.account_id == account.id
+        )
+    )
+    db.execute(
+        EmailEnrollment.__table__.update()
+        .where(EmailEnrollment.account_id == account.id)
+        .values(account_id=None)
+    )
     db.delete(account)
     db.commit()
     return {"status": "deleted"}
@@ -662,12 +684,50 @@ def _step_out(s: EmailStep) -> dict:
     }
 
 
+def _campaign_pool_ids(db: Session, campaign: EmailCampaign) -> list:
+    ids = list(
+        db.execute(
+            select(EmailCampaignAccount.account_id)
+            .where(EmailCampaignAccount.campaign_id == campaign.id)
+            .order_by(EmailCampaignAccount.position)
+        ).scalars()
+    )
+    return ids or [campaign.account_id]
+
+
+def _set_campaign_pool(
+    db: Session, scope: TenantScope, campaign: EmailCampaign, account_ids: list
+) -> None:
+    """Replace the campaign's sending pool (validated org-scoped, order kept).
+    campaign.account_id mirrors the first entry (legacy single-mailbox
+    consumers keep working). Already-pinned enrollments deliberately keep
+    their mailbox even if it leaves the pool — mid-thread sender swaps break
+    the conversation; disconnect the account instead to stop it sending."""
+    accounts = [_scoped_get(db, scope, EmailAccount, aid) for aid in account_ids]
+    db.execute(
+        EmailCampaignAccount.__table__.delete().where(
+            EmailCampaignAccount.campaign_id == campaign.id
+        )
+    )
+    for i, a in enumerate(accounts):
+        db.add(
+            EmailCampaignAccount(
+                organization_id=campaign.organization_id,
+                campaign_id=campaign.id,
+                account_id=a.id,
+                position=i,
+            )
+        )
+    campaign.account_id = accounts[0].id
+
+
 def _campaign_out(db: Session, c: EmailCampaign, *, full: bool = False) -> dict:
     out = {
         "id": c.id,
         "name": c.name,
         "status": c.status,
         "account_id": c.account_id,
+        "account_ids": _campaign_pool_ids(db, c),
         "timezone": c.timezone,
         "send_window_start": c.send_window_start,
         "send_window_end": c.send_window_end,
@@ -713,14 +773,15 @@ def create_campaign(
     user: User = Depends(require_admin),
     scope: TenantScope = Depends(get_scope),
 ):
-    account = _scoped_get(db, scope, EmailAccount, body.account_id)
+    pool_ids = body.account_ids or [body.account_id]
+    accounts = [_scoped_get(db, scope, EmailAccount, aid) for aid in pool_ids]
     if body.send_window_start >= body.send_window_end:
         raise HTTPException(422, "send_window_start must be before send_window_end")
     campaign = EmailCampaign(
         organization_id=scope.organization_id,
         name=body.name,
         status=CAMPAIGN_DRAFT,
-        account_id=account.id,
+        account_id=accounts[0].id,
         timezone=body.timezone,
         send_window_start=body.send_window_start,
         send_window_end=body.send_window_end,
@@ -733,6 +794,8 @@ def create_campaign(
         ai_example=body.ai_example,
     )
     db.add(campaign)
+    db.flush()
+    _set_campaign_pool(db, scope, campaign, [a.id for a in accounts])
     db.commit()
     return _campaign_out(db, campaign, full=True)
 
@@ -758,8 +821,13 @@ def update_campaign(
 ):
     campaign = _scoped_get(db, scope, EmailCampaign, campaign_id)
     data = body.model_dump(exclude_unset=True)
+    # Pool edits: account_ids replaces the whole pool and is allowed while
+    # ACTIVE — new/unpinned contacts pick from the new pool on their next
+    # send; pinned contacts keep their sender (thread continuity). The legacy
+    # single account_id swap keeps its pause-first guard: it historically
+    # rewired the campaign's only mailbox mid-flight.
+    pool_ids = data.pop("account_ids", None)
     if "account_id" in data:
-        # Changing the sending mailbox is only safe before the campaign runs.
         if campaign.status == CAMPAIGN_ACTIVE:
             raise HTTPException(409, "Pause the campaign before changing its mailbox")
         _scoped_get(db, scope, EmailAccount, data["account_id"])
@@ -769,6 +837,10 @@ def update_campaign(
         raise HTTPException(422, "send_window_start must be before send_window_end")
     for field, value in data.items():
         setattr(campaign, field, value)
+    if "account_id" in data:
+        _set_campaign_pool(db, scope, campaign, [data["account_id"]])
+    if pool_ids is not None:
+        _set_campaign_pool(db, scope, campaign, pool_ids)
     db.commit()
     # Config edits apply on the next scheduler tick.
     return _campaign_out(db, campaign, full=True)
@@ -876,9 +948,9 @@ def activate_campaign(
     )
     if steps == 0:
         raise HTTPException(422, "Add at least one step before activating")
-    account = db.get(EmailAccount, campaign.account_id)
-    if account is None or account.status != ACCOUNT_ACTIVE:
-        raise HTTPException(422, "The campaign's mailbox is not connected")
+    pool = email_campaigns.campaign_accounts(db, campaign)
+    if not any(a.status == ACCOUNT_ACTIVE for a in pool):
+        raise HTTPException(422, "None of the campaign's mailboxes are connected")
     org = db.get(Organization, campaign.organization_id)
     if not (branding.merged(org).get("mailing_address") or "").strip():
         raise HTTPException(

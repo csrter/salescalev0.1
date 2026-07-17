@@ -56,6 +56,7 @@ from ..models.email_outreach import (
     KIND_CAMPAIGN,
     EmailAccount,
     EmailCampaign,
+    EmailCampaignAccount,
     EmailEnrollment,
     EmailMessage,
     EmailStep,
@@ -235,6 +236,50 @@ def _last_thread_message(db: Session, thread_id: str) -> Optional[EmailMessage]:
     ).scalar_one_or_none()
 
 
+def campaign_accounts(db: Session, campaign: EmailCampaign) -> List[EmailAccount]:
+    """The campaign's sending pool, in rotation order. Falls back to the
+    legacy single account column for any campaign created before the pool
+    table existed (the migration backfills, so this is belt-and-braces)."""
+    accounts = (
+        db.execute(
+            select(EmailAccount)
+            .join(
+                EmailCampaignAccount,
+                EmailCampaignAccount.account_id == EmailAccount.id,
+            )
+            .where(EmailCampaignAccount.campaign_id == campaign.id)
+            .order_by(EmailCampaignAccount.position)
+        )
+        .scalars()
+        .all()
+    )
+    if accounts:
+        return accounts
+    legacy = db.get(EmailAccount, campaign.account_id)
+    return [legacy] if legacy is not None else []
+
+
+def _pick_account(
+    db: Session, accounts: List[EmailAccount]
+) -> Optional[EmailAccount]:
+    """Cap-aware rotation: among ACTIVE pool mailboxes with capacity left
+    today (warmup-ramped), pick the one with the MOST remaining — new
+    contacts naturally round-robin across the pool while a half-warmed
+    mailbox contributes only what its ramp allows. None = every active
+    mailbox is capped out right now."""
+    best: Optional[EmailAccount] = None
+    best_remaining = 0
+    for a in accounts:
+        if a.status != ACCOUNT_ACTIVE:
+            continue
+        remaining = email_warmup.effective_daily_cap(a, db) - gateway.sends_today(
+            db, a
+        )
+        if remaining > best_remaining:
+            best, best_remaining = a, remaining
+    return best
+
+
 def rearm_parked(db: Session, campaign: EmailCampaign) -> int:
     """Re-schedule this campaign's ACTIVE enrollments that a tick parked
     (next_run_at = NULL — campaign paused or mailbox disconnected at the
@@ -288,11 +333,15 @@ def rearm_account(db: Session, account_id: str) -> int:
     """Mailbox reconnected: re-arm parked enrollments — and revive send-FAILURE
     errored ones — across all of the account's ACTIVE campaigns (the
     \"reconnect flow re-arms\" contract in process_enrollment)."""
+    pooled = select(EmailCampaignAccount.campaign_id).where(
+        EmailCampaignAccount.account_id == account_id
+    )
     campaigns = (
         db.execute(
             select(EmailCampaign).where(
-                EmailCampaign.account_id == account_id,
                 EmailCampaign.status == CAMPAIGN_ACTIVE,
+                (EmailCampaign.account_id == account_id)
+                | EmailCampaign.id.in_(pooled),
             )
         )
         .scalars()
@@ -321,10 +370,27 @@ def process_enrollment(db: Session, enrollment: EmailEnrollment) -> None:
     if campaign is None or campaign.status != CAMPAIGN_ACTIVE:
         enrollment.next_run_at = None  # paused/archived campaign parks its enrollments
         return
-    account = db.get(EmailAccount, campaign.account_id)
-    if account is None or account.status != ACCOUNT_ACTIVE:
-        enrollment.next_run_at = None  # reconnect flow re-arms
-        return
+    # Resolve the sending mailbox. A contact who has already been written to
+    # is PINNED to their mailbox (follow-ups must thread from the same
+    # sender); a fresh contact gets a cap-aware pick from the pool each
+    # attempt until one actually lands (the pin happens on SENT below).
+    pool = campaign_accounts(db, campaign)
+    account: Optional[EmailAccount] = None
+    if enrollment.account_id:
+        account = db.get(EmailAccount, enrollment.account_id)
+        if account is None or account.status != ACCOUNT_ACTIVE:
+            enrollment.next_run_at = None  # reconnect flow re-arms
+            return
+    else:
+        if not any(a.status == ACCOUNT_ACTIVE for a in pool):
+            enrollment.next_run_at = None  # reconnect flow re-arms
+            return
+        account = _pick_account(db, pool)
+        if account is None:
+            # Every active mailbox is capped out today — same cadence as
+            # CAP_REACHED.
+            enrollment.next_run_at = now + dt.timedelta(hours=1)
+            return
 
     steps = _steps(db, campaign.id)
     current = next(
@@ -412,6 +478,8 @@ def process_enrollment(db: Session, enrollment: EmailEnrollment) -> None:
     )
 
     if code == gateway.SENT:
+        if enrollment.account_id is None:
+            enrollment.account_id = account.id  # pin: sequence stays on this sender
         if enrollment.thread_id is None and msg is not None:
             enrollment.thread_id = msg.thread_id
         nxt = next((s for s in steps if s.position > current.position), None)

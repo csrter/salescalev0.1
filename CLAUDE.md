@@ -1839,6 +1839,46 @@ live activation + the entitlement flip, the Outreach module build
       Runtime.evaluate fetch with the app's own session; port closed +
       normal relaunch after): POST /api/insights/sync returned google
       ok:true with real row counts for both Google-connected clients.
+- [x] Email campaigns: multi-mailbox sending pool with rotation
+      (2026-07-16, user-requested "cycle through inboxes to maximize sends
+      per campaign and account"). NOT yet deployed (adds migration
+      e7b4a9d2c6f1). Model: email_campaign_accounts join table (campaign →
+      N mailboxes, position = rotation/display order, unique per pair) +
+      email_enrollments.account_id (nullable, indexed) — the STICKY
+      per-contact mailbox. Rotation is PER-CONTACT, not per-message, by
+      design: reply-in-thread follow-up steps must send from the same
+      mailbox or the conversation breaks for the recipient; the pin is
+      written only on the first SUCCESSFUL send (before that, every
+      attempt re-picks, so nobody gets pinned to a mailbox that never
+      landed a send). Picker (email_campaigns._pick_account): among ACTIVE
+      pool mailboxes, most remaining capacity today (warmup-ramped
+      effective_daily_cap − gateway.sends_today) — equal caps alternate
+      round-robin, a half-warmed mailbox contributes exactly its ramp,
+      total throughput = sum of the pool. Engine: process_enrollment
+      resolves pinned account (inactive → park, reconnect re-arms) or
+      picks (no active mailbox → park; all active capped → defer 1h,
+      CAP_REACHED cadence); rearm_account finds campaigns via legacy
+      account_id OR the pool table (test proves revive through a
+      NON-primary pool member); campaign.account_id kept as pool[0]
+      (legacy mirror). Migration backfills one pool row per campaign and
+      pins only enrollments with thread_id (already-conversing); never-
+      sent stay NULL to rotate. API: EmailCampaignIn/Patch gained
+      account_ids (1-10, deduped, org-scoped-validated; account_id still
+      accepted → one-mailbox pool); PATCH account_ids allowed while
+      ACTIVE (pinned contacts keep their sender even if unchecked —
+      documented in _set_campaign_pool; legacy account_id swap keeps its
+      pause-first 409); activate requires ≥1 ACTIVE pool mailbox; account
+      DELETE guard + cleanup extended to pool rows and enrollment pins.
+      Frontend: New-campaign dialog + Config tab replace the single
+      mailbox select with a checkbox pool (≥1 enforced) + rotation hint.
+      Tests 531 → 536 (rotation 2/2 distribution + step-2 pins match
+      step-1 senders per contact + all complete; caps 1+2 absorb 3
+      contacts with zero deferrals; all-capped defers unpinned without
+      pinning; non-primary pool member error parks only its contacts and
+      /test revives them via the pool-table lookup; API contract incl.
+      account_id mirror + PATCH-while-active). Verified live on alt2:
+      create dialog pool, Config-tab PATCH round-trip (account_ids grew
+      to both mailboxes via the real UI), zero console errors.
 - [ ] Stripe live activation + entitlement flip (after 12–14, so real
       limits land everywhere in one pass)
 - [ ] Outreach module build (dev-mode) — go-live gated on Meta App
