@@ -67,6 +67,7 @@ import {
   type EmailMessage,
   type EmailPickContact,
   type EmailPreviewRow,
+  type EmailInboxFilter,
   type EmailQaAction,
   type EmailSmtpSecurity,
   type EmailStep,
@@ -2329,7 +2330,12 @@ const ThreadListItem = memo(function ThreadListItem({
         </time>
       </div>
       <span className="eml-thread-subj">{th.subject}</span>
-      <span className="eml-thread-snippet">{th.snippet}</span>
+      <div className="eml-thread-foot">
+        <span className="eml-thread-snippet">{th.snippet}</span>
+        <Badge tone={th.last_inbound_at ? "ok" : "neutral"}>
+          {th.last_inbound_at ? "Replied" : "Sent"}
+        </Badge>
+      </div>
     </button>
   );
 });
@@ -2345,6 +2351,7 @@ function InboxPanel({
   const [threads, setThreads] = useState<EmailThread[] | null>(null);
   const [accountId, setAccountId] = useState("");
   const [unreadOnly, setUnreadOnly] = useState(false);
+  const [scope, setScope] = useState<EmailInboxFilter>("all");
   const [selected, setSelected] = useState<EmailThread | null>(null);
   const [messages, setMessages] = useState<EmailMessage[] | null>(null);
   const [draft, setDraft] = useState("");
@@ -2353,7 +2360,7 @@ function InboxPanel({
   const selectedRef = useRef<string | null>(null);
 
   const refresh = useCallback(() => {
-    listEmailThreads(accountId || undefined, unreadOnly || undefined)
+    listEmailThreads(accountId || undefined, unreadOnly || undefined, scope)
       .then((rows) => {
         // Keep the previous array reference when a poll tick returns
         // identical data, so unchanged rows (memoized) don't re-render.
@@ -2366,7 +2373,7 @@ function InboxPanel({
         }
       })
       .catch(() => {});
-  }, [accountId, unreadOnly]);
+  }, [accountId, unreadOnly, scope]);
 
   // Poll only while the view is actually visible; re-activating refreshes
   // immediately (the effect re-runs when `active` flips back to true).
@@ -2417,6 +2424,16 @@ function InboxPanel({
             </option>
           ))}
         </select>
+        <Segmented
+          ariaLabel="Filter conversations"
+          value={scope}
+          onChange={(v) => setScope(v as EmailInboxFilter)}
+          options={[
+            { value: "all", label: "All" },
+            { value: "awaiting", label: "Sent" },
+            { value: "replied", label: "Replied" },
+          ]}
+        />
         <label className="eml-check">
           <input
             type="checkbox"
@@ -2440,8 +2457,20 @@ function InboxPanel({
         <GlassCard className="eml-threads">
           {threads === null && <SkeletonText lines={6} />}
           {threads !== null && threads.length === 0 && (
-            <EmptyState title="No conversations">
-              Replies to your campaigns show up here — nothing yet.
+            <EmptyState
+              title={
+                scope === "replied"
+                  ? "No replies yet"
+                  : scope === "awaiting"
+                    ? "Nothing awaiting a reply"
+                    : "No conversations"
+              }
+            >
+              {scope === "replied"
+                ? "Prospect replies to your campaigns show up here."
+                : scope === "awaiting"
+                  ? "Cold emails you've sent that haven't been answered show up here."
+                  : "Every cold email you send appears here, and replies thread onto it — nothing yet."}
             </EmptyState>
           )}
           {threads?.map((th) => (

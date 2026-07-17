@@ -615,6 +615,62 @@ def test_tenant_isolation_other_org_404(ce_org, api, probe_ok, team_headers):
     ).status_code == 404
 
 
+def test_inbox_filter_awaiting_vs_replied(
+    ce_org, api, probe_ok, captured_sends, monkeypatch
+):
+    """A cold email that's been SENT (no reply yet) is viewable in the inbox —
+    it's a thread with last_inbound_at NULL. filter=awaiting shows exactly the
+    sent-but-unanswered ones; filter=replied shows the answered ones."""
+    acct = _create_account(ce_org, api, from_email="filt@coldemailco.com")
+    sent_only = _make_contact(ce_org, api, email_addr="silent@example.com")
+    replied = _make_contact(ce_org, api, email_addr="answered@example.com")
+    # Two sent cold emails → two threads, both awaiting a reply.
+    _seed_outbound(acct["id"], sent_only, subject="Just sent, no reply")
+    out_mid, replied_thread = _seed_outbound(
+        acct["id"], replied, subject="This one answers"
+    )
+    # A reply lands on the second → it becomes "replied".
+    inbound = _rfc822(
+        {
+            "From": "Answered <answered@example.com>",
+            "To": "filt@coldemailco.com",
+            "Subject": "Re: This one answers",
+            "Message-ID": "<ans-1@example.com>",
+            "In-Reply-To": out_mid,
+        },
+        "Sure, let's talk.",
+    )
+    monkeypatch.setattr(
+        email_transport, "fetch_new", lambda account, last_uid: [(21, inbound)]
+    )
+    db = SessionLocal()
+    try:
+        sync.sync_account(db, db.get(EmailAccount, acct["id"]))
+        db.commit()
+    finally:
+        db.close()
+
+    def _ids(filt):
+        r = api.get(
+            f"/api/email-outreach/inbox?account_id={acct['id']}"
+            + (f"&filter={filt}" if filt else ""),
+            headers=ce_org["headers"],
+        )
+        assert r.status_code == 200, r.text
+        return {t["id"] for t in r.json()}
+
+    # Default: both sent cold emails appear (this is the core ask — sent
+    # emails are viewable in the inbox, not just replies).
+    everything = _ids(None)
+    assert replied_thread in everything and len(everything) >= 2
+    # Awaiting = sent, no reply yet: the silent one, never the replied one.
+    awaiting = _ids("awaiting")
+    assert replied_thread not in awaiting
+    assert any(tid != replied_thread for tid in awaiting)
+    # Replied = has an inbound: exactly the answered thread.
+    assert _ids("replied") == {replied_thread}
+
+
 def test_client_role_forbidden(api, client_a_headers):
     """The client role is locked out of every Outreach surface."""
     assert api.get(

@@ -1702,9 +1702,14 @@ export interface EmailThread {
   subject: string;
   snippet: string;
   last_message_at: string | null;
+  /** When the prospect last replied — null means sent, still awaiting a reply. */
+  last_inbound_at: string | null;
   unread: boolean;
   message_count: number;
 }
+
+/** Inbox scope: all conversations, sent-and-awaiting-reply, or replied. */
+export type EmailInboxFilter = "all" | "awaiting" | "replied";
 
 export interface EmailMessage {
   id: string;
@@ -1903,9 +1908,17 @@ export const campaignQa = (
   });
 
 // --- inbox ---
-export const listEmailThreads = (accountId?: string, unread?: boolean) =>
+export const listEmailThreads = (
+  accountId?: string,
+  unread?: boolean,
+  filter?: EmailInboxFilter,
+) =>
   api<EmailThread[]>(
-    `${EO}/inbox${q({ account_id: accountId, unread: unread ? "1" : undefined })}`,
+    `${EO}/inbox${q({
+      account_id: accountId,
+      unread: unread ? "1" : undefined,
+      filter: filter && filter !== "all" ? filter : undefined,
+    })}`,
   );
 export const listEmailThreadMessages = (threadId: string) =>
   api<EmailMessage[]>(`${EO}/threads/${threadId}/messages`);

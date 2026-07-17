@@ -435,6 +435,10 @@ def test_account(
 def inbox(
     account_id: Optional[str] = None,
     unread: Optional[bool] = None,
+    # all (default) | awaiting (sent, no reply yet) | replied (has an inbound).
+    # Every campaign/manual send upserts a thread, so "awaiting" is how a user
+    # views the cold emails they've sent that haven't been answered yet.
+    filter: str = "all",
     limit: int = 100,
     db: Session = Depends(get_db),
     user: User = Depends(require_team),
@@ -445,6 +449,10 @@ def inbox(
         stmt = stmt.where(EmailThread.account_id == account_id)
     if unread is not None:
         stmt = stmt.where(EmailThread.unread.is_(unread))
+    if filter == "awaiting":
+        stmt = stmt.where(EmailThread.last_inbound_at.is_(None))
+    elif filter == "replied":
+        stmt = stmt.where(EmailThread.last_inbound_at.is_not(None))
     stmt = stmt.order_by(EmailThread.last_message_at.desc().nulls_last()).limit(
         min(limit, 500)
     )
