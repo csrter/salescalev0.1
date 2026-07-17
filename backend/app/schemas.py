@@ -1345,6 +1345,23 @@ def _valid_send_days(v):
     return sorted(set(v))
 
 
+def _valid_campaign_timezone(v):
+    """Normalize a campaign send-window timezone to a canonical IANA name,
+    mapping common abbreviations (MST/EST/…). Rejects anything zoneinfo can't
+    resolve — a save that stored an unloadable zone used to silently fall back
+    to UTC and send at the wrong hour. None passes through (PATCH: unchanged)."""
+    if v is None:
+        return v
+    from .services import timezones
+
+    canonical = timezones.normalize(v)
+    if canonical is None:
+        raise ValueError(
+            f"unknown timezone {v!r} — use an IANA name like 'America/Phoenix'"
+        )
+    return canonical
+
+
 class EmailCampaignIn(BaseModel):
     name: str = Field(min_length=1, max_length=200)
     # Sending pool: either the legacy single account_id or account_ids (1-10,
@@ -1370,6 +1387,11 @@ class EmailCampaignIn(BaseModel):
     @classmethod
     def _days(cls, v):
         return _valid_send_days(v)
+
+    @field_validator("timezone")
+    @classmethod
+    def _tz(cls, v):
+        return _valid_campaign_timezone(v)
 
     @model_validator(mode="after")
     def _pool(self):
@@ -1402,6 +1424,11 @@ class EmailCampaignPatch(BaseModel):
     @classmethod
     def _days(cls, v):
         return _valid_send_days(v)
+
+    @field_validator("timezone")
+    @classmethod
+    def _tz(cls, v):
+        return _valid_campaign_timezone(v)
 
     @field_validator("account_ids")
     @classmethod
@@ -1525,6 +1552,11 @@ class SmsCampaignIn(BaseModel):
     def _days(cls, v):
         return _valid_send_days(v)
 
+    @field_validator("timezone")
+    @classmethod
+    def _tz(cls, v):
+        return _valid_campaign_timezone(v)
+
 
 class SmsCampaignPatch(BaseModel):
     name: Optional[str] = Field(default=None, min_length=1, max_length=200)
@@ -1542,6 +1574,11 @@ class SmsCampaignPatch(BaseModel):
     @classmethod
     def _days(cls, v):
         return _valid_send_days(v)
+
+    @field_validator("timezone")
+    @classmethod
+    def _tz(cls, v):
+        return _valid_campaign_timezone(v)
 
 
 class SmsStepIn(BaseModel):

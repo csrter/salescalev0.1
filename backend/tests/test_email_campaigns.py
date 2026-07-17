@@ -880,6 +880,29 @@ def test_warmup_received_hook_records_receipt(cc_org, api, probe_ok):
 # --- activation gates -------------------------------------------------------
 
 
+def test_campaign_timezone_validated_and_canonicalized(cc_org, api, probe_ok):
+    acct = _mk_account(cc_org, api, from_email="tz@campaignco.com")
+    # A common abbreviation is accepted and stored as a canonical IANA zone
+    # (so _tz resolves it instead of silently falling back to UTC → the Q2
+    # CPA "not sending" bug).
+    camp = _mk_campaign(cc_org, api, acct["id"], timezone="MST", **_ALWAYS)
+    assert camp["timezone"] == "America/Denver"
+    # Garbage is rejected at save, not silently swallowed.
+    r = api.post(
+        "/api/email-outreach/campaigns",
+        json={"name": "Bad TZ", "account_id": acct["id"], "timezone": "Narnia/Cair"},
+        headers=cc_org["headers"],
+    )
+    assert r.status_code == 422, r.text
+    # PATCH validates too.
+    bad = api.patch(
+        f"/api/email-outreach/campaigns/{camp['id']}",
+        json={"timezone": "not-a-zone"},
+        headers=cc_org["headers"],
+    )
+    assert bad.status_code == 422, bad.text
+
+
 def test_activate_requires_steps_and_mailing_address(cc_org, api, probe_ok):
     acct = _mk_account(cc_org, api, from_email="act@campaignco.com")
     camp = _mk_campaign(cc_org, api, acct["id"], **_ALWAYS)

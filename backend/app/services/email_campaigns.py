@@ -30,7 +30,6 @@ Time & window rules (documented, internally consistent):
 import datetime as dt
 import logging
 from typing import List, Optional
-from zoneinfo import ZoneInfo
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -65,6 +64,7 @@ from ..models.email_outreach import (
 )
 from . import email_outreach_send as gateway
 from . import email_outreach_sync, email_personalize, email_verification, email_warmup
+from . import timezones
 
 log = logging.getLogger("salescale.email_outreach")
 
@@ -157,10 +157,10 @@ def enroll_contacts(
 
 
 def _tz(campaign: EmailCampaign):
-    try:
-        return ZoneInfo(campaign.timezone or "UTC")
-    except Exception:
-        return dt.timezone.utc
+    # Tolerates legacy abbreviations ("MST") stored before save-time
+    # validation existed — resolve() maps them and only UTC-falls-back
+    # (logged) on the truly unresolvable. See services/timezones.
+    return timezones.resolve(campaign.timezone)
 
 
 def _next_valid_send_time(

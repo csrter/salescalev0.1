@@ -40,7 +40,6 @@ import json
 import logging
 import re
 from typing import List, Optional
-from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -65,6 +64,7 @@ from . import ai_insights, ai_provider
 from . import email_personalize  # reused for token rendering (regex + casing/tidy)
 from . import sms_consent
 from . import sms_send as gateway
+from . import timezones
 
 log = logging.getLogger("salescale.sms_outreach")
 
@@ -391,10 +391,10 @@ def enroll_contacts(
 
 
 def _tz(campaign: SmsCampaign):
-    try:
-        return ZoneInfo(campaign.timezone or "America/New_York")
-    except Exception:
-        return dt.timezone.utc
+    # Legacy-abbreviation tolerant (see services/timezones). Critically for
+    # SMS: quiet-hours (TCPA) are evaluated in this zone — a silent UTC
+    # fallback could text outside 8am-9pm local.
+    return timezones.resolve(campaign.timezone or "America/New_York")
 
 
 def _aware(value: dt.datetime) -> dt.datetime:
