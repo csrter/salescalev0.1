@@ -187,14 +187,33 @@ class _FakeResp:
         return self._payload
 
 
+def _bb_account():
+    return SmsAccount(
+        provider="bluebubbles",
+        account_sid="bluebubbles",
+        name="x",
+        relay_url="https://relay.example.com",
+    )
+
+
+def _avail_get(available):
+    """Fake the handle/availability GET the send now does to resolve service."""
+
+    def _get(url, params=None, timeout=None):
+        assert "availability" in url
+        return _FakeResp(200, {"status": 200, "data": {"available": available}})
+
+    return _get
+
+
 def test_bluebubbles_first_message_creates_chat_when_missing(monkeypatch):
-    """A first-ever message to a recipient 500s with 'Chat does not exist!' on
-    message/text; the transport must fall back to chat/new and succeed, instead
-    of surfacing a hard FAILED."""
+    """A first-ever message to an iMessage recipient 500s with 'Chat does not
+    exist!' on message/text; the transport must fall back to chat/new and
+    succeed, instead of surfacing a hard FAILED."""
     calls = []
 
     def _fake_post(url, params=None, json=None, timeout=None):
-        calls.append(url)
+        calls.append((url, json.get("chatGuid") or (json.get("service"), json.get("addresses"))))
         if url.endswith("/message/text"):
             return _FakeResp(
                 500,
@@ -205,25 +224,47 @@ def test_bluebubbles_first_message_creates_chat_when_missing(monkeypatch):
                 },
             )
         if url.endswith("/chat/new"):
+            assert json["service"] == "iMessage"
             return _FakeResp(
                 200,
                 {"status": 200, "data": {"messages": [{"guid": "NEWCHAT_guid"}]}},
             )
         raise AssertionError(f"unexpected url {url}")
 
+    monkeypatch.setattr(gateway.httpx, "get", _avail_get(True))
     monkeypatch.setattr(gateway.httpx, "post", _fake_post)
-    acct = SmsAccount(
-        provider="bluebubbles",
-        account_sid="bluebubbles",
-        name="x",
-        relay_url="https://relay.example.com",
-        auth_token_encrypted=None,
-    )
     monkeypatch.setattr(gateway, "decrypt_secret", lambda s: "pw")
-    guid, code, detail = gateway._bluebubbles_send(acct, "+14805559999", "hi")
+    guid, code, detail = gateway._bluebubbles_send(_bb_account(), "+14805559999", "hi")
     assert guid == "NEWCHAT_guid" and code is None and detail is None
-    assert any(u.endswith("/message/text") for u in calls)
-    assert any(u.endswith("/chat/new") for u in calls)
+    assert any(u.endswith("/message/text") for u, _ in calls)
+    assert any(u.endswith("/chat/new") for u, _ in calls)
+
+
+def test_bluebubbles_non_imessage_number_routes_as_sms(monkeypatch):
+    """A number not registered on iMessage is sent via service SMS (green
+    bubble through the Mac's Text Message Forwarding), not iMessage."""
+    seen = {}
+
+    def _fake_post(url, params=None, json=None, timeout=None):
+        if url.endswith("/message/text"):
+            seen["guid"] = json["chatGuid"]
+            return _FakeResp(
+                500,
+                {"status": 500, "message": "Message Send Error",
+                 "error": {"message": "Chat does not exist!"}},
+            )
+        if url.endswith("/chat/new"):
+            seen["service"] = json["service"]
+            return _FakeResp(200, {"status": 200, "data": {"messages": [{"guid": "SMS_guid"}]}})
+        raise AssertionError(url)
+
+    monkeypatch.setattr(gateway.httpx, "get", _avail_get(False))  # NOT on iMessage
+    monkeypatch.setattr(gateway.httpx, "post", _fake_post)
+    monkeypatch.setattr(gateway, "decrypt_secret", lambda s: "pw")
+    guid, code, detail = gateway._bluebubbles_send(_bb_account(), "+14805559999", "hi")
+    assert guid == "SMS_guid" and code is None
+    assert seen["guid"] == "SMS;-;+14805559999"
+    assert seen["service"] == "SMS"
 
 
 def test_bluebubbles_send_surfaces_specific_error_not_generic(monkeypatch):
@@ -240,15 +281,10 @@ def test_bluebubbles_send_surfaces_specific_error_not_generic(monkeypatch):
             },
         )
 
+    monkeypatch.setattr(gateway.httpx, "get", _avail_get(True))
     monkeypatch.setattr(gateway.httpx, "post", _fake_post)
     monkeypatch.setattr(gateway, "decrypt_secret", lambda s: "pw")
-    acct = SmsAccount(
-        provider="bluebubbles",
-        account_sid="bluebubbles",
-        name="x",
-        relay_url="https://relay.example.com",
-    )
-    guid, code, detail = gateway._bluebubbles_send(acct, "+14805559999", "hi")
+    guid, code, detail = gateway._bluebubbles_send(_bb_account(), "+14805559999", "hi")
     assert guid == "" and code == "500" and detail == "Some other reason"
 
 

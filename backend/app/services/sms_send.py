@@ -384,22 +384,45 @@ def _bb_chat_missing(resp, payload: dict) -> bool:
     return "chat does not exist" in text.lower()
 
 
+def _bluebubbles_resolve_service(base: str, pw: str, to_number: str) -> str:
+    """iMessage where the number is registered, SMS otherwise. Cold-outreach
+    lists are mostly plain cell numbers (not on iMessage); with Text Message
+    Forwarding enabled on the host Mac (a paired iPhone), BlueBubbles sends
+    those as green-bubble SMS via service 'SMS'. On any lookup failure we
+    default to iMessage (the premium attempt) rather than silently downgrading
+    everyone during a transient blip."""
+    try:
+        resp = httpx.get(
+            f"{base}/api/v1/handle/availability/imessage",
+            params={"password": pw, "address": to_number},
+            timeout=12,
+        )
+    except httpx.HTTPError:
+        return "iMessage"
+    if resp.status_code // 100 == 2:
+        available = (_bb_json(resp).get("data") or {}).get("available")
+        return "iMessage" if available else "SMS"
+    return "iMessage"
+
+
 def _bluebubbles_send(
     account: SmsAccount, to_number: str, body: str
 ) -> Tuple[str, Optional[str], Optional[str]]:
-    """Send via the org's BlueBubbles relay. For an EXISTING conversation we
-    POST message/text with the chat guid so follow-up steps stay threaded; for
-    a first-time recipient that chat doesn't exist yet (BlueBubbles 500s with
-    'Chat does not exist!'), so we fall back to chat/new which creates the
-    conversation AND sends the opener in one call. Returns (message guid,
-    error_code, error_detail). Raises SmsProviderError on a network-level
+    """Send via the org's BlueBubbles relay. The recipient's service (iMessage
+    vs green-bubble SMS) is resolved first, so the chat guid uses the right
+    service. For an EXISTING conversation we POST message/text (follow-up steps
+    stay threaded); for a first-time recipient that chat doesn't exist yet
+    (BlueBubbles 500s 'Chat does not exist!'), we fall back to chat/new which
+    creates the conversation AND sends the opener in one call. Returns (message
+    guid, error_code, error_detail). Raises SmsProviderError on a network-level
     failure talking to the relay."""
     base = (account.relay_url or "").rstrip("/")
     if not base:
         return "", "config", "No relay URL configured"
     pw = decrypt_secret(account.auth_token_encrypted or "")
+    service = _bluebubbles_resolve_service(base, pw, to_number)
     data = {
-        "chatGuid": f"iMessage;-;{to_number}",
+        "chatGuid": f"{service};-;{to_number}",
         "tempGuid": str(uuid.uuid4()),
         "message": body,
         "method": "private-api",
@@ -418,7 +441,7 @@ def _bluebubbles_send(
         d = payload.get("data") or {}
         return d.get("guid") or data["tempGuid"], None, None
     if _bb_chat_missing(resp, payload):
-        return _bluebubbles_create_chat_send(base, pw, to_number, body)
+        return _bluebubbles_create_chat_send(base, pw, to_number, body, service)
     return (
         "",
         str(payload.get("status") or resp.status_code),
@@ -427,17 +450,18 @@ def _bluebubbles_send(
 
 
 def _bluebubbles_create_chat_send(
-    base: str, pw: str, to_number: str, body: str
+    base: str, pw: str, to_number: str, body: str, service: str = "iMessage"
 ) -> Tuple[str, Optional[str], Optional[str]]:
-    """POST {relay}/api/v1/chat/new — creates the iMessage conversation and
-    sends the first message. Only reachable for iMessage-registered numbers;
-    a non-iMessage number (no SMS-forwarding on the host Mac) still fails here,
-    which is a recipient-reachability fact, not a transport bug."""
+    """POST {relay}/api/v1/chat/new — creates the conversation and sends the
+    first message on the resolved service. An iMessage attempt to a non-iMessage
+    number, or an SMS attempt on a Mac without Text Message Forwarding, still
+    fails here — a recipient-reachability / host-setup fact, not a transport
+    bug — and surfaces the relay's own reason."""
     data = {
         "addresses": [to_number],
         "message": body,
         "method": "private-api",
-        "service": "iMessage",
+        "service": service,
     }
     try:
         resp = httpx.post(
