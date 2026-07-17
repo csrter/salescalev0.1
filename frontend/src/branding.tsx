@@ -100,6 +100,7 @@ export function BrandingSettings() {
         colors: form.colors,
         email_from_name: form.email_from_name || null,
         email_from_address: form.email_from_address || null,
+        mailing_address: form.mailing_address || null,
         apply_to_team: form.apply_to_team,
       };
       if (form.product_name.trim()) body.product_name = form.product_name.trim();
@@ -169,7 +170,7 @@ export function BrandingSettings() {
         <div className="set-form">
           <Field label="Product name">
             <input
-              value={form.product_name}
+              value={form.product_name ?? ""}
               maxLength={100}
               onChange={(e) => set({ product_name: e.target.value })}
             />
@@ -300,6 +301,18 @@ export function BrandingSettings() {
           <p className="set-footnote">
             Client-facing email uses this sender once the domain is verified
             with the email provider; otherwise it falls back to the default.
+          </p>
+          <Field label="Mailing address">
+            <input
+              placeholder="123 Main St, Suite 200, Phoenix, AZ 85004"
+              value={form.mailing_address ?? ""}
+              onChange={(e) => set({ mailing_address: e.target.value || null })}
+            />
+          </Field>
+          <p className="set-footnote">
+            Your organization's physical postal address. Required by CAN-SPAM
+            and appended to the footer of every cold-email send — you can't
+            activate a campaign without it. Not shown to clients.
           </p>
         </div>
       </section>

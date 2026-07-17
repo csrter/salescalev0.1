@@ -410,6 +410,8 @@ export interface OrgBranding {
   colors: Record<string, string>;
   email_from_name: string | null;
   email_from_address: string | null;
+  /** Postal address for the cold-email CAN-SPAM footer (required to send). */
+  mailing_address: string | null;
   apply_to_team: boolean;
 }
 
