@@ -589,7 +589,7 @@ export function GuaranteeWidget({
               className={`dash-progress-fill ${
                 data.met || data.on_pace ? "" : "dash-progress-fill--behind"
               }`.trim()}
-              style={{ width: `${Math.min(data.pct_of_target * 100, 100)}%` }}
+              style={{ transform: `scaleX(${Math.min(data.pct_of_target, 1)})` }}
             />
             <div
               className="dash-progress-pace"

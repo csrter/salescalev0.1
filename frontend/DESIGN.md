@@ -21,7 +21,61 @@
    `npm run build` in frontend/ to verify.
 -->
 
-# Salescale UI Revamp — Final Design Spec (v2, "Deep Cobalt")
+# Salescale UI — Design Spec (v3, "Schematic", on the v2 "Deep Cobalt" base)
+
+<!-- ======================================================================
+v3 "SCHEMATIC" (2026-07-16) — the shipped direction. Supersedes v2's visual
+register wherever they disagree; v2's information-design rules (density
+toggle, keyboard tables, staged-write receipts, grep gate, chart palette,
+white-label derivation) all still stand.
+
+WHY: the v2 register (glass, gradient pills, Inter, pebble radii) is the
+default look of every AI SaaS. Schematic makes the product read as what it
+is — the working drawing of a client's ad operation. Navy/cobalt IS
+blueprint coloring; the UI becomes a precision technical document /
+instrument panel. Unique, tech-forward, brand-first.
+
+THE REGISTER (all shipped):
+1. TYPE — IBM Plex Sans (UI) + IBM Plex Mono (EVERY number, ID, micro-label,
+   table caption, badge; tabular-nums). Self-hosted woff2 in public/fonts
+   via styles/fonts.css (~140KB latin, font-display swap, preloaded in
+   index.html). --font-sans/--font-mono point at Plex.
+2. PAPER, NOT GLASS — canvas is drafting paper: --grid-line/--grid-size
+   drawn by base.css on body (brand-derived, so tenants repaint it).
+   Resting surfaces are FLAT: --shadow-xs/sm are none; separation is
+   hairline borders. Floating layers only (dialog/drawer/toast/palette/
+   topbar-on-scroll) keep shadows and are "vellum" — near-opaque
+   (92–97%), 6px blur, hairline edge.
+3. DRAWN CORNERS — radii ramp 2/3/4/6px. .card carries corner registration
+   ticks (--tick-ink/--tick-len; ::before top-left, ::after bottom-right).
+   Ticks appear on primary containers only — never rows, never nested.
+4. STAMPED MICRO-TYPE — badges are square mono uppercase tags; table
+   thead is mono uppercase with a strong hairline; section titles are
+   numbered drawing labels ("01 / VOLUME OVER TIME": per-view CSS counter,
+   mono overline, hairline rule fill); KPI = engraved mono label +
+   tabular mono readout. --tracking-caps is 0.08em.
+5. COBALT AS INK — accent draws lines, hairlines, selected states
+   (8–16% wash + accent hairline). NO side-tab borders, NO gradient pills,
+   NO glow. Avatar/identity discs are solid accent.
+6. MECHANICAL MOTION — --ease-spring is a crisp quint-out (no overshoot
+   anywhere); durations unchanged; reduced-motion still zeroes all.
+7. AUTH = THE SHEET — login aside is a night-blueprint panel: header
+   gradient + drafting grid + ONE drawn registration crosshair; the card
+   is flat vellum with corner ticks. Aurora is retired from shipped
+   surfaces (tokens remain defined for now; do not reintroduce).
+8. PROCEDURE SHEETS — campaign step editors: square mono step chips,
+   ruled step heads, dotted connector rail threaded between steps;
+   token hints render as mono spec-sheet blocks.
+
+Hard constraints UNCHANGED from v2: literal values only in theme.css
+(grep gate); six frozen BRAND_VAR_MAP names; light-dark() + data-theme
+mechanism; zero new npm runtime deps (self-hosted fonts are assets, not
+deps); a11y (focus ring, contrast, 11px mono only for micro-labels).
+The v2 spec below remains the reference for structure/components; read
+its visual values through the v3 register above.
+====================================================================== -->
+
+## v2 spec (historical base) follows
 
 **Direction:** Deep Cobalt — Refined Evolution (winner, 2 of 3 judges), with grafts adopted from Ledger (density toggle, keyboard Arrange mode, change-receipt detail, grep gate, `--chart-prior`, live status tick, visible keyboard chrome) and Aurora (Cancel-first confirm focus, branding live preview, `--ink-on-field` tokens, gradient hero number, `.card--hero` masthead, aurora scoped to selling surfaces).
 

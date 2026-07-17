@@ -1293,7 +1293,7 @@ function StepsEditor({
     ]);
 
   return (
-    <div>
+    <div className="eml-steps">
       <p className="eml-tokens">{TOKENS_HINT}</p>
       {steps.length === 0 && (
         <EmptyState title="No steps yet">

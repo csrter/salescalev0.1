@@ -1279,7 +1279,7 @@ function StepsEditor({
     ]);
 
   return (
-    <div>
+    <div className="sms-steps">
       <p className="sms-tokens">{TOKENS_HINT}</p>
       {steps.length === 0 && (
         <EmptyState title="No steps yet">

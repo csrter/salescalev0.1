@@ -17,7 +17,10 @@
   grid-template-columns: minmax(420px, 48%) 1fr;
 }
 
-/* ---- aurora aside (tenant-branded automatically via --aurora-field) ------ */
+/* ---- night-blueprint aside — deep navy sheet + drafting grid + one drawn
+        registration crosshair. Dark in both themes (it is chrome). The grid
+        and crosshair derive from --accent so a tenant rebrand repaints the
+        blueprint. Replaces the old aurora field. --------------------------- */
 
 .auth-aside {
   position: relative;
@@ -27,27 +30,55 @@
   gap: var(--space-5);
   padding: clamp(var(--space-8), 6vw, var(--space-16));
   color: var(--ink-on-field);
-  background: var(--aurora-field);
+  /* flat --header gradient base overlaid by the reused drafting-grid pattern
+     (cobalt hairlines on navy paper) */
+  background:
+    linear-gradient(
+        color-mix(in srgb, var(--accent) 12%, transparent) 1px,
+        transparent 1px
+      ),
+    linear-gradient(
+        90deg,
+        color-mix(in srgb, var(--accent) 12%, transparent) 1px,
+        transparent 1px
+      ),
+    linear-gradient(160deg, var(--header-start), var(--header-end));
+  background-size:
+    var(--grid-size) var(--grid-size),
+    var(--grid-size) var(--grid-size),
+    auto;
   overflow: hidden;
 }
 
-/* Optional drift — decorative garnish only; the static field is the design.
-   Double-gated: media query + the token itself zeroes under reduced motion. */
-@media (prefers-reduced-motion: no-preference) {
-  .auth-aside {
-    background-size: 160% 160%;
-    animation: auth-aurora-drift var(--dur-ambient) ease-in-out infinite
-      alternate;
-  }
+/* The single drawn element: a large faint registration crosshair built purely
+   from hairlines — a ringed target with a vertical + horizontal cross. */
+.auth-aside::after {
+  content: "";
+  position: absolute;
+  right: calc(-1 * var(--space-16));
+  bottom: calc(-1 * var(--space-16));
+  width: 340px;
+  height: 340px;
+  border: 1px solid color-mix(in srgb, var(--accent) 22%, transparent);
+  border-radius: var(--radius-full);
+  background:
+    linear-gradient(
+        color-mix(in srgb, var(--accent) 22%, transparent),
+        color-mix(in srgb, var(--accent) 22%, transparent)
+      )
+      center / 1px 100% no-repeat,
+    linear-gradient(
+        color-mix(in srgb, var(--accent) 22%, transparent),
+        color-mix(in srgb, var(--accent) 22%, transparent)
+      )
+      center / 100% 1px no-repeat;
+  pointer-events: none;
 }
 
-@keyframes auth-aurora-drift {
-  from {
-    background-position: 0% 0%;
-  }
-  to {
-    background-position: 100% 100%;
-  }
+/* Keep the copy above the drawn registration crosshair. */
+.auth-aside > * {
+  position: relative;
+  z-index: 1;
 }
 
 .auth-brand {
@@ -98,9 +129,11 @@
   content: none;
 }
 
+/* Tick glyphs read as drawn accent marks (lifted toward white so any tenant
+   hue stays legible on the dark blueprint). */
 .auth-points li svg {
   flex: none;
-  color: var(--ink-on-field);
+  color: color-mix(in oklab, var(--accent) 60%, white);
 }
 
 /* ---- right panel: SOLID card -------------------------------------------- */
@@ -112,7 +145,10 @@
   padding: var(--space-8) var(--space-4);
 }
 
+/* The sheet: flat vellum, hairline border, sharp radius, corner registration
+   ticks (the ui.css .card recipe) — no resting shadow. */
 .auth-card {
+  position: relative;
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
@@ -125,8 +161,30 @@
   backdrop-filter: none;
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-lg);
   color: var(--ink);
+}
+
+.auth-card::before,
+.auth-card::after {
+  content: "";
+  position: absolute;
+  width: var(--tick-len);
+  height: var(--tick-len);
+  pointer-events: none;
+}
+
+.auth-card::before {
+  top: -1px;
+  left: -1px;
+  border-top: 1px solid var(--tick-ink);
+  border-left: 1px solid var(--tick-ink);
+}
+
+.auth-card::after {
+  bottom: -1px;
+  right: -1px;
+  border-bottom: 1px solid var(--tick-ink);
+  border-right: 1px solid var(--tick-ink);
 }
 
 .auth-card h1 {
@@ -192,7 +250,15 @@
   display: grid;
   place-items: center;
   padding: var(--space-6);
-  background: var(--aurora-wash), var(--bg);
+  /* drafting-grid paper (base.css body recipe), replacing the aurora wash */
+  background:
+    linear-gradient(var(--grid-line) 1px, transparent 1px),
+    linear-gradient(90deg, var(--grid-line) 1px, transparent 1px),
+    var(--bg);
+  background-size:
+    var(--grid-size) var(--grid-size),
+    var(--grid-size) var(--grid-size),
+    auto;
 }
 
 .auth-center .auth-card {
@@ -213,7 +279,15 @@
   align-items: flex-start;
   justify-content: center;
   padding: var(--space-12) var(--space-6);
-  background: var(--aurora-wash), var(--bg);
+  /* drafting-grid paper, replacing the aurora wash */
+  background:
+    linear-gradient(var(--grid-line) 1px, transparent 1px),
+    linear-gradient(90deg, var(--grid-line) 1px, transparent 1px),
+    var(--bg);
+  background-size:
+    var(--grid-size) var(--grid-size),
+    var(--grid-size) var(--grid-size),
+    auto;
 }
 
 .mfa-gate-inner {
@@ -247,6 +321,14 @@
 
   .auth-panel-wrap {
     min-height: 100vh;
-    background: var(--aurora-wash), var(--bg);
+    /* drafting-grid paper, replacing the aurora wash */
+    background:
+      linear-gradient(var(--grid-line) 1px, transparent 1px),
+      linear-gradient(90deg, var(--grid-line) 1px, transparent 1px),
+      var(--bg);
+    background-size:
+      var(--grid-size) var(--grid-size),
+      var(--grid-size) var(--grid-size),
+      auto;
   }
 }

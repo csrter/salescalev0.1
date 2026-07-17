@@ -1753,6 +1753,55 @@ live activation + the entitlement flip, the Outreach module build
       findings triaged: warmup + enrich progress bars converted to scaleX;
       pre-existing --ease-spring token and the tiny guarantee progress-fill
       width transition left as documented/contained design choices.
+- [x] "Schematic" UI identity (2026-07-16, same-day follow-up to the
+      cobalt rebrand; user-directed: "fully unique, not the typical AI SaaS
+      UI"): the whole product re-registered as a precision technical
+      document / instrument panel — navy+cobalt read as blueprint coloring.
+      Frontend-only (+ index.html font preloads); NO backend changes, NO
+      migrations, NOT yet deployed. Spec: DESIGN.md v3 header (supersedes
+      v2's visual register; v2 information-design rules stand). Core (main
+      session): IBM Plex Sans/Mono self-hosted (public/fonts + styles/
+      fonts.css, ~140KB, loaded before theme.css); theme.css pivot — radii
+      2/3/4/6px, shadow-xs/sm=none (hairlines separate resting surfaces;
+      floats keep shadows), glass→"vellum" (92–97% opacity, 6px blur),
+      --grid-line/--grid-size drafting-grid canvas (drawn by base.css body,
+      brand-derived so tenants repaint), --tick-ink/--tick-len corner
+      registration marks, --tracking-caps 0.08em, --ease-spring→crisp
+      quint-out (no overshoot anywhere); ui.css primitives — .card corner
+      ticks, .kpi mono engraved label + tabular mono readout (hero gradient
+      text REMOVED), .badge square mono uppercase stamp, thead mono
+      captions + td.align-right mono tabular, toast/confirm-dialog side-tab
+      borders → tone on the full hairline (the "AI SaaS tell" killed
+      everywhere; clients.css .cl-tree-panel side-tab + .cl-avatar gradient
+      too). Three-Opus-agent fan-out on a pinned contract (scratchpad
+      SCHEMATIC_CONTRACT.md): shell/auth agent — nav pill squared to
+      accent-16% wash + accent hairline, mono section heads, sidebar-foot
+      mono "title block" org label, mono breadcrumb-current, auth aurora →
+      night-blueprint sheet (header gradient + drafting grid + ONE drawn
+      registration crosshair, @keyframes aurora deleted), login card flat
+      vellum + corner ticks, Plex preloads in index.html (App.css
+      deliberately untouched — its shell/auth rules are dead layer(legacy)
+      duplicates; live selectors are shell.css/auth.css); workspace agent —
+      dashboard widget titles = numbered mono drawing labels (CSS counters
+      on .dash-grid), guarantee progress → scaleX + mono numerals, kanban
+      lane hairline rules, drawer dotted label→value leaders (pure CSS
+      dt::after) + corner ticks, enrichment card hairline + mono percent
+      readout; outreach/settings agent — numbered "01 /" section labels
+      IDENTICALLY in eml/sms/or scopes (counter + mono overline + hairline
+      rule fill), campaign step editors = procedure sheets (square mono
+      step chips, ruled heads, dotted connector rail on .eml-steps/
+      .sms-steps wrappers — className-only TSX hooks), inbox unread =
+      inset accent edge + mono NEW stamp, TOKENS_HINT → mono spec-sheet
+      blocks, settings .set-plan aurora + branding-preview gradient →
+      tokens. Frozen white-label contract, light-dark() mechanism, chart
+      palette, and all component behavior untouched; changed-file grep = 0
+      literal colors outside theme.css. tsc clean, vite build green
+      (chunk split intact), live click-through on alt2 in BOTH themes
+      (light "drafting paper" + dark "night blueprint": login crosshair
+      sheet, CRM lanes/stamps/mono captions, campaign procedure steps +
+      spec-sheet token hints all verified; zero console errors). Aurora
+      tokens remain defined in theme.css but unused on shipped surfaces —
+      candidates for deletion in a future sweep.
 - [ ] Stripe live activation + entitlement flip (after 12–14, so real
       limits land everywhere in one pass)
 - [ ] Outreach module build (dev-mode) — go-live gated on Meta App

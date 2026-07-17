@@ -7,6 +7,11 @@
 
 /* ---- shell: banner + subnav + usage chip -------------------------------- */
 
+/* Numbered drawing-label scope: each .eml-section reads as a titled sheet. */
+.eml {
+  counter-reset: eml-sec;
+}
+
 .eml-banner {
   margin-bottom: var(--space-4);
 }
@@ -29,14 +34,16 @@
   color: var(--ink-soft);
   padding: var(--space-1) var(--space-3);
   border: 1px solid var(--border);
-  border-radius: var(--radius-full);
+  border-radius: var(--radius-sm);
   background: var(--surface);
   white-space: nowrap;
 }
 
 .eml-usage strong {
   color: var(--ink);
-  font-weight: var(--weight-semibold);
+  font-weight: var(--weight-medium);
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
 }
 
 .eml-usage--over {
@@ -101,14 +108,33 @@
 }
 
 .eml-section {
+  counter-increment: eml-sec;
   margin-top: var(--space-6);
 }
 
 .eml-section-title {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
   margin: 0 0 var(--space-3);
-  font-size: var(--text-lg);
-  font-weight: var(--weight-semibold);
-  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-medium);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-caps);
+  color: var(--ink-faint);
+}
+
+.eml-section-title::before {
+  content: counter(eml-sec, decimal-leading-zero) " / ";
+  color: var(--accent-ink);
+  font-weight: var(--weight-medium);
+}
+
+.eml-section-title::after {
+  content: "";
+  flex: 1;
+  border-top: 1px solid var(--border);
 }
 
 /* ---- mailbox health strip ----------------------------------------------- */
@@ -192,10 +218,17 @@
   color: var(--ink);
 }
 
+/* Personalization tokens read as a mono spec sheet, not prose. */
 .eml-tokens {
   margin: 0 0 var(--space-4);
-  font-size: var(--text-sm);
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
   color: var(--ink-soft);
+  line-height: var(--leading-normal);
 }
 
 .eml-tokens code {
@@ -203,7 +236,8 @@
   font-size: var(--text-xs);
   padding: 1px 5px;
   border-radius: var(--radius-xs);
-  background: var(--surface);
+  background: var(--card);
+  border: 1px solid var(--border);
   color: var(--ink);
 }
 
@@ -223,7 +257,26 @@
   margin-bottom: var(--space-4);
 }
 
+/* Procedure sheet: a dotted rule threads the numbered step chips together.
+   Drawn on the wrapper so it only shows through the gaps between step cards
+   (the solid --card steps paint over it), and never touches the cards' own
+   corner registration ticks. */
+.eml-steps {
+  position: relative;
+}
+
+.eml-steps::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: calc(var(--space-6) + 11px);
+  border-left: 1px dotted var(--border-strong);
+  pointer-events: none;
+}
+
 .eml-step {
+  position: relative;
   margin-bottom: var(--space-3);
   display: flex;
   flex-direction: column;
@@ -234,10 +287,17 @@
   display: flex;
   align-items: center;
   gap: var(--space-2);
+  padding-bottom: var(--space-3);
+  border-bottom: 1px solid var(--border);
 }
 
 .eml-step-title {
-  font-weight: var(--weight-semibold);
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-medium);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-caps);
+  color: var(--ink-soft);
 }
 
 .eml-step-actions {
@@ -439,8 +499,23 @@
   font-weight: var(--weight-medium);
 }
 
+/* Unread: a drawn accent edge + a mono "NEW" stamp — no glow. */
+.eml-thread-item--unread {
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
 .eml-thread-item--unread .eml-thread-name {
   font-weight: var(--weight-semibold);
+}
+
+.eml-thread-item--unread .eml-thread-name::after {
+  content: "NEW";
+  flex: none;
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-medium);
+  letter-spacing: var(--tracking-caps);
+  color: var(--accent-ink);
 }
 
 .eml-thread-name > span:first-child {
@@ -513,7 +588,7 @@
 .eml-msg {
   max-width: 82%;
   padding: var(--space-2) var(--space-3);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-sm);
   font-size: var(--text-sm);
 }
 
@@ -644,7 +719,7 @@
 
 .eml-warmup-bar {
   height: 6px;
-  border-radius: var(--radius-full);
+  border-radius: var(--radius-xs);
   background: var(--surface);
   border: 1px solid var(--border);
   overflow: hidden;
@@ -653,7 +728,7 @@
 .eml-warmup-fill {
   height: 100%;
   width: 100%;
-  border-radius: var(--radius-full);
+  border-radius: 0;
   background: var(--accent);
   transform-origin: left;
   transition: transform var(--dur-med) var(--ease-out);
@@ -668,7 +743,9 @@
   align-items: center;
   justify-content: space-between;
   gap: var(--space-2);
+  font-family: var(--font-mono);
   font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
   color: var(--ink-soft);
 }
 

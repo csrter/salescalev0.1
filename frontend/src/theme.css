@@ -31,9 +31,11 @@
 :root {
   color-scheme: light dark;
 
-  /* ---- typography (px for Electron determinism) ---------------------- */
-  --font-sans: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
-  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  /* ---- typography (px for Electron determinism) ----------------------
+     Schematic: IBM Plex Sans carries UI text; IBM Plex Mono carries every
+     number, code, ID and micro-label (self-hosted in styles/fonts.css). */
+  --font-sans: "IBM Plex Sans", "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 
   --text-2xs: 11px;   /* table meta, axis ticks, kbd, overlines */
   --text-xs: 12px;    /* badges, captions, breadcrumb, deltas */
@@ -53,7 +55,7 @@
   --weight-semibold: 600;
   --weight-bold: 700;
   --tracking-tight: -0.02em;
-  --tracking-caps: 0.06em;
+  --tracking-caps: 0.08em; /* schematic overlines run wide */
 
   /* ---- spacing (4px base) --------------------------------------------- */
   --space-1: 4px;  --space-2: 8px;   --space-3: 12px; --space-4: 16px;
@@ -66,7 +68,9 @@
   --dur-slow: 0.45s;     /* entrances, skeleton shimmer base */
   --dur-ambient: 40s;    /* login aurora drift — decorative only */
   --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
-  --ease-spring: cubic-bezier(0.3, 1.25, 0.4, 1); /* nav pill slide only */
+  /* Schematic motion is mechanical — no overshoot anywhere. Kept name for
+     compatibility; now a crisp quint-out (nav pill slide only). */
+  --ease-spring: cubic-bezier(0.22, 1, 0.36, 1);
 
   /* ---- navy scale: CHROME ONLY (sidebar, auth aside). NEVER text ink -- */
   --navy-950: #0a1022;
@@ -96,8 +100,21 @@
   --cobalt-soft: var(--accent-soft);
   --amber: #d97706; /* deprecated: use --warn or --chart-3 */
 
+  /* ---- schematic drawing furniture -------------------------------------
+     The canvas is drafting paper: a faint accent-tinted grid (base.css lays
+     it under everything). Ticks are the corner registration marks cards
+     carry. Both derive from brand vars so white-labeling repaints them. */
+  --grid-line: light-dark(
+    color-mix(in srgb, var(--brand-blue) 6%, transparent),
+    color-mix(in srgb, var(--accent) 7%, transparent));
+  --grid-size: 24px;
+  --tick-ink: light-dark(
+    color-mix(in srgb, var(--brand-navy) 30%, transparent),
+    color-mix(in srgb, var(--accent) 45%, transparent));
+  --tick-len: 8px;
+
   /* ---- surfaces -------------------------------------------------------- */
-  --bg: light-dark(#f4f5fa, #0a0d18);
+  --bg: light-dark(#f6f6f3, #0a0f1f);
   --bg-grad-1: light-dark(#ecedfb, #0c1024);
   --bg-grad-2: light-dark(#f7f4fb, #0a0d18);
   --card: light-dark(#ffffff, #151a2e);          /* data surfaces + chart surface */
@@ -106,14 +123,16 @@
   --border: light-dark(#e7e9f2, #262d47);
   --border-strong: light-dark(#d3d7e5, #343c5c);
 
-  /* ---- glass (FLOATING LAYERS ONLY: topbar-on-scroll, drawer, dialog,
-          palette, toast — never on data cards) --------------------------- */
-  --glass-bg: light-dark(rgba(255, 255, 255, 0.66), rgba(21, 26, 46, 0.6));
-  --glass-bg-heavy: light-dark(rgba(255, 255, 255, 0.85), rgba(21, 26, 46, 0.82));
-  --glass-border: light-dark(rgba(255, 255, 255, 0.6), rgba(255, 255, 255, 0.08));
-  --glass-blur: 14px;
-  --glass-highlight: inset 0 1px 0 light-dark(rgba(255, 255, 255, 0.7), rgba(255, 255, 255, 0.06));
-  --scrim: light-dark(rgba(14, 19, 42, 0.42), rgba(4, 6, 14, 0.6));
+  /* ---- vellum (FLOATING LAYERS ONLY: topbar-on-scroll, drawer, dialog,
+          palette, toast — never on data cards). Schematic replaces gauzy
+          glass with near-opaque tracing paper: high opacity, faint blur,
+          hairline edge — floats read as a sheet laid over the drawing. --- */
+  --glass-bg: light-dark(rgba(252, 252, 250, 0.92), rgba(15, 20, 38, 0.92));
+  --glass-bg-heavy: light-dark(rgba(252, 252, 250, 0.97), rgba(15, 20, 38, 0.97));
+  --glass-border: light-dark(rgba(15, 33, 71, 0.14), rgba(255, 255, 255, 0.1));
+  --glass-blur: 6px;
+  --glass-highlight: inset 0 1px 0 light-dark(rgba(255, 255, 255, 0.9), rgba(255, 255, 255, 0.05));
+  --scrim: light-dark(rgba(14, 19, 42, 0.35), rgba(4, 6, 14, 0.55));
 
   /* ---- ink (AA on --bg/--card/glass, both modes) ----------------------- */
   --ink: light-dark(#111530, #e9ecfa);
@@ -169,22 +188,22 @@
   /* ---- density (44px comfortable; [data-density="dense"] → 36px) ------- */
   --row-h: 44px;
 
-  /* ---- radii ramp ------------------------------------------------------ */
-  --radius-xs: 6px;    /* badges, kbd, chips */
-  --radius-sm: 10px;   /* buttons, inputs, nav items, kanban cards */
-  --radius-md: 12px;   /* KPI tiles, popovers, toasts */
-  --radius-lg: 16px;   /* cards, dialogs, drawers */
+  /* ---- radii ramp (Schematic: drawn corners, not pebbles) -------------- */
+  --radius-xs: 2px;    /* badges, kbd, chips */
+  --radius-sm: 3px;    /* buttons, inputs, nav items, kanban cards */
+  --radius-md: 4px;    /* KPI tiles, popovers, toasts */
+  --radius-lg: 6px;    /* cards, dialogs, drawers */
   --radius-full: 999px;
   --radius: var(--radius-lg); /* legacy alias */
 
-  /* ---- elevation ramp -------------------------------------------------- */
-  --shadow-xs: 0 1px 2px light-dark(rgba(16, 21, 48, 0.05), rgba(0, 0, 0, 0.3));
-  --shadow-sm: 0 1px 2px light-dark(rgba(16, 21, 48, 0.06), rgba(0, 0, 0, 0.4)),
-               0 1px 3px light-dark(rgba(16, 21, 48, 0.07), rgba(0, 0, 0, 0.4));
-  --shadow-md: 0 8px 26px light-dark(rgba(16, 21, 48, 0.09), rgba(0, 0, 0, 0.45));
-  --shadow-pop: 0 4px 12px light-dark(rgba(16, 21, 48, 0.10), rgba(0, 0, 0, 0.5)),
-                0 12px 32px light-dark(rgba(16, 21, 48, 0.10), rgba(0, 0, 0, 0.45));
-  --shadow-lg: 0 24px 64px light-dark(rgba(16, 21, 48, 0.18), rgba(0, 0, 0, 0.55));
+  /* ---- elevation ramp (Schematic: paper is FLAT — resting surfaces get a
+          hairline, not a shadow; only floating layers cast) --------------- */
+  --shadow-xs: none;
+  --shadow-sm: none;
+  --shadow-md: 0 2px 10px light-dark(rgba(15, 33, 71, 0.07), rgba(0, 0, 0, 0.35));
+  --shadow-pop: 0 2px 8px light-dark(rgba(15, 33, 71, 0.10), rgba(0, 0, 0, 0.45)),
+                0 10px 28px light-dark(rgba(15, 33, 71, 0.10), rgba(0, 0, 0, 0.4));
+  --shadow-lg: 0 16px 48px light-dark(rgba(15, 33, 71, 0.16), rgba(0, 0, 0, 0.5));
 
   /* ---- focus (one visible ring app-wide; double halo reads on any
           surface). Usage: :focus-visible { outline: none;

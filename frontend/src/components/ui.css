@@ -167,11 +167,37 @@
    ========================================================================== */
 
 .card {
+  position: relative;
   background: var(--card);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-xs);
   padding: var(--space-6);
+}
+
+/* Schematic registration marks: two corner ticks, drawn not decorated.
+   Faint by default so a wall of cards stays quiet. */
+.card::before,
+.card::after {
+  content: "";
+  position: absolute;
+  width: var(--tick-len);
+  height: var(--tick-len);
+  pointer-events: none;
+}
+
+.card::before {
+  top: -1px;
+  left: -1px;
+  border-top: 1px solid var(--tick-ink);
+  border-left: 1px solid var(--tick-ink);
+}
+
+.card::after {
+  bottom: -1px;
+  right: -1px;
+  border-bottom: 1px solid var(--tick-ink);
+  border-right: 1px solid var(--tick-ink);
 }
 
 .card--interactive {
@@ -242,32 +268,29 @@
 }
 
 .kpi-label {
-  font-size: var(--text-sm);
-  color: var(--ink-soft);
+  /* Schematic overline: the instrument's engraved label. */
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-medium);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-caps);
+  color: var(--ink-faint);
 }
 
 .kpi-value {
+  /* Instrument readout: mono, tabular — digits align like a gauge. */
+  font-family: var(--font-mono);
   font-size: var(--text-3xl);
-  font-weight: var(--weight-semibold);
+  font-weight: var(--weight-medium);
   color: var(--ink);
   letter-spacing: var(--tracking-tight);
   line-height: var(--leading-tight);
-  /* proportional figures at display size — never tabular-nums here */
-  font-variant-numeric: normal;
+  font-variant-numeric: tabular-nums;
 }
 
 .kpi--hero .kpi-value {
   font-size: var(--text-hero);
   color: var(--ink);
-}
-
-@supports (background-clip: text) or (-webkit-background-clip: text) {
-  .kpi--hero .kpi-value {
-    background: var(--grad-hero-ink);
-    -webkit-background-clip: text;
-    background-clip: text;
-    color: transparent;
-  }
 }
 
 .kpi-delta {
@@ -302,14 +325,18 @@
    ========================================================================== */
 
 .badge {
+  /* Schematic tag: square, mono, engraved — a stamped label, not a pill. */
   display: inline-flex;
   align-items: center;
   gap: var(--space-1);
   height: 20px;
-  padding: 4px 10px;
-  border-radius: var(--radius-full);
-  font-size: var(--text-xs);
+  padding: 4px 8px;
+  border-radius: var(--radius-xs);
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
   font-weight: var(--weight-medium);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-caps);
   line-height: var(--leading-tight);
   white-space: nowrap;
   background: var(--surface);
@@ -619,8 +646,9 @@ input[type="radio"].input {
   background: var(--glass-bg-heavy);
   -webkit-backdrop-filter: blur(var(--glass-blur));
   backdrop-filter: blur(var(--glass-blur));
-  border: 1px solid var(--glass-border);
-  border-left: 4px solid var(--info);
+  /* Schematic: tone lives in a hairline edge + the leading mark, never a
+     thick side-tab. */
+  border: 1px solid color-mix(in srgb, var(--info) 45%, var(--glass-border));
   box-shadow: var(--shadow-pop), var(--glass-highlight);
   color: var(--ink);
   font-size: var(--text-sm);
@@ -637,15 +665,15 @@ input[type="radio"].input {
 }
 
 .toast--ok {
-  border-left-color: var(--ok);
+  border-color: color-mix(in srgb, var(--ok) 45%, var(--glass-border));
 }
 
 .toast--danger {
-  border-left-color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 45%, var(--glass-border));
 }
 
 .toast--info {
-  border-left-color: var(--info);
+  border-color: color-mix(in srgb, var(--info) 45%, var(--glass-border));
 }
 
 .toast-msg {
@@ -1009,13 +1037,24 @@ table.table thead th {
   top: 0;
   z-index: var(--z-sticky);
   background: var(--surface);
+  font-family: var(--font-mono); /* schematic column captions */
   font-size: var(--text-2xs);
   text-transform: uppercase;
   letter-spacing: var(--tracking-caps);
   color: var(--ink-faint);
-  font-weight: var(--weight-semibold);
+  font-weight: var(--weight-medium);
   white-space: nowrap;
   padding-block: var(--space-2);
+  border-bottom: 1px solid var(--border-strong);
+}
+
+/* Numeric cells read as instrument output: right-aligned columns get
+   tabular mono digits (DataTable stamps .align-right via its align prop). */
+table.table td.align-right,
+table.table td.num {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--text-xs);
 }
 
 .table-sort {
@@ -1188,13 +1227,14 @@ table.table td.muted {
   padding: var(--space-3) var(--space-6) var(--space-5);
 }
 
-/* Confirm variant — the Change Receipt */
+/* Confirm variant — the Change Receipt. Tone rides the full hairline
+   (Schematic: no side-tabs), so the sheet itself reads as flagged. */
 .dialog--confirm {
-  border-left: 3px solid var(--warn);
+  border-color: color-mix(in srgb, var(--warn) 50%, var(--glass-border));
 }
 
 .dialog--confirm.dialog--danger {
-  border-left-color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 50%, var(--glass-border));
 }
 
 .dialog--confirm .dialog-title {

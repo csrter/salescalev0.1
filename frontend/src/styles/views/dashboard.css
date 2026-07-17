@@ -61,6 +61,7 @@
   grid-auto-rows: 120px;
   grid-auto-flow: row dense;
   gap: var(--space-3);
+  counter-reset: dash-widget;
 }
 
 /* Widget = solid .card chrome (data surface), but we own the internal layout
@@ -92,16 +93,30 @@
   background: var(--surface);
 }
 
+.card.dash-widget {
+  counter-increment: dash-widget;
+}
+
 .dash-widget-head h4 {
   margin: 0;
   flex: 1;
   min-width: 0;
-  font-size: var(--text-sm);
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
   font-weight: var(--weight-semibold);
-  color: var(--ink);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-caps);
+  color: var(--ink-soft);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* numbered drawing label — the widget's registration number */
+.dash-widget-head h4::before {
+  content: counter(dash-widget, decimal-leading-zero) " / ";
+  color: var(--accent-ink);
+  font-weight: var(--weight-medium);
 }
 
 /* 6-dot grip: the drag handle. Visible on hover; always visible on touch. */
@@ -377,7 +392,7 @@
 .dash-progress {
   position: relative;
   height: 10px;
-  border-radius: var(--radius-full);
+  border-radius: var(--radius-xs);
   background: var(--surface);
   border: 1px solid var(--border);
   overflow: hidden;
@@ -385,9 +400,11 @@
 
 .dash-progress-fill {
   height: 100%;
-  border-radius: var(--radius-full);
+  width: 100%;
+  border-radius: var(--radius-xs);
   background: var(--accent);
-  transition: width var(--dur-med) var(--ease-out);
+  transform-origin: left;
+  transition: transform var(--dur-med) var(--ease-out);
 }
 
 .dash-progress-fill--behind {
@@ -410,6 +427,7 @@
 }
 
 .dash-guarantee-numbers strong {
+  font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
 }
 

@@ -901,6 +901,7 @@ function EnrichmentStatusCard({ active = true }: { active?: boolean }) {
     <div className="glass-card crm-enrich-card">
       <div className="crm-enrich-head">
         <h4 className="crm-subhead crm-subhead--sm">Enrichment status</h4>
+        {running && <span className="crm-enrich-pct">{pct}%</span>}
         <Badge tone={ENRICH_STATUS_TONE[latest.status]}>
           {running ? "processing" : latest.status}
         </Badge>

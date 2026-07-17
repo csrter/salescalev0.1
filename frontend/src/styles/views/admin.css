@@ -158,6 +158,8 @@
 
 .adm-audit-time {
   color: var(--ink-faint);
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
   font-variant-numeric: tabular-nums;
   margin-right: var(--space-1);
 }
