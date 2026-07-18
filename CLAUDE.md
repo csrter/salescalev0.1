@@ -2102,6 +2102,26 @@ live activation + the entitlement flip, the Outreach module build
       a personal iPhone's number is far less robust than the connected
       Sendblue account (carrier spam-flagging / TCPA) — Sendblue remains the
       alternative if iMessage+forwarding underperforms.
+- [x] {{state}} personalization "not working" — missing lead geo, derived from
+      area code (2026-07-17): the SMS/email render engines resolve {{state}}
+      from contacts.state correctly; the real cause was DATA — all 31 CPA
+      OUTREACH leads (and 177 of 281 org-wide) had state blank, so the token
+      rendered empty and "tax advisory in {{state}}." collapsed to "in.".
+      These leads carried only a name + phone (empty source_detail — not even
+      Lead Finder's stored address/query), so the one reliable geo signal is
+      the phone AREA CODE. New services/area_codes.py: NANP US area-code -> 2-
+      letter-state map + state_for_phone() (strips +1, ignores toll-free/non-
+      US). Wired into lead_finder.enrich_and_verify fill-blanks-only (no
+      provider key needed, so the existing bulk "Enrich" button + auto-post-
+      import enrichment both backfill state; a human/enrichment value always
+      wins). Backfilled the live org via backend/scripts/backfill_state_from_
+      area_code.py (dry-run then --write): 177 contacts filled (86 AZ home
+      base + a sane nationwide spread), zero overwrites. Verified live: all 31
+      CPA enrollments now render "Hey is this Paul? Saw you guys do tax
+      advisory in NC." Caveat: area code -> state is best-effort (number
+      portability), fill-blanks-only and correctable in the CRM. Tests +2
+      (test_area_codes.py). DEPLOYED to production 2026-07-17 (backend
+      rebuilt/recreated, /api/health 200) — backend-only, no migration.
 - [ ] Stripe live activation + entitlement flip (after 12–14, so real
       limits land everywhere in one pass)
 - [ ] Outreach module build (dev-mode) — go-live gated on Meta App
