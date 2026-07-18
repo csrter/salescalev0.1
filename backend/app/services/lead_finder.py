@@ -25,7 +25,7 @@ from sqlalchemy.orm import Session
 
 from ..models.core import Client, Organization
 from ..models.crm import Company, Contact
-from . import sms_consent
+from . import area_codes, sms_consent
 from .enrichment import normalize_domain
 from .lead_ingest import _digits
 from .places import PlaceResult
@@ -315,6 +315,16 @@ def enrich_and_verify(organization_id: str, contact_ids: List[str]) -> None:
             website = (c.source_detail or {}).get("website")
             domain = normalize_domain(website)
             company = db.get(Company, c.company_id) if c.company_id else None
+
+            # -- deterministic geo: fill state from the phone's area code when
+            # the record has a US number but no state. Imported lead lists
+            # commonly carry only a name + phone, leaving {{state}} in outreach
+            # templates blank; the business line's area code is a reliable,
+            # no-key, fill-blanks-only signal (a human/enrichment value wins).
+            if not (c.state or "").strip():
+                st = area_codes.state_for_phone(c.phone or c.mobile_phone)
+                if st:
+                    c.state = st
 
             # -- company profile: own-site description first (free, every
             # org), then the licensed profile provider for firmographics.
