@@ -8,7 +8,13 @@ from ..db import get_db
 from ..deps import require_admin, require_verified_email
 from ..models.core import Client, PLATFORM_META, User
 from ..security import create_state_token, decode_state_token
-from ..services import ad_accounts, connections, integration_creds, meta_api
+from ..services import (
+    ad_accounts,
+    connections,
+    integration_creds,
+    meta_api,
+    meta_leadgen,
+)
 from .connect_common import post_connect_response
 
 router = APIRouter(prefix="/api/connect/meta", tags=["connect"])
@@ -115,6 +121,21 @@ def meta_oauth_callback(
         )
 
     outcome = ad_accounts.auto_attach(db, organization_id, client_id, conn, discovered)
+
+    # Auto-subscribe the connected user's Pages to the leadgen webhook and
+    # register routing so Instant Form leads flow into this client's CRM.
+    # Best-effort by design — a missing page permission (before App Review) or
+    # a Pages API hiccup must never fail the ad-account connect above.
+    try:
+        meta_leadgen.subscribe_client_pages(
+            db,
+            organization_id=organization_id,
+            client_id=client_id,
+            user_access_token=access_token,
+        )
+    except Exception:
+        pass
+
     db.commit()
 
     return post_connect_response(

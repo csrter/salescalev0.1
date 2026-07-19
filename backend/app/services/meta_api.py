@@ -288,6 +288,26 @@ def fetch_pages(token: str) -> List[Dict[str, Any]]:
     )
 
 
+def fetch_pages_with_tokens(token: str) -> List[Dict[str, Any]]:
+    """Pages the user manages, each with its own Page access token — required
+    to subscribe a Page to the app's leadgen webhook (subscribed_apps only
+    accepts a Page token, not the user token)."""
+    return _paginate(
+        f"{_base()}/me/accounts",
+        {"access_token": token, "fields": "id,name,access_token", "limit": 100},
+    )
+
+
+def subscribe_page_leadgen(page_access_token: str, page_id: str) -> Dict[str, Any]:
+    """Subscribe the app to this Page's `leadgen` field so Instant Form
+    submissions are delivered to /api/webhooks/meta/leadgen. Idempotent on
+    Meta's side; needs pages_manage_metadata on the Page token."""
+    return _post(
+        f"{_base()}/{page_id}/subscribed_apps",
+        {"subscribed_fields": "leadgen", "access_token": page_access_token},
+    )
+
+
 # --- insights (Phase 3) ---
 
 # Which Meta `actions` entries count as a lead. Meta reports every action
