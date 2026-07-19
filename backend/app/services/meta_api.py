@@ -17,8 +17,16 @@ from . import integration_creds
 
 GRAPH = "https://graph.facebook.com"
 
-# Scopes required for reading + (Phase 2) managing client ad accounts.
-META_SCOPES = "ads_management,ads_read,business_management"
+# Scopes required for reading + (Phase 2) managing client ad accounts, plus
+# (Instant Form lead auto-import) leadgen: leads_retrieval reads the lead data
+# a leadgen webhook points at, and the pages_* scopes are needed to list a
+# client's Pages, read their engagement, and subscribe each Page to the app's
+# leadgen webhook. leads_retrieval + pages_* require Advanced Access (App
+# Review) for client-owned Pages; own/admin Pages work under dev mode.
+META_SCOPES = (
+    "ads_management,ads_read,business_management,"
+    "leads_retrieval,pages_show_list,pages_read_engagement,pages_manage_metadata"
+)
 
 
 class MetaAuthError(Exception):
