@@ -99,6 +99,16 @@ def subscribe_client_pages(
             except Exception as e:  # e.g. pages_manage_metadata not granted yet
                 errors.append(f"{page_id}: {e}")
 
+        # Only AUTO-ROUTE when the login manages exactly ONE Page. An agency
+        # Meta account manages many clients' (and its own) Pages; routing them
+        # all to the one client being connected would land other businesses'
+        # leads in this client's CRM. With >1 Page, subscribe them (delivery)
+        # but leave routing to the admin, who maps each Page to its client via
+        # the CRM lead-form routing card.
+        if len(pages) != 1:
+            skipped.append(page_id)
+            continue
+
         existing = db.execute(
             select(LeadFormConfig).where(
                 LeadFormConfig.platform == "meta",
