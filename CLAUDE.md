@@ -2122,6 +2122,43 @@ live activation + the entitlement flip, the Outreach module build
       portability), fill-blanks-only and correctable in the CRM. Tests +2
       (test_area_codes.py). DEPLOYED to production 2026-07-17 (backend
       rebuilt/recreated, /api/health 200) — backend-only, no migration.
+- [x] Public privacy policy + Meta Instant-Form lead auto-import enablement
+      (2026-07-19): (1) Static, un-authenticated privacy policy at /privacy
+      (frontend/public/privacy.html + nginx `= /privacy` route — served
+      directly by nginx, not the SPA, so external reviewers reach it without
+      login; covers Meta/Google-API data handling + GDPR/CCPA deletion). LIVE
+      https://app.salescale.lol/privacy (commit a46e114). (2) Meta lead
+      auto-import turned on: META_SCOPES += leads_retrieval, pages_show_list,
+      pages_read_engagement, pages_manage_metadata (667875b);
+      META_WEBHOOK_VERIFY_TOKEN set in prod .env so the existing app-level
+      leadgen webhook (/api/webhooks/meta/leadgen) verifies (handshake
+      verified live); Meta connect now auto-subscribes every managed Page to
+      the leadgen field AND writes a per-page LeadFormConfig routing leads to
+      that client — services/meta_leadgen.subscribe_client_pages (best-effort,
+      tenant-safe: never hijacks a page already routed to another org/sibling
+      client), wired into api/connect_meta callback + new
+      meta_api.fetch_pages_with_tokens / subscribe_page_leadgen (42539da).
+      All DEPLOYED (backend rebuilt/recreated on the VPS). REMAINING
+      user-side: PUBLISH the Meta app (Meta's own banner: NO leadgen webhook
+      delivers — even for admins — until the app is published), App Review /
+      Advanced Access for leads_retrieval + pages perms, register the
+      app-level Webhooks→Page→leadgen callback (verify token above), and
+      reconnect each client's Meta so the new-scope token + auto-subscribe
+      fire. Diagnosis: the app was merely UNPUBLISHED (dev mode), NOT
+      Meta-restricted (Graph API showed no restrictions); the invalid_grant
+      error the user attributed to Meta was actually a revoked GOOGLE refresh
+      token. NOT built yet — Salescale server-side auto-upload of Google
+      offline conversions: flagged in the same Atlas Reach client-ops thread
+      (client's conversion action "Submit lead form (Page load thank-you)" is
+      WEBPAGE_CODELESS / non-uploadable, so every manual + API upload 400s
+      "not set up for uploading conversions"; resolved client-side by
+      creating an UPLOAD_CLICKS offline action id 7690364876 on customer
+      5170352227, fed by a connected Google Sheet). Wiring the Phase-5
+      pipeline (per-client Google ConversionConfig → action 7690364876 + a
+      dispatch call on the landing_page_webhook capture path) to auto-fire
+      future leads is the remaining product task. Client also double-fires
+      conversions to a foreign Google conversion ID 18292295114 alongside
+      its own 18291942873 — client-side tag cleanup.
 - [ ] Stripe live activation + entitlement flip (after 12–14, so real
       limits land everywhere in one pass)
 - [ ] Outreach module build (dev-mode) — go-live gated on Meta App
