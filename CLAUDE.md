@@ -2285,6 +2285,46 @@ live activation + the entitlement flip, the Outreach module build
       (480-720-7351) reachable by the BlueBubbles Mac (iMessage, or SMS Text
       Message Forwarding for a non-iMessage number), and the BlueBubbles
       inbound webhook delivering (already set up for the CPA campaign).
+- [x] Per-client lead-notification message template (2026-07-20): a client
+      can override the org-wide lead-alert template for its OWN leads;
+      resolution chain is client → org → built-in default
+      (services/lead_notify.resolve_template, mirrors the timezone
+      campaign_default chain). One body per lead still goes to all recipients
+      (org ops numbers + the client's own) — a client customizing its template
+      customizes the alert for all of that client's leads. Stored next to the
+      client's phones in client.metric_settings["lead_notifications"]
+      ["template"] — NO migration (JSON bag; Organization.lead_notification_
+      template already existed). GET/PUT /api/clients/{id}/lead-notifications
+      now carry message_template (the client's own, null → inherit) +
+      default_template (the org template it falls back to, or the built-in),
+      token-validated at save against the same {{token}} set as the org
+      (lead_notify.unknown_tokens → 422). Frontend: the client's "Lead SMS
+      notifications" card (crm.tsx ClientLeadNotifications) gained a "Use a
+      custom message for this client" toggle → monospace template editor +
+      "Reset to org template" (inherits + shows the org template when off);
+      org card (sms_outreach.tsx) copy clarified as the per-client default.
+      Tests: test_sms_outreach client roundtrip updated for the new response
+      keys + new override test (client template wins, unknown-token 422,
+      clear→falls-back-to-org). Verified: tsc clean, prod vite build clean,
+      78 tests pass across test_sms_outreach + test_crm in a throwaway
+      container off the prod image (local Python venv is unprovisioned/broken,
+      so no live browser preview this session — the client card is a
+      structural mirror of the shipped org card). DEPLOYED to production
+      2026-07-20 (4c360c3): git archive → VPS, backend+frontend rebuilt/
+      recreated, /api/health ok, endpoint live + auth-gated (401), no
+      migration. Also this session (prod ops, no code): pushed 2 failed
+      Best Spas Direct lead-notification texts (transient BlueBubbles 502)
+      back through lead_notify; confirmed BlueBubbles SMS-send readiness
+      (server private_api on, service-resolution works — green-bubble SMS
+      needs iPhone Text Message Forwarding, now enabled user-side); and
+      backfilled the missed Meta Instant Form lead (Ljubinka Voljevica,
+      602-503-1923, Paganelli) via the real _ingest_meta_lead path — created,
+      notified, auto-enrolled, first qualifying SMS delivered. ROOT CAUSE of
+      the missed Meta lead: the app-level leadgen webhook isn't fully live
+      (Meta app not published / callback not registered) — our side (LeadForm
+      Config + leads_retrieval scope) is correct; publishing the Meta app +
+      registering the webhook is the remaining user-side fix so Meta leads
+      auto-import going forward.
 - [ ] Stripe live activation + entitlement flip (after 12–14, so real
       limits land everywhere in one pass)
 - [ ] Outreach module build (dev-mode) — go-live gated on Meta App
