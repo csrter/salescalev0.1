@@ -178,6 +178,15 @@ class SmsCampaign(Base):
     include_compliance_footer: Mapped[bool] = mapped_column(
         Boolean, default=True, nullable=False
     )
+    # When true (and status is active and client_id is set), a NEW lead created
+    # for this campaign's client is auto-enrolled the moment it arrives
+    # (services/lead_autoenroll.py, fired at the same lead-creation call sites
+    # as the team alert). The consent gate still applies at enroll time — a lead
+    # with no recorded SMS opt-in is skipped, not force-enrolled. Requires
+    # client_id so the trigger knows whose leads flow in; enforced in the API.
+    auto_enroll_new_leads: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False
+    )
     settings: Mapped[Optional[dict]] = mapped_column(JSON)
     activated_at: Mapped[Optional[dt.datetime]] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[dt.datetime] = created_at_column()

@@ -24,7 +24,7 @@ from ..models.conversions import ConversionEvent
 from ..models.core import Client
 from ..ratelimit import rate_limit
 from ..schemas import LeadSubmissionIn
-from ..services import lead_ingest, lead_notify
+from ..services import lead_autoenroll, lead_ingest, lead_notify
 from ..services.conversion_dispatch import dispatch_conversion
 from ..services.external_sync import push_contact_update
 
@@ -137,6 +137,7 @@ def capture_lead(
     if created:
         push_contact_update(db, client, contact, event="lead.created")
         lead_notify.notify_new_lead(db, client, contact)
+        lead_autoenroll.auto_enroll_new_lead(db, client, contact)
         db.commit()
     return {
         "contact_id": contact.id,

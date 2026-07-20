@@ -34,7 +34,7 @@ from ..services import connections as conn_svc
 from ..services import crm as crm_svc
 from ..services import custom_fields as custom_fields_svc
 from ..ratelimit import rate_limit
-from ..services import integration_creds, lead_ingest, lead_notify, meta_leadgen
+from ..services import integration_creds, lead_autoenroll, lead_ingest, lead_notify, meta_leadgen
 from ..services.external_sync import push_contact_update
 
 router = APIRouter(prefix="/api/webhooks", tags=["lead-webhooks"])
@@ -193,6 +193,7 @@ def _ingest_meta_lead(db: Session, value: dict) -> dict:
     if created:
         push_contact_update(db, client, contact, event="lead.created")
         lead_notify.notify_new_lead(db, client, contact)
+        lead_autoenroll.auto_enroll_new_lead(db, client, contact)
     return {"status": "created" if created else "updated", "contact_id": contact.id}
 
 
@@ -313,6 +314,7 @@ def google_lead_form_webhook(
     if created:
         push_contact_update(db, client, contact, event="lead.created")
         lead_notify.notify_new_lead(db, client, contact)
+        lead_autoenroll.auto_enroll_new_lead(db, client, contact)
     db.commit()
     return {}
 
@@ -554,5 +556,6 @@ async def landing_form_webhook(
     if created:
         push_contact_update(db, client, contact, event="lead.created")
         lead_notify.notify_new_lead(db, client, contact)
+        lead_autoenroll.auto_enroll_new_lead(db, client, contact)
     db.commit()
     return {"status": "created" if created else "updated", "contact_id": contact.id}

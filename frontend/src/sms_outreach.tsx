@@ -28,6 +28,7 @@ import {
   getLeadNotifications,
   getMyOrg,
   getSmsCampaign,
+  listClients,
   listContactLists,
   listSmsAccounts,
   listSmsCampaigns,
@@ -48,6 +49,7 @@ import {
   unenrollSms,
   updateSmsAccount,
   updateSmsCampaign,
+  type Client,
   type ContactList,
   type SmsAccount,
   type SmsAccountBody,
@@ -1134,12 +1136,23 @@ function ConfigForm({
   accounts: SmsAccount[];
   onPatch: (body: Parameters<typeof updateSmsCampaign>[1]) => void;
 }) {
+  const [clients, setClients] = useState<Client[]>([]);
+  useEffect(() => {
+    listClients()
+      .then(setClients)
+      .catch(() => setClients([]));
+  }, []);
+
   const toggleDay = (day: number) => {
     const set = new Set(detail.send_days);
     if (set.has(day)) set.delete(day);
     else set.add(day);
     onPatch({ send_days: [...set].sort((a, b) => a - b) });
   };
+
+  const clientName = detail.client_id
+    ? clients.find((c) => c.id === detail.client_id)?.name ?? "this client"
+    : null;
 
   return (
     <div className="sms-form">
@@ -1155,6 +1168,51 @@ function ConfigForm({
           ))}
         </select>
       </Field>
+
+      <Field label="Client">
+        <select
+          value={detail.client_id ?? ""}
+          onChange={(e) =>
+            onPatch({
+              client_id: e.target.value || null,
+              // Clearing the client can't co-exist with auto-enroll (server 422s);
+              // turn it off in the same patch so the UI never sends an invalid pair.
+              ...(e.target.value ? {} : { auto_enroll_new_leads: false }),
+            })
+          }
+        >
+          <option value="">No client (manual enroll only)</option>
+          {clients.map((c) => (
+            <option key={c.id} value={c.id}>
+              {c.name}
+            </option>
+          ))}
+        </select>
+      </Field>
+
+      <div className="sms-fieldset">
+        <Switch
+          checked={detail.auto_enroll_new_leads}
+          onChange={(v) => onPatch({ auto_enroll_new_leads: v })}
+          label="Auto-enroll new leads for this client"
+          disabled={!detail.client_id}
+        />
+        <p className="sms-hint">
+          {detail.client_id ? (
+            <>
+              Every new lead that arrives for <strong>{clientName}</strong> (form
+              submission, lead-form webhook, or landing page) is automatically
+              enrolled the moment it lands, so it starts getting this sequence
+              within a minute. Leads with no recorded SMS consent are skipped,
+              never force-texted — STOP and suppression still apply.
+            </>
+          ) : (
+            <>Pick a client above to enable automatic enrollment of that
+            client&apos;s incoming leads. Without a client, this campaign is
+            manual-enroll only.</>
+          )}
+        </p>
+      </div>
 
       <div className="sms-form-row">
         <Field label="Daily cap (this campaign)" optional>

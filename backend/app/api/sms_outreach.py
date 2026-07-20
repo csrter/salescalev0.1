@@ -500,6 +500,7 @@ def _campaign_out(db: Session, c: SmsCampaign, *, full: bool = False) -> dict:
         "daily_cap": c.daily_cap,
         "exit_on_reply": c.exit_on_reply,
         "include_compliance_footer": c.include_compliance_footer,
+        "auto_enroll_new_leads": c.auto_enroll_new_leads,
         "activated_at": c.activated_at.isoformat() if c.activated_at else None,
         "created_at": c.created_at.isoformat(),
         **_campaign_stats(db, c),
@@ -541,6 +542,12 @@ def create_campaign(
     client_id = None
     if body.client_id:
         client_id = _client_or_404(db, scope, body.client_id).id
+    if body.auto_enroll_new_leads and client_id is None:
+        raise HTTPException(
+            422,
+            "Auto-enroll needs a client — set client_id so the campaign knows "
+            "whose new leads to enroll",
+        )
     campaign = SmsCampaign(
         organization_id=scope.organization_id,
         client_id=client_id,
@@ -554,6 +561,7 @@ def create_campaign(
         daily_cap=body.daily_cap,
         exit_on_reply=body.exit_on_reply,
         include_compliance_footer=body.include_compliance_footer,
+        auto_enroll_new_leads=body.auto_enroll_new_leads,
     )
     db.add(campaign)
     db.commit()
@@ -592,6 +600,17 @@ def update_campaign(
     end = data.get("send_window_end", campaign.send_window_end)
     if start >= end:
         raise HTTPException(422, "send_window_start must be before send_window_end")
+    # Auto-enroll needs a client to scope which leads flow in — check the state
+    # this patch WOULD produce, so you can't turn it on without a client_id nor
+    # clear the client while it's on.
+    resulting_client = data.get("client_id", campaign.client_id)
+    resulting_auto = data.get("auto_enroll_new_leads", campaign.auto_enroll_new_leads)
+    if resulting_auto and not resulting_client:
+        raise HTTPException(
+            422,
+            "Auto-enroll needs a client — set client_id so the campaign knows "
+            "whose new leads to enroll",
+        )
     for field, value in data.items():
         setattr(campaign, field, value)
     db.commit()

@@ -2100,3 +2100,171 @@ def test_account_out_flags_stale_inbound_webhook(sc_org, api, twilio_creds_ok):
     assert row["inbound_webhook_stale"] is False
     assert row["last_inbound_at"] is not None
 
+
+# --- auto-enroll new leads into a client-scoped campaign ---------------------
+
+
+def test_auto_enroll_requires_a_client(sc_org, api, twilio_creds_ok):
+    """auto_enroll_new_leads is meaningless without a client to scope which
+    leads flow in — the API refuses to turn it on (create OR patch) unless
+    client_id is set, and refuses to clear the client while it's on."""
+    acct = _mk_account(sc_org, api, from_number="+14805550170")
+
+    # create: flag on, no client → 422
+    r = api.post(
+        "/api/sms/campaigns",
+        json={
+            "name": "No client",
+            "account_id": acct["id"],
+            "auto_enroll_new_leads": True,
+        },
+        headers=sc_org["headers"],
+    )
+    assert r.status_code == 422, r.text
+
+    # create: flag on, with client → ok, reflected in the response
+    r = api.post(
+        "/api/sms/campaigns",
+        json={
+            "name": "Scoped",
+            "account_id": acct["id"],
+            "client_id": sc_org["client"],
+            "auto_enroll_new_leads": True,
+        },
+        headers=sc_org["headers"],
+    )
+    assert r.status_code == 201, r.text
+    assert r.json()["auto_enroll_new_leads"] is True
+    assert r.json()["client_id"] == sc_org["client"]
+    cid = r.json()["id"]
+
+    # patch: can't clear the client while auto-enroll stays on
+    r = api.patch(
+        f"/api/sms/campaigns/{cid}",
+        json={"client_id": None},
+        headers=sc_org["headers"],
+    )
+    assert r.status_code == 422, r.text
+
+    # patch: turning the flag on for an already-client-scoped campaign is fine
+    r = api.post(
+        "/api/sms/campaigns",
+        json={"name": "Later", "account_id": acct["id"], "client_id": sc_org["client"]},
+        headers=sc_org["headers"],
+    )
+    later_id = r.json()["id"]
+    assert r.json()["auto_enroll_new_leads"] is False
+    r = api.patch(
+        f"/api/sms/campaigns/{later_id}",
+        json={"auto_enroll_new_leads": True},
+        headers=sc_org["headers"],
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["auto_enroll_new_leads"] is True
+
+
+def test_auto_enroll_new_lead_end_to_end(sc_org, api, twilio_creds_ok, captured_sends):
+    """A brand-new lead arriving for the campaign's client is auto-enrolled and
+    gets the first qualifying text on the next tick — the full path: real
+    lead-creation endpoint (generic landing-page webhook) → the trigger wired
+    next to notify_new_lead → enroll_contacts → run_due send."""
+    # The org attests its intake funnel collects SMS consent, so a fresh
+    # inbound lead is textable (else the consent gate correctly skips it).
+    assert (
+        api.put(
+            "/api/orgs/me/sms-opt-in-default",
+            json={"sms_opt_in_default": True},
+            headers=sc_org["headers"],
+        ).status_code
+        == 200
+    )
+    try:
+        acct = _mk_account(sc_org, api, from_number="+14805550171")
+        camp = _mk_campaign(
+            sc_org,
+            api,
+            acct["id"],
+            name="Qualify HVAC leads",
+            client_id=sc_org["client"],
+            auto_enroll_new_leads=True,
+            **_ALWAYS,
+        )
+        _set_steps(
+            sc_org,
+            api,
+            camp["id"],
+            [
+                {
+                    "position": 1,
+                    "wait_days": 0,
+                    "body": "Hi {{first_name|there}}! Quick Q — repair or replacement?",
+                }
+            ],
+        )
+        assert _activate(sc_org, api, camp["id"]).status_code == 200
+
+        key = api.post(
+            f"/api/clients/{sc_org['client']}/lead-forms/landing-page/rotate",
+            headers=sc_org["headers"],
+        ).json()["external_key"]
+        r = api.post(
+            f"/api/webhooks/landing-form/{sc_org['client']}/{key}",
+            json={"Full Name": "Pat Lead", "Phone": "+14805559911"},
+        )
+        assert r.status_code == 200, r.text
+        contact_id = r.json()["contact_id"]
+
+        enr = _get_enrollment(camp["id"], contact_id)
+        assert enr.status == SMS_ENROLL_ACTIVE
+
+        _tick()
+        assert any(s["to"] == "+14805559911" for s in captured_sends), captured_sends
+    finally:
+        api.put(
+            "/api/orgs/me/sms-opt-in-default",
+            json={"sms_opt_in_default": False},
+            headers=sc_org["headers"],
+        )
+
+
+def test_auto_enroll_skips_lead_without_consent(sc_org, api, twilio_creds_ok):
+    """The trigger never force-texts: a new lead with no recorded SMS opt-in
+    (org default off) is NOT enrolled — the consent gate holds, silently."""
+    acct = _mk_account(sc_org, api, from_number="+14805550172")
+    camp = _mk_campaign(
+        sc_org,
+        api,
+        acct["id"],
+        name="Qualify (consent-gated)",
+        client_id=sc_org["client"],
+        auto_enroll_new_leads=True,
+        **_ALWAYS,
+    )
+    _set_steps(
+        sc_org, api, camp["id"], [{"position": 1, "wait_days": 0, "body": "Hi!"}]
+    )
+    assert _activate(sc_org, api, camp["id"]).status_code == 200
+
+    key = api.post(
+        f"/api/clients/{sc_org['client']}/lead-forms/landing-page/rotate",
+        headers=sc_org["headers"],
+    ).json()["external_key"]
+    r = api.post(
+        f"/api/webhooks/landing-form/{sc_org['client']}/{key}",
+        json={"Full Name": "Unconsented Lead", "Phone": "+14805559922"},
+    )
+    assert r.status_code == 200, r.text
+    contact_id = r.json()["contact_id"]
+
+    db = SessionLocal()
+    try:
+        found = db.execute(
+            select(SmsEnrollment).where(
+                SmsEnrollment.campaign_id == camp["id"],
+                SmsEnrollment.contact_id == contact_id,
+            )
+        ).scalar_one_or_none()
+    finally:
+        db.close()
+    assert found is None
+

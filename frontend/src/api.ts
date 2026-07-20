@@ -358,6 +358,9 @@ export interface Client {
 export const createClient = (body: { name: string; internal_notes?: string }) =>
   api<Client>("/api/clients", { method: "POST", body: JSON.stringify(body) });
 
+/** Team-only client roster (excludes the house CRM client). */
+export const listClients = () => api<Client[]>("/api/clients");
+
 // --- Account recovery / verification (no auth required) ---
 
 export const verifyEmail = (token: string) =>
@@ -2070,24 +2073,29 @@ export interface SmsStep {
 }
 
 export interface SmsCampaignDetail extends SmsCampaign {
+  client_id: string | null;
   timezone: string;
   send_window_start: number;
   send_window_end: number;
   send_days: number[];
   daily_cap: number | null;
   include_compliance_footer: boolean;
+  /** Auto-enroll new leads for client_id into this campaign on arrival. */
+  auto_enroll_new_leads: boolean;
   steps: SmsStep[];
 }
 
 export interface SmsCampaignBody {
   name?: string;
   account_id?: string;
+  client_id?: string | null;
   timezone?: string;
   send_window_start?: number;
   send_window_end?: number;
   send_days?: number[];
   daily_cap?: number | null;
   include_compliance_footer?: boolean;
+  auto_enroll_new_leads?: boolean;
 }
 
 export interface SmsEnrollment {
