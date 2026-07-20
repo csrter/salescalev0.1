@@ -2202,6 +2202,35 @@ live activation + the entitlement flip, the Outreach module build
       are activated. NOTE: the compliance footer on step 1 prepends the
       AGENCY org name (SMS accounts are org-level) — the client name lives in
       the body so the lead knows who it's from.
+- [x] Org + client default timezone (2026-07-19): first-class timezone
+      settings at the agency (app) level and per client, so campaign
+      send-window / TCPA quiet-hours default to the right local time instead
+      of typing an IANA name per campaign. New columns organizations.timezone
+      + clients.timezone (migration d3b8f1a4c920, additive nullable; NULL =
+      inherit). services/timezones.campaign_default(client_tz, org_tz,
+      fallback) resolves the chain (each candidate normalized, so a stored
+      abbreviation still yields a real IANA key). A NEW SMS campaign inherits
+      client → org → "America/New_York"; a NEW email campaign (no client tier)
+      inherits org → "UTC"; an explicit timezone in the create request still
+      wins. Changing a setting NEVER rewrites existing campaigns (new-only) —
+      SmsCampaignIn/EmailCampaignIn.timezone became Optional (None = inherit,
+      resolved in the create endpoints). Endpoints: PUT /api/orgs/me/timezone
+      (require_admin) + PUT /api/clients/{id}/timezone (require_admin), both
+      IANA-validated by the existing _valid_campaign_timezone (null clears);
+      OrganizationOut + ClientOutTeam now carry timezone. Frontend: an
+      "Organization timezone" card on the Branding settings page (self-
+      contained OrgTimezoneCard — there's no separate org-settings page; it's
+      NOT branding), a "Client timezone" card in the client's CRM setup panel
+      (crm.tsx, next to lead-notifications), and the SMS campaign Config
+      applies the SELECTED client's timezone to the campaign on pick (keyed tz
+      input re-mounts to show it). api.ts gained setOrgTimezone/
+      setClientTimezone/getClient + timezone on Org/Client. Tests 556 → 560
+      (org+client tz endpoints incl. abbreviation-normalize + invalid-422 +
+      null-clear; SMS client>org>default inheritance + explicit-wins; email
+      org>UTC inheritance). Verified live on the local stack (Branding org tz
+      save → America/Phoenix persisted; client tz endpoint round-trip;
+      selecting Paganelli in SMS Config auto-applied its America/Phoenix,
+      persisted on the campaign). NOT yet deployed to production.
 - [ ] Stripe live activation + entitlement flip (after 12–14, so real
       limits land everywhere in one pass)
 - [ ] Outreach module build (dev-mode) — go-live gated on Meta App
