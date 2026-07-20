@@ -2159,6 +2159,49 @@ live activation + the entitlement flip, the Outreach module build
       future leads is the remaining product task. Client also double-fires
       conversions to a foreign Google conversion ID 18292295114 alongside
       its own 18291942873 — client-side tag cleanup.
+- [x] SMS auto-enroll new leads (2026-07-19): a new lead arriving for a
+      client can now be auto-enrolled into that client's SMS
+      qualifying-questions campaign the moment it lands — the "speed to
+      lead" automation the SMS module was missing (enrollment was manual /
+      house-CRM-by-list only; only the team ALERT fired on arrival). New
+      SmsCampaign.auto_enroll_new_leads (migration c7e1a9f3b2d8, additive
+      non-null server_default false). services/lead_autoenroll.py is the
+      outreach counterpart to lead_notify: called at the SAME four
+      lead-creation sites (api/leads.py /api/track/lead; api/lead_webhooks
+      Meta leadgen / Google lead-form / generic landing-page), right after
+      notify_new_lead, best-effort (never commits/rolls back, never blocks
+      lead creation). It finds ACTIVE campaigns where client_id ==
+      contact.client_id AND auto_enroll_new_leads, and routes the single
+      contact through sms_campaigns.enroll_contacts — so the TCPA consent
+      gate (sms_consent.sendable) STILL holds: a lead with no recorded SMS
+      opt-in is skipped, never force-texted (org sms_opt_in_default is what
+      makes inbound form leads eligible; STOP/suppression always win).
+      SmsCampaign already had a nullable client_id; the API now REQUIRES it
+      when auto_enroll is on (create + patch both 422 otherwise, and patch
+      refuses to clear the client while the flag is on) since the trigger
+      needs to know whose leads flow in. api/sms_outreach _campaign_out +
+      create/patch carry the field; SmsCampaignIn/Patch gained it. Frontend
+      (sms_outreach.tsx ConfigForm): the campaign Config tab gained a Client
+      picker (was never surfaced — client_id existed on the model but no UI
+      set it) + an "Auto-enroll new leads for this client" Switch, disabled
+      until a client is chosen, with a client-name-aware hint; api.ts gained
+      listClients + client_id/auto_enroll_new_leads on the SMS types. Tests
+      549 → 556 (test_sms_outreach.py: end-to-end landing-webhook → trigger
+      → enroll → run_due send; consent-skip when unconsented; the
+      client-required guard on create + patch). Verified live end-to-end on
+      a local stack (real login, created a client-scoped campaign, Client
+      picker + toggle round-trip → GET confirmed client_id + auto_enroll
+      true). DEPLOYED to production 2026-07-19 (66ad118): git archive → VPS,
+      backend+frontend rebuilt/recreated, migration c7e1a9f3b2d8 applied to
+      the live Supabase DB (alembic current = c7e1a9f3b2d8 head), /api/health
+      ok, /api/sms/campaigns auth-gated. REMAINING (user-side, guided
+      in-app): create + activate the two qualifying-question campaigns
+      (Best Spas Direct, Paganelli HVAC) in SMS → Campaigns — scope each to
+      its client, add the 2-step qualifying sequence, flip auto-enroll on,
+      pick the send-from number, activate. Nothing texts a lead until those
+      are activated. NOTE: the compliance footer on step 1 prepends the
+      AGENCY org name (SMS accounts are org-level) — the client name lives in
+      the body so the lead knows who it's from.
 - [ ] Stripe live activation + entitlement flip (after 12–14, so real
       limits land everywhere in one pass)
 - [ ] Outreach module build (dev-mode) — go-live gated on Meta App
