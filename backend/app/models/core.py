@@ -144,6 +144,16 @@ class Organization(Base):
     # send-window / TCPA quiet-hours evaluation; a client's own timezone (below)
     # takes precedence for that client's campaigns. See services/timezones.
     timezone: Mapped[Optional[str]] = mapped_column(String(64))
+    # Lead-reply relay (services/lead_relay.py): when enabled, an inbound lead
+    # reply on the org's BlueBubbles number is forwarded to lead_relay_phone
+    # (E.164), and a message FROM that phone — tagged with a lead's reply code —
+    # is relayed back to the lead through BlueBubbles. The relay phone is also
+    # the one number whose inbound is treated as an operator command, never a
+    # lead. BlueBubbles-only (that's the transport the operator loops through).
+    lead_relay_enabled: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False
+    )
+    lead_relay_phone: Mapped[Optional[str]] = mapped_column(String(20))
     created_at: Mapped[dt.datetime] = created_at_column()
 
 

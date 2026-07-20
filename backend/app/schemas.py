@@ -180,6 +180,15 @@ class OrgTimezoneIn(BaseModel):
         return _valid_campaign_timezone(v)
 
 
+class OrgLeadRelayIn(BaseModel):
+    """Lead-reply relay config. `phone` is the operator's number that lead
+    replies forward to and that can text leads back through BlueBubbles;
+    required when enabling."""
+
+    enabled: bool
+    phone: Optional[str] = None
+
+
 class TeamMemberCreate(BaseModel):
     email: EmailStr
     password: Password

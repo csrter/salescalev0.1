@@ -255,6 +255,19 @@ export const setLeadNotifications = (
     body: JSON.stringify(body),
   });
 
+/** Two-way lead-reply relay over BlueBubbles: forward lead replies to the
+ * operator's phone; a tagged reply from that phone routes back to the lead. */
+export interface LeadRelayConfig {
+  enabled: boolean;
+  phone: string | null;
+}
+export const getLeadRelay = () => api<LeadRelayConfig>("/api/orgs/me/lead-relay");
+export const setLeadRelay = (body: LeadRelayConfig) =>
+  api<LeadRelayConfig>("/api/orgs/me/lead-relay", {
+    method: "PUT",
+    body: JSON.stringify(body),
+  });
+
 /** Per-client counterpart — e.g. the client's own business owner, texted
  * alongside the agency's own ops numbers above. */
 export const getClientLeadNotifications = (clientId: string) =>

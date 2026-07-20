@@ -82,6 +82,7 @@ from ..schemas import (
     OrgOutreachContextIn,
     OrgRememberDeviceIn,
     OrgSmsOptInDefaultIn,
+    OrgLeadRelayIn,
     OrgTimezoneIn,
     OrgSecurityIn,
     OrgSignupRequest,
@@ -255,6 +256,34 @@ def set_sms_opt_in_default(
     org.sms_opt_in_default = body.sms_opt_in_default
     db.commit()
     return org
+
+
+@router.get("/me/lead-relay")
+def get_lead_relay(
+    user: User = Depends(require_team),
+    db: Session = Depends(get_db),
+):
+    org = db.get(Organization, user.organization_id)
+    return {"enabled": org.lead_relay_enabled, "phone": org.lead_relay_phone}
+
+
+@router.put("/me/lead-relay")
+def set_lead_relay(
+    body: OrgLeadRelayIn,
+    user: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Forward lead replies to an operator's phone and let them reply back
+    through BlueBubbles (services/lead_relay.py). Enabling requires a phone,
+    normalized to E.164 so the inbound webhook can recognize the operator."""
+    org = db.get(Organization, user.organization_id)
+    phone = sms_consent.normalize_phone(body.phone) if body.phone else None
+    if body.enabled and not phone:
+        raise HTTPException(422, "A valid phone number is required to enable the relay")
+    org.lead_relay_enabled = body.enabled
+    org.lead_relay_phone = phone
+    db.commit()
+    return {"enabled": org.lead_relay_enabled, "phone": org.lead_relay_phone}
 
 
 @router.put("/me/timezone", response_model=OrganizationOut)

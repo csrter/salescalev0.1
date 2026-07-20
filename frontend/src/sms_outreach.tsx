@@ -26,6 +26,8 @@ import {
   enrollSmsContacts,
   getHouseClient,
   getLeadNotifications,
+  getLeadRelay,
+  setLeadRelay,
   getMyOrg,
   getSmsCampaign,
   listClients,
@@ -360,6 +362,11 @@ function DashboardPanel({
 
       {isAdmin && <OrgOptInDefaultCard isOwner={isOwner} />}
       {isAdmin && <LeadNotificationsCard hasAccount={accounts.length > 0} />}
+      {isAdmin && (
+        <LeadRelayCard
+          hasBlueBubbles={accounts.some((a) => a.provider === "bluebubbles")}
+        />
+      )}
 
       <div className="sms-bar">
         <select
@@ -699,6 +706,77 @@ function LeadNotificationsCard({ hasAccount }: { hasAccount: boolean }) {
             </div>
           </div>
         )}
+      </GlassCard>
+    </div>
+  );
+}
+
+function LeadRelayCard({ hasBlueBubbles }: { hasBlueBubbles: boolean }) {
+  const toast = useToast();
+  const [enabled, setEnabled] = useState<boolean | null>(null);
+  const [phone, setPhone] = useState("");
+  const [savedPhone, setSavedPhone] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    getLeadRelay()
+      .then((c) => {
+        setEnabled(c.enabled);
+        setPhone(c.phone ?? "");
+        setSavedPhone(c.phone ?? "");
+      })
+      .catch(() => setEnabled(false));
+  }, []);
+
+  const save = async (next: { enabled: boolean; phone: string }) => {
+    setBusy(true);
+    try {
+      const saved = await setLeadRelay({
+        enabled: next.enabled,
+        phone: next.phone.trim() || null,
+      });
+      setEnabled(saved.enabled);
+      setPhone(saved.phone ?? "");
+      setSavedPhone(saved.phone ?? "");
+      toast("Saved", "ok");
+    } catch (e) {
+      toast(e instanceof Error ? e.message : "Failed to update", "error");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (enabled == null) return null;
+
+  return (
+    <div className="sms-redline">
+      <GlassCard className="sms-optin-card">
+        <Switch
+          checked={enabled}
+          onChange={(next) => save({ enabled: next, phone })}
+          disabled={busy}
+          label="Forward lead replies to my phone"
+        />
+        <p className="sms-hint">
+          When a lead replies, it's forwarded to the number below. Reply from
+          your phone starting with the lead's code (shown in each forward, e.g.{" "}
+          <strong>1234 on my way</strong>) and it's sent back to that lead
+          through BlueBubbles. Enter your number, then turn this on. STOP/opt-out
+          is always respected.
+          {!hasBlueBubbles &&
+            " Connect a BlueBubbles account in the Accounts tab first — the relay runs through it."}
+        </p>
+        <div className="sms-form-row">
+          <input
+            className="input"
+            placeholder="+1 480 720 7351"
+            value={phone}
+            onChange={(e) => setPhone(e.target.value)}
+            onBlur={() => {
+              if (phone.trim() !== savedPhone) save({ enabled, phone });
+            }}
+          />
+        </div>
       </GlassCard>
     </div>
   );

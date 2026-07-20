@@ -42,6 +42,7 @@ from ..models.sms_outreach import (
     SMS_ACCOUNT_ACTIVE,
     SMS_DIR_OUT,
     SMS_KIND_CAMPAIGN,
+    SMS_KIND_MANUAL,
     SMS_KIND_NOTIFICATION,
     SMS_MSG_DELIVERED,
     SMS_MSG_FAILED,
@@ -761,6 +762,58 @@ def send_notification(
         contact_id=None,
         direction=SMS_DIR_OUT,
         kind=SMS_KIND_NOTIFICATION,
+        to_number=to_number,
+        from_number=account.from_number,
+        body=body,
+    )
+    try:
+        sid, error_code, error_detail = _provider_send(account, to_number, body)
+    except SmsProviderError as e:
+        row.status = SMS_MSG_FAILED
+        row.error_detail = str(e)
+        db.add(row)
+        db.flush()
+        return FAILED, row
+    if error_code is None:
+        row.status = SMS_MSG_SENT
+        row.provider_sid = sid
+        db.add(row)
+        db.flush()
+        return SENT, row
+    row.status = SMS_MSG_FAILED
+    row.error_code = error_code
+    row.error_detail = error_detail
+    db.add(row)
+    db.flush()
+    return FAILED, row
+
+
+def send_reply(
+    db: Session, account: SmsAccount, contact: Contact, body: str
+) -> Tuple[str, Optional[SmsMessage]]:
+    """A human reply to a lead who just texted us (services/lead_relay.py — the
+    operator relaying from their phone). Deliberately SKIPS the opt-in gate
+    that `send()` enforces for outbound prospecting — replying to someone who
+    contacted you first is consented by their own initiation — but STILL
+    honors suppression (a STOP always wins) and the account cap. Records the
+    lead-linked outbound with kind=manual so it lands in that lead's
+    conversation. No compliance footer, no send window (a live reply)."""
+    if account.status != SMS_ACCOUNT_ACTIVE:
+        return BLOCKED, None
+    to_number = sms_consent.contact_sms_number(contact)
+    if not to_number:
+        return BLOCKED, None
+    if sms_consent.is_suppressed(db, account.organization_id, to_number):
+        return SUPPRESSED, None
+    if sends_today(db, account) >= account.daily_send_cap:
+        return CAP_REACHED, None
+
+    row = SmsMessage(
+        organization_id=account.organization_id,
+        account_id=account.id,
+        contact_id=contact.id,
+        direction=SMS_DIR_OUT,
+        kind=SMS_KIND_MANUAL,
         to_number=to_number,
         from_number=account.from_number,
         body=body,

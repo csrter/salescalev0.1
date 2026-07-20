@@ -2345,6 +2345,167 @@ def test_sms_campaign_inherits_timezone_client_over_org_over_default(
         api.put(f"/api/clients/{cid}/timezone", json={"timezone": None}, headers=h)
 
 
+# --- lead-reply relay (two-way, BlueBubbles) --------------------------------
+
+_OPERATOR = "+14807207351"
+
+
+@pytest.fixture()
+def captured_provider(monkeypatch):
+    """Capture every provider-level send (forwards + relayed replies) instead
+    of hitting BlueBubbles/Twilio."""
+    sent = []
+
+    def _fake(account, to_number, body):
+        sent.append({"to": to_number, "body": body, "provider": account.provider})
+        return "SIDrelay", None, None
+
+    monkeypatch.setattr(gateway, "_provider_send", _fake)
+    return sent
+
+
+def _mk_bb_account(sc_org, from_number):
+    from app.models.sms_outreach import SMS_ACCOUNT_ACTIVE, SmsAccount
+
+    db = SessionLocal()
+    try:
+        a = SmsAccount(
+            organization_id=sc_org["org"],
+            name="BB relay",
+            provider="bluebubbles",
+            account_sid="bluebubbles",
+            from_number=from_number,
+            relay_url="https://relay.test",
+            status=SMS_ACCOUNT_ACTIVE,
+            daily_send_cap=500,
+        )
+        db.add(a)
+        db.commit()
+        return a.id
+    finally:
+        db.close()
+
+
+def _relay_inbound(account_id, from_raw, body):
+    from app.api import sms_webhooks
+    from app.models.sms_outreach import SmsAccount
+
+    db = SessionLocal()
+    try:
+        acct = db.get(SmsAccount, account_id)
+        sms_webhooks._process_inbound(
+            db,
+            acct,
+            from_raw=from_raw,
+            to_raw=acct.from_number,
+            body=body,
+            provider_sid=f"g-{from_raw}-{len(body)}",
+            create_missing=True,
+            service="iMessage",
+        )
+        db.commit()
+    finally:
+        db.close()
+
+
+def _enable_relay(sc_org, api, phone=_OPERATOR):
+    r = api.put(
+        "/api/orgs/me/lead-relay",
+        json={"enabled": True, "phone": phone},
+        headers=sc_org["headers"],
+    )
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+def test_lead_relay_config_requires_phone_to_enable(sc_org, api):
+    try:
+        assert (
+            api.put(
+                "/api/orgs/me/lead-relay",
+                json={"enabled": True},
+                headers=sc_org["headers"],
+            ).status_code
+            == 422
+        )
+        r = _enable_relay(sc_org, api)
+        assert r["enabled"] is True
+        assert r["phone"] == _OPERATOR  # normalized to E.164
+        got = api.get("/api/orgs/me/lead-relay", headers=sc_org["headers"]).json()
+        assert got == {"enabled": True, "phone": _OPERATOR}
+    finally:
+        api.put(
+            "/api/orgs/me/lead-relay",
+            json={"enabled": False},
+            headers=sc_org["headers"],
+        )
+
+
+def test_lead_reply_forwards_then_operator_reply_routes_back(
+    sc_org, api, captured_provider
+):
+    """Full loop: a lead's reply forwards to the operator (labeled with the
+    lead's code), and the operator's tagged reply routes back to that lead via
+    BlueBubbles."""
+    _enable_relay(sc_org, api)
+    bb = _mk_bb_account(sc_org, "+14805550190")
+    lead = "+14805551234"  # code = 1234
+    try:
+        # 1) lead texts in → forwarded to the operator, carrying the code
+        _relay_inbound(bb, lead, "What time can you come out?")
+        fwd = [s for s in captured_provider if s["to"] == _OPERATOR]
+        assert len(fwd) == 1, captured_provider
+        assert "1234" in fwd[0]["body"]
+        assert "What time can you come out?" in fwd[0]["body"]
+
+        # 2) operator replies "1234 <message>" → relayed to the lead
+        captured_provider.clear()
+        _relay_inbound(bb, _OPERATOR, "1234 We can come by at 3pm today")
+        to_lead = [s for s in captured_provider if s["to"] == lead]
+        assert len(to_lead) == 1, captured_provider
+        assert to_lead[0]["body"] == "We can come by at 3pm today"
+        # and it's recorded as an outbound manual message on the lead
+        db = SessionLocal()
+        try:
+            row = db.execute(
+                select(SmsMessage).where(
+                    SmsMessage.to_number == lead,
+                    SmsMessage.direction == "out",
+                    SmsMessage.kind == "manual",
+                )
+            ).scalar_one()
+            assert row.body == "We can come by at 3pm today"
+        finally:
+            db.close()
+    finally:
+        api.put(
+            "/api/orgs/me/lead-relay",
+            json={"enabled": False},
+            headers=sc_org["headers"],
+        )
+
+
+def test_operator_reply_without_code_gets_help_and_texts_no_lead(
+    sc_org, api, captured_provider
+):
+    _enable_relay(sc_org, api)
+    bb = _mk_bb_account(sc_org, "+14805550191")
+    lead = "+14805555678"
+    try:
+        _relay_inbound(bb, lead, "hello")  # so a lead exists
+        captured_provider.clear()
+        _relay_inbound(bb, _OPERATOR, "on my way")  # no leading code
+        # operator gets a help nudge; nothing is sent to the lead
+        assert all(s["to"] != lead for s in captured_provider), captured_provider
+        assert any(s["to"] == _OPERATOR for s in captured_provider)
+    finally:
+        api.put(
+            "/api/orgs/me/lead-relay",
+            json={"enabled": False},
+            headers=sc_org["headers"],
+        )
+
+
 def test_24_7_window_is_always_open():
     """A campaign with a full 0–24 window on all seven days is inside its send
     window at any hour, any day — the backend contract the frontend '24/7'

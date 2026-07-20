@@ -26,6 +26,7 @@ from sqlalchemy.orm import Session
 
 from ..db import SessionLocal
 from ..models.base import utcnow
+from ..models.core import Organization
 from ..models.crm import Contact
 from ..models.sms_outreach import (
     HELP_KEYWORDS,
@@ -44,7 +45,7 @@ from ..models.sms_outreach import (
     SmsMessage,
 )
 from ..security import decrypt_secret
-from ..services import crm, sms_consent
+from ..services import crm, lead_relay, sms_consent
 
 log = logging.getLogger("salescale.sms_outreach")
 
@@ -129,6 +130,15 @@ def _process_inbound(
     reporting (an iMessage-capable provider falling back to green/SMS)."""
     from_number = sms_consent.normalize_phone(from_raw) or ""
     lowered = body.lower().strip(" .!")
+
+    # Relay: a text FROM the operator's relay phone is a command to reply to a
+    # lead (tagged with the lead's code), never a lead message — route it and
+    # stop before any lead/STOP/enrollment handling.
+    org = db.get(Organization, account.organization_id)
+    if lead_relay.is_operator(org, account, from_number):
+        lead_relay.handle_operator_reply(db, account, from_number, body)
+        return
+
     contacts = _contacts_for_number(db, account.organization_id, from_number)
 
     if not contacts and create_missing and from_number:
@@ -184,6 +194,11 @@ def _process_inbound(
                     e.next_run_at = None
                     e.replied_at = utcnow()
                     e.ended_at = utcnow()
+        # Forward a genuine lead reply to the operator's phone (best-effort).
+        # STOP is handled above and not forwarded (the lead opted out — there's
+        # nothing to reply to).
+        if contacts:
+            lead_relay.forward_to_operator(db, account, contacts[0], body)
 
 
 def _apply_status(
