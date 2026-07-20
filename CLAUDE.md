@@ -2230,7 +2230,10 @@ live activation + the entitlement flip, the Outreach module build
       org>UTC inheritance). Verified live on the local stack (Branding org tz
       save → America/Phoenix persisted; client tz endpoint round-trip;
       selecting Paganelli in SMS Config auto-applied its America/Phoenix,
-      persisted on the campaign). NOT yet deployed to production.
+      persisted on the campaign). DEPLOYED to production 2026-07-19 (2277c16):
+      git archive → VPS, backend+frontend rebuilt/recreated, migration
+      d3b8f1a4c920 applied to the live Supabase DB (alembic current =
+      d3b8f1a4c920 head), /api/health ok, PUT /api/orgs/me/timezone auth-gated.
 - [ ] Stripe live activation + entitlement flip (after 12–14, so real
       limits land everywhere in one pass)
 - [ ] Outreach module build (dev-mode) — go-live gated on Meta App
