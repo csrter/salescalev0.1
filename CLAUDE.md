@@ -2234,6 +2234,25 @@ live activation + the entitlement flip, the Outreach module build
       git archive → VPS, backend+frontend rebuilt/recreated, migration
       d3b8f1a4c920 applied to the live Supabase DB (alembic current =
       d3b8f1a4c920 head), /api/health ok, PUT /api/orgs/me/timezone auth-gated.
+- [x] SMS "Send at all hours (24/7)" toggle (2026-07-20): a per-campaign
+      Config toggle (frontend/src/sms_outreach.tsx ConfigForm) for immediate
+      replies to inbound leads at any hour — sets send_window_start=0 /
+      send_window_end=24 / send_days=[0..6] and hides the window/day pickers.
+      NO backend/schema change: sms_send.in_send_window already reads
+      0 <= hour < 24 on all days as always-open, and SmsCampaignIn/Patch
+      already allow end=24; the only gap was the UI hour dropdowns topping out
+      at 11pm (HOURS = 0..23), so a full day wasn't expressible. Toggle-off
+      restores a standard 8am–9pm Mon–Fri window. The consent gate
+      (sms_consent) and STOP/suppression are UNCHANGED and still enforced —
+      this only lifts the quiet-hours SEND WINDOW, which is defensible for a
+      direct response to a consumer-initiated inbound lead (not cold sends);
+      the UI note says as much. Test test_24_7_window_is_always_open
+      (in_send_window True at 2am for 0–24/all-days, False for 8–21/Mon–Fri).
+      Tests 560 → 561. Verified live on the local stack (toggle on → window/day
+      controls collapse → campaign persists 0–24/all-7-days/America/Phoenix).
+      DEPLOYED to production 2026-07-20 (4826738): frontend rebuilt/recreated
+      on the VPS (frontend-only + a backend test — no migration), /api/health
+      ok, app serving the new bundle.
 - [ ] Stripe live activation + entitlement flip (after 12–14, so real
       limits land everywhere in one pass)
 - [ ] Outreach module build (dev-mode) — go-live gated on Meta App
