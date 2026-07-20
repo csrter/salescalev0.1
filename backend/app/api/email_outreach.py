@@ -72,6 +72,7 @@ from ..services import email_transport
 from ..services import email_verification
 from ..services import email_warmup
 from ..services import research as research_svc
+from ..services import timezones
 
 router = APIRouter(prefix="/api/email-outreach", tags=["email-outreach"])
 
@@ -785,12 +786,19 @@ def create_campaign(
     accounts = [_scoped_get(db, scope, EmailAccount, aid) for aid in pool_ids]
     if body.send_window_start >= body.send_window_end:
         raise HTTPException(422, "send_window_start must be before send_window_end")
+    # Explicit tz (normalized by the schema validator) wins; else inherit the
+    # org default, then the email default (UTC). Email campaigns are org-scoped
+    # (no client), so there is no client tz to consider.
+    org = db.get(Organization, scope.organization_id)
+    timezone = body.timezone or timezones.campaign_default(
+        None, org.timezone if org else None, "UTC"
+    )
     campaign = EmailCampaign(
         organization_id=scope.organization_id,
         name=body.name,
         status=CAMPAIGN_DRAFT,
         account_id=accounts[0].id,
-        timezone=body.timezone,
+        timezone=timezone,
         send_window_start=body.send_window_start,
         send_window_end=body.send_window_end,
         send_days=body.send_days if body.send_days is not None else [0, 1, 2, 3, 4],

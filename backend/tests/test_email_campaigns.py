@@ -1517,3 +1517,27 @@ def test_campaign_pool_api_contract(cc_org, api, probe_ok):
     )
     assert r.status_code == 200, r.text
     assert r.json()["account_ids"] == [a["id"]]
+
+
+def test_email_campaign_inherits_org_timezone(cc_org, api, probe_ok):
+    """A new email campaign inherits the org's default timezone (email has no
+    client tier); an explicit timezone still wins, and clearing the org
+    default returns new campaigns to UTC."""
+    h = cc_org["headers"]
+    a = _mk_account(cc_org, api)
+    try:
+        api.put("/api/orgs/me/timezone", json={"timezone": "America/Phoenix"}, headers=h)
+        assert (
+            _mk_campaign(cc_org, api, a["id"], name="tz-inherit")["timezone"]
+            == "America/Phoenix"
+        )
+        assert (
+            _mk_campaign(cc_org, api, a["id"], name="tz-explicit", timezone="America/Denver")[
+                "timezone"
+            ]
+            == "America/Denver"
+        )
+        api.put("/api/orgs/me/timezone", json={"timezone": None}, headers=h)
+        assert _mk_campaign(cc_org, api, a["id"], name="tz-utc")["timezone"] == "UTC"
+    finally:
+        api.put("/api/orgs/me/timezone", json={"timezone": None}, headers=h)

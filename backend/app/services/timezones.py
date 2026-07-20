@@ -56,6 +56,21 @@ def normalize(name: Optional[str]) -> Optional[str]:
         return None
 
 
+def campaign_default(
+    client_tz: Optional[str], org_tz: Optional[str], fallback: str
+) -> str:
+    """The canonical timezone a NEW campaign should inherit: the client's own
+    timezone if set, else the org's default, else `fallback` (the module's
+    long-standing per-channel default, e.g. "America/New_York" for SMS or
+    "UTC" for email). Each candidate is normalized, so an abbreviation stored
+    on the org/client still yields a real IANA key."""
+    for candidate in (client_tz, org_tz):
+        canonical = normalize(candidate)
+        if canonical:
+            return canonical
+    return fallback
+
+
 def resolve(name: Optional[str]) -> dt.tzinfo:
     """Runtime tzinfo, tolerating legacy abbreviations already stored on a
     campaign. Falls back to UTC (logged, not silent) only when truly

@@ -153,6 +153,7 @@ class OrganizationOut(BaseModel):
     require_mfa: bool = False
     allow_remember_device: bool = True
     sms_opt_in_default: bool = False
+    timezone: Optional[str] = None
     created_at: dt.datetime
 
 
@@ -166,6 +167,17 @@ class OrgRememberDeviceIn(BaseModel):
 
 class OrgSmsOptInDefaultIn(BaseModel):
     sms_opt_in_default: bool
+
+
+class OrgTimezoneIn(BaseModel):
+    # None clears the org default (falls back to the outreach default). A
+    # non-null value must be a resolvable IANA name / known abbreviation.
+    timezone: Optional[str] = None
+
+    @field_validator("timezone")
+    @classmethod
+    def _tz(cls, v):
+        return _valid_campaign_timezone(v)
 
 
 class TeamMemberCreate(BaseModel):
@@ -368,7 +380,18 @@ class ClientOutPublic(BaseModel):
 
 class ClientOutTeam(ClientOutPublic):
     internal_notes: Optional[str] = None
+    timezone: Optional[str] = None
     created_at: dt.datetime
+
+
+class ClientTimezoneIn(BaseModel):
+    # None clears the client's timezone (falls back to the org default).
+    timezone: Optional[str] = None
+
+    @field_validator("timezone")
+    @classmethod
+    def _tz(cls, v):
+        return _valid_campaign_timezone(v)
 
 
 class ConnectionOut(BaseModel):
@@ -1369,7 +1392,8 @@ class EmailCampaignIn(BaseModel):
     # wins when both are.
     account_id: Optional[str] = None
     account_ids: Optional[List[str]] = Field(default=None, min_length=1, max_length=10)
-    timezone: str = Field(default="UTC", max_length=64)
+    # None = inherit the org's default timezone (→ "UTC"), resolved in create.
+    timezone: Optional[str] = Field(default=None, max_length=64)
     send_window_start: int = Field(default=8, ge=0, le=23)
     send_window_end: int = Field(default=17, ge=1, le=24)
     send_days: Optional[List[int]] = Field(default=None)
@@ -1539,7 +1563,9 @@ class SmsCampaignIn(BaseModel):
     name: str = Field(min_length=1, max_length=200)
     account_id: str
     client_id: Optional[str] = None
-    timezone: str = Field(default="America/New_York", max_length=64)
+    # None = inherit (client tz → org tz → "America/New_York"), resolved in the
+    # create endpoint. An explicit value still wins.
+    timezone: Optional[str] = Field(default=None, max_length=64)
     send_window_start: int = Field(default=11, ge=0, le=23)
     send_window_end: int = Field(default=20, ge=1, le=24)
     send_days: Optional[List[int]] = Field(default=None)

@@ -1172,14 +1172,20 @@ function ConfigForm({
       <Field label="Client">
         <select
           value={detail.client_id ?? ""}
-          onChange={(e) =>
+          onChange={(e) => {
+            const id = e.target.value;
+            const picked = clients.find((c) => c.id === id);
             onPatch({
-              client_id: e.target.value || null,
+              client_id: id || null,
               // Clearing the client can't co-exist with auto-enroll (server 422s);
               // turn it off in the same patch so the UI never sends an invalid pair.
-              ...(e.target.value ? {} : { auto_enroll_new_leads: false }),
-            })
-          }
+              ...(id ? {} : { auto_enroll_new_leads: false }),
+              // Apply the client's own timezone (if it has one) so send-window /
+              // quiet-hours follow that client's market. Never overwrite with a
+              // blank — a client without a timezone leaves the campaign's as-is.
+              ...(picked?.timezone ? { timezone: picked.timezone } : {}),
+            });
+          }}
         >
           <option value="">No client (manual enroll only)</option>
           {clients.map((c) => (
@@ -1229,6 +1235,9 @@ function ConfigForm({
         </Field>
         <Field label="Timezone">
           <input
+            // Re-mount when the timezone changes (e.g. applied from the client
+            // above) so this uncontrolled input reflects the new value.
+            key={detail.timezone}
             defaultValue={detail.timezone}
             placeholder="America/New_York"
             onBlur={(e) => {

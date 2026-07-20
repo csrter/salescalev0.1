@@ -2268,3 +2268,79 @@ def test_auto_enroll_skips_lead_without_consent(sc_org, api, twilio_creds_ok):
         db.close()
     assert found is None
 
+
+# --- org + client timezone settings & campaign inheritance -------------------
+
+
+def test_org_timezone_endpoint_set_normalize_clear(sc_org, api):
+    h = sc_org["headers"]
+    try:
+        r = api.put("/api/orgs/me/timezone", json={"timezone": "America/Phoenix"}, headers=h)
+        assert r.status_code == 200, r.text
+        assert r.json()["timezone"] == "America/Phoenix"
+        # reflected on GET /me
+        assert api.get("/api/orgs/me", headers=h).json()["timezone"] == "America/Phoenix"
+        # abbreviations canonicalize to a real IANA key
+        assert api.put("/api/orgs/me/timezone", json={"timezone": "PST"}, headers=h).json()[
+            "timezone"
+        ] == "America/Los_Angeles"
+        # garbage rejected
+        assert api.put(
+            "/api/orgs/me/timezone", json={"timezone": "Mars/Olympus"}, headers=h
+        ).status_code == 422
+        # null clears
+        assert api.put("/api/orgs/me/timezone", json={"timezone": None}, headers=h).json()[
+            "timezone"
+        ] is None
+    finally:
+        api.put("/api/orgs/me/timezone", json={"timezone": None}, headers=h)
+
+
+def test_client_timezone_endpoint(sc_org, api):
+    h, cid = sc_org["headers"], sc_org["client"]
+    try:
+        r = api.put(f"/api/clients/{cid}/timezone", json={"timezone": "America/Phoenix"}, headers=h)
+        assert r.status_code == 200, r.text
+        assert r.json()["timezone"] == "America/Phoenix"
+        assert api.get(f"/api/clients/{cid}", headers=h).json()["timezone"] == "America/Phoenix"
+        assert api.put(
+            f"/api/clients/{cid}/timezone", json={"timezone": "Nowhere"}, headers=h
+        ).status_code == 422
+    finally:
+        api.put(f"/api/clients/{cid}/timezone", json={"timezone": None}, headers=h)
+
+
+def test_sms_campaign_inherits_timezone_client_over_org_over_default(
+    sc_org, api, twilio_creds_ok
+):
+    h, cid = sc_org["headers"], sc_org["client"]
+    acct = _mk_account(sc_org, api, from_number="+14805550180")
+    try:
+        # org default applies when the campaign has no client
+        api.put("/api/orgs/me/timezone", json={"timezone": "America/Chicago"}, headers=h)
+        assert _mk_campaign(sc_org, api, acct["id"], name="tz-org")["timezone"] == "America/Chicago"
+
+        # a client's own timezone wins over the org default
+        api.put(f"/api/clients/{cid}/timezone", json={"timezone": "America/Phoenix"}, headers=h)
+        assert (
+            _mk_campaign(sc_org, api, acct["id"], name="tz-client", client_id=cid)["timezone"]
+            == "America/Phoenix"
+        )
+
+        # an explicit timezone in the request wins over both
+        assert (
+            _mk_campaign(
+                sc_org, api, acct["id"], name="tz-explicit", client_id=cid,
+                timezone="America/Denver",
+            )["timezone"]
+            == "America/Denver"
+        )
+
+        # nothing set anywhere → the SMS default
+        api.put("/api/orgs/me/timezone", json={"timezone": None}, headers=h)
+        api.put(f"/api/clients/{cid}/timezone", json={"timezone": None}, headers=h)
+        assert _mk_campaign(sc_org, api, acct["id"], name="tz-default")["timezone"] == "America/New_York"
+    finally:
+        api.put("/api/orgs/me/timezone", json={"timezone": None}, headers=h)
+        api.put(f"/api/clients/{cid}/timezone", json={"timezone": None}, headers=h)
+

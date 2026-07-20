@@ -64,6 +64,7 @@ from ..services import (
     sms_campaigns,
     sms_consent,
     sms_send,
+    timezones,
 )
 
 router = APIRouter(prefix="/api/sms", tags=["sms-outreach"])
@@ -539,22 +540,33 @@ def create_campaign(
     account = _scoped_get(db, scope, SmsAccount, body.account_id)
     if body.send_window_start >= body.send_window_end:
         raise HTTPException(422, "send_window_start must be before send_window_end")
+    client = None
     client_id = None
     if body.client_id:
-        client_id = _client_or_404(db, scope, body.client_id).id
+        client = _client_or_404(db, scope, body.client_id)
+        client_id = client.id
     if body.auto_enroll_new_leads and client_id is None:
         raise HTTPException(
             422,
             "Auto-enroll needs a client — set client_id so the campaign knows "
             "whose new leads to enroll",
         )
+    # Timezone: an explicit value (already normalized by the schema validator)
+    # wins; otherwise inherit the client's tz, then the org's, then the SMS
+    # default. Drives the send-window / TCPA quiet-hours evaluation.
+    org = db.get(Organization, scope.organization_id)
+    timezone = body.timezone or timezones.campaign_default(
+        client.timezone if client else None,
+        org.timezone if org else None,
+        "America/New_York",
+    )
     campaign = SmsCampaign(
         organization_id=scope.organization_id,
         client_id=client_id,
         name=body.name,
         status=SMS_CAMPAIGN_DRAFT,
         account_id=account.id,
-        timezone=body.timezone,
+        timezone=timezone,
         send_window_start=body.send_window_start,
         send_window_end=body.send_window_end,
         send_days=body.send_days if body.send_days is not None else [0, 1, 2, 3, 4],

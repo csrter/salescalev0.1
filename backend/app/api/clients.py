@@ -14,6 +14,7 @@ from ..services import entitlements, external_sync, sms_consent
 from ..schemas import (
     ClientCreate,
     ClientLeadNotificationsIn,
+    ClientTimezoneIn,
     ClientOutPublic,
     ClientOutTeam,
     ConnectionOut,
@@ -399,6 +400,24 @@ def set_client_lead_notifications(
     }
     db.commit()
     return {"enabled": body.enabled, "phones": phones}
+
+
+@router.put("/{client_id}/timezone")
+def set_client_timezone(
+    client_id: str,
+    body: ClientTimezoneIn,
+    user: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """This client's default timezone (canonical IANA, validated; None clears
+    it → inherits the org default). Campaigns scoped to this client inherit it
+    at creation. Does not rewrite existing campaigns."""
+    client = db.get(Client, client_id)
+    if client is None or client.organization_id != user.organization_id:
+        raise HTTPException(404, "Not found")
+    client.timezone = body.timezone  # normalized by the validator; None clears
+    db.commit()
+    return {"timezone": client.timezone}
 
 
 @router.get("/{client_id}/connections", response_model=List[ConnectionOut])

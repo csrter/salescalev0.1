@@ -203,9 +203,15 @@ export interface Org {
   require_mfa: boolean;
   allow_remember_device: boolean;
   sms_opt_in_default: boolean;
+  /** Agency default IANA timezone; null = the outreach fallback. New campaigns inherit it. */
+  timezone: string | null;
   created_at: string;
 }
 export const getMyOrg = () => api<Org>("/api/orgs/me");
+/** Agency default timezone (IANA name, e.g. "America/Phoenix"); null clears it.
+ * New SMS/email campaigns inherit it unless the campaign's client has its own. */
+export const setOrgTimezone = (timezone: string | null) =>
+  api<Org>("/api/orgs/me/timezone", { method: "PUT", body: JSON.stringify({ timezone }) });
 export const setRequireMfa = (require_mfa: boolean) =>
   api<Org>("/api/orgs/me/require-mfa", { method: "PUT", body: JSON.stringify({ require_mfa }) });
 export const setAllowRememberDevice = (allow_remember_device: boolean) =>
@@ -353,6 +359,8 @@ export interface Client {
   name: string;
   status: string;
   internal_notes?: string | null;
+  /** Client's default IANA timezone; null = inherit the org default. */
+  timezone?: string | null;
 }
 
 export const createClient = (body: { name: string; internal_notes?: string }) =>
@@ -360,6 +368,16 @@ export const createClient = (body: { name: string; internal_notes?: string }) =>
 
 /** Team-only client roster (excludes the house CRM client). */
 export const listClients = () => api<Client[]>("/api/clients");
+
+/** Single client (team serialization includes timezone). */
+export const getClient = (clientId: string) => api<Client>(`/api/clients/${clientId}`);
+
+/** Set a client's default timezone (IANA name); null clears it (inherits org). */
+export const setClientTimezone = (clientId: string, timezone: string | null) =>
+  api<{ timezone: string | null }>(`/api/clients/${clientId}/timezone`, {
+    method: "PUT",
+    body: JSON.stringify({ timezone }),
+  });
 
 // --- Account recovery / verification (no auth required) ---
 

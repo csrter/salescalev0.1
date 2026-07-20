@@ -14,9 +14,11 @@ import { useEffect, useState, type CSSProperties } from "react";
 import {
   clearCustomDomain,
   clearOrgBranding,
+  getMyOrg,
   getOrgBranding,
   setCustomDomain,
   setOrgBranding,
+  setOrgTimezone,
   verifyCustomDomain,
   type BrandingConfig,
   type OrgBranding,
@@ -40,6 +42,65 @@ const COLOR_FIELDS: { key: string; label: string; fallback: string }[] = [
 
 const fallbackFor = (key: string) =>
   COLOR_FIELDS.find((f) => f.key === key)?.fallback ?? "#2b62e0";
+
+/** Agency-wide default timezone. Self-contained (loads its own org). Lives on
+ * this settings page because there is no separate "Organization" page; it is
+ * NOT branding — new SMS/email campaigns inherit it for their send-window /
+ * quiet-hours (a client's own timezone wins for that client's campaigns). */
+function OrgTimezoneCard() {
+  const toast = useToast();
+  const [tz, setTz] = useState<string | null>(null);
+  const [loaded, setLoaded] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    getMyOrg()
+      .then((o) => {
+        setTz(o.timezone);
+        setLoaded(true);
+      })
+      .catch(() => setLoaded(true));
+  }, []);
+
+  const save = async (value: string) => {
+    const next = value.trim() || null;
+    if (next === tz) return;
+    setBusy(true);
+    try {
+      const o = await setOrgTimezone(next);
+      setTz(o.timezone);
+      toast("Timezone saved", "ok");
+    } catch (e) {
+      toast(e instanceof Error ? e.message : "Save failed", "error");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <section className="set-section card">
+      <h3>Organization timezone</h3>
+      <div className="set-form">
+        <Field label="Default timezone" optional>
+          <input
+            key={loaded ? tz ?? "" : "loading"}
+            defaultValue={tz ?? ""}
+            placeholder="America/New_York"
+            disabled={!loaded || busy}
+            onBlur={(e) => save(e.target.value)}
+          />
+        </Field>
+        <p className="set-footnote">
+          An IANA name like <code>America/Phoenix</code>. New SMS and email
+          campaigns inherit this for their send window and quiet hours; a
+          client with its own timezone overrides it for that client&apos;s
+          campaigns. Changing it doesn&apos;t affect existing campaigns. Leave
+          blank to use the default.
+        </p>
+      </div>
+    </section>
+  );
+}
 
 export function BrandingSettings() {
   const toast = useToast();
@@ -164,6 +225,8 @@ export function BrandingSettings() {
           White-labeling isn't included in your current plan.
         </Alert>
       )}
+
+      <OrgTimezoneCard />
 
       <section className="set-section card">
         <h3>Identity</h3>

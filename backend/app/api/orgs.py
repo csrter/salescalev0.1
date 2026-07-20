@@ -82,6 +82,7 @@ from ..schemas import (
     OrgOutreachContextIn,
     OrgRememberDeviceIn,
     OrgSmsOptInDefaultIn,
+    OrgTimezoneIn,
     OrgSecurityIn,
     OrgSignupRequest,
     QualifiedLeadCriteriaIn,
@@ -252,6 +253,22 @@ def set_sms_opt_in_default(
     send time is unaffected."""
     org = db.get(Organization, user.organization_id)
     org.sms_opt_in_default = body.sms_opt_in_default
+    db.commit()
+    return org
+
+
+@router.put("/me/timezone", response_model=OrganizationOut)
+def set_org_timezone(
+    body: OrgTimezoneIn,
+    user: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """The agency's default timezone (canonical IANA, validated). New SMS/email
+    campaigns inherit it for their send-window / TCPA quiet-hours evaluation
+    unless the campaign's client has its own timezone (which wins). Changing it
+    does NOT rewrite existing campaigns' timezones — new campaigns only."""
+    org = db.get(Organization, user.organization_id)
+    org.timezone = body.timezone  # already normalized by the validator; None clears
     db.commit()
     return org
 

@@ -139,6 +139,11 @@ class Organization(Base):
     # insights and outreach calls for this org.
     ai_provider: Mapped[Optional[str]] = mapped_column(String(20))
     ai_model: Mapped[Optional[str]] = mapped_column(String(80))
+    # The agency's default IANA timezone (e.g. "America/Phoenix"). NULL = the
+    # outreach fallback. New SMS/email campaigns inherit it for their
+    # send-window / TCPA quiet-hours evaluation; a client's own timezone (below)
+    # takes precedence for that client's campaigns. See services/timezones.
+    timezone: Mapped[Optional[str]] = mapped_column(String(64))
     created_at: Mapped[dt.datetime] = created_at_column()
 
 
@@ -166,6 +171,10 @@ class Client(Base):
     # has a documented code default — the column exists so per-client
     # variation is data, not code.
     metric_settings: Mapped[Optional[dict]] = mapped_column(JSON)
+    # This client's IANA timezone (e.g. the market their leads are in). NULL =
+    # inherit the Organization's default. Takes precedence over the org default
+    # when a campaign scoped to this client picks its send-window timezone.
+    timezone: Mapped[Optional[str]] = mapped_column(String(64))
     # Organization-internal — must never be serialized to client-role users.
     internal_notes: Mapped[Optional[str]] = mapped_column(Text)
     # The Organization's own prospect pipeline (the agency "house" CRM) lives on

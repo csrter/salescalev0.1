@@ -33,8 +33,10 @@ import {
   createContactList,
   deleteContact,
   deleteContactList,
+  getClient,
   getClientLeadNotifications,
   setClientLeadNotifications,
+  setClientTimezone,
   listContactLists,
   listResearchFields,
   renameContactList,
@@ -3076,6 +3078,7 @@ function SetupPanel({
       <FieldManager onChanged={onFieldsChanged} />
       <ResearchFieldManager />
       <LeadFormRouting clientId={clientId} />
+      <ClientTimezoneCard clientId={clientId} />
       <ClientLeadNotifications clientId={clientId} />
       <ExternalSyncConfig clientId={clientId} />
     </div>
@@ -3446,6 +3449,56 @@ function LeadFormRouting({ clientId }: { clientId: string }) {
  * module dashboard) — e.g. the client's own business owner, texted
  * alongside the agency's own ops numbers when a lead for THIS client
  * arrives. Admin-only; needs an SMS account connected org-wide to send. */
+function ClientTimezoneCard({ clientId }: { clientId: string }) {
+  const toast = useToast();
+  const [tz, setTz] = useState<string | null>(null);
+  const [loaded, setLoaded] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    getClient(clientId)
+      .then((c) => {
+        setTz(c.timezone ?? null);
+        setLoaded(true);
+      })
+      .catch(() => setLoaded(true));
+  }, [clientId]);
+
+  const save = (value: string) => {
+    const next = value.trim() || null;
+    if (next === tz) return;
+    setBusy(true);
+    setClientTimezone(clientId, next)
+      .then((r) => {
+        setTz(r.timezone);
+        toast("Timezone saved", "ok");
+      })
+      .catch((e) => toast((e as Error).message, "error"))
+      .finally(() => setBusy(false));
+  };
+
+  return (
+    <div className="crm-setup-block">
+      <h5 className="crm-subhead crm-subhead--sm">Client timezone</h5>
+      <p className="crm-muted">
+        This client's market timezone (IANA name, e.g.{" "}
+        <code>America/Phoenix</code>). Campaigns scoped to this client inherit
+        it for their send window and quiet hours, overriding the agency
+        default. Leave blank to use the agency default (set in Branding).
+      </p>
+      <div className="crm-form">
+        <input
+          key={loaded ? tz ?? "" : "loading"}
+          defaultValue={tz ?? ""}
+          placeholder="America/New_York"
+          disabled={!loaded || busy}
+          onBlur={(e) => save(e.target.value)}
+        />
+      </div>
+    </div>
+  );
+}
+
 function ClientLeadNotifications({ clientId }: { clientId: string }) {
   const toast = useToast();
   const [enabled, setEnabled] = useState<boolean | null>(null);
