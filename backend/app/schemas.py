@@ -1559,10 +1559,14 @@ class ClientLeadNotificationsIn(BaseModel):
     """Per-client counterpart — e.g. the client's own business owner, texted
     alongside (or instead of) the agency's own ops numbers. Same shape and
     validation as OrgLeadNotificationsIn, stored in
-    client.metric_settings["lead_notifications"] (mirrors external_sync)."""
+    client.metric_settings["lead_notifications"] (mirrors external_sync).
+    message_template, when set, overrides the org-wide template for this
+    client's leads; blank/omitted falls back to the org template then the
+    built-in default (services/lead_notify.resolve_template)."""
 
     enabled: bool
     phones: List[str] = Field(default_factory=list)
+    message_template: Optional[str] = Field(default=None, max_length=1000)
 
 
 # --- SMS campaigns (campaign engine) ---------------------------------------

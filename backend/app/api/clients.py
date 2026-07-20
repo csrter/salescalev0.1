@@ -10,7 +10,7 @@ from ..deps import TenantScope, get_scope, require_admin
 from ..models.core import Client, Organization, PlatformConnection, User
 from ..models.crm import LeadFormConfig
 from ..pagination import Page, paginator
-from ..services import entitlements, external_sync, sms_consent
+from ..services import entitlements, external_sync, lead_notify, sms_consent
 from ..schemas import (
     ClientCreate,
     ClientLeadNotificationsIn,
@@ -366,10 +366,15 @@ def get_client_lead_notifications(
     client = db.get(Client, client_id)
     if client is None or client.organization_id != user.organization_id:
         raise HTTPException(404, "Not found")
+    org = db.get(Organization, user.organization_id)
     config = (client.metric_settings or {}).get("lead_notifications") or {}
     return {
         "enabled": bool(config.get("enabled")),
         "phones": config.get("phones") or [],
+        # This client's own template (null → falls back to default_template),
+        # and the fallback itself: the org-wide template, or the built-in.
+        "message_template": config.get("template"),
+        "default_template": org.lead_notification_template or lead_notify.DEFAULT_TEMPLATE,
     }
 
 
@@ -394,12 +399,28 @@ def set_client_lead_notifications(
         raise HTTPException(
             400, f"Up to {_MAX_CLIENT_NOTIFICATION_PHONES} notification numbers"
         )
+    # Blank/omitted template → None (falls back to the org template, then the
+    # built-in default); validated against the same {{token}} set as the org.
+    template = (body.message_template or "").strip() or None
+    if template:
+        bad = lead_notify.unknown_tokens(template)
+        if bad:
+            raise HTTPException(422, f"Unknown token(s): {', '.join(bad)}")
+    notifications = {"enabled": body.enabled, "phones": phones}
+    if template:
+        notifications["template"] = template
     client.metric_settings = {
         **(client.metric_settings or {}),
-        "lead_notifications": {"enabled": body.enabled, "phones": phones},
+        "lead_notifications": notifications,
     }
     db.commit()
-    return {"enabled": body.enabled, "phones": phones}
+    org = db.get(Organization, user.organization_id)
+    return {
+        "enabled": body.enabled,
+        "phones": phones,
+        "message_template": template,
+        "default_template": org.lead_notification_template or lead_notify.DEFAULT_TEMPLATE,
+    }
 
 
 @router.put("/{client_id}/timezone")

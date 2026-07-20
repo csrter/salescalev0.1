@@ -1769,7 +1769,12 @@ def test_client_lead_notifications_settings_roundtrip(ln_org, api):
         headers=ln_org["headers"],
     )
     assert r.status_code == 200, r.text
-    assert r.json() == {"enabled": False, "phones": []}
+    assert r.json() == {
+        "enabled": False,
+        "phones": [],
+        "message_template": None,
+        "default_template": lead_notify.DEFAULT_TEMPLATE,
+    }
 
     r = api.put(
         f"/api/clients/{ln_org['client']}/lead-notifications",
@@ -1777,13 +1782,23 @@ def test_client_lead_notifications_settings_roundtrip(ln_org, api):
         headers=ln_org["headers"],
     )
     assert r.status_code == 200, r.text
-    assert r.json() == {"enabled": True, "phones": ["+14805559997"]}
+    assert r.json() == {
+        "enabled": True,
+        "phones": ["+14805559997"],
+        "message_template": None,
+        "default_template": lead_notify.DEFAULT_TEMPLATE,
+    }
 
     r = api.get(
         f"/api/clients/{ln_org['client']}/lead-notifications",
         headers=ln_org["headers"],
     )
-    assert r.json() == {"enabled": True, "phones": ["+14805559997"]}
+    assert r.json() == {
+        "enabled": True,
+        "phones": ["+14805559997"],
+        "message_template": None,
+        "default_template": lead_notify.DEFAULT_TEMPLATE,
+    }
 
     r = api.put(
         f"/api/clients/{ln_org['client']}/lead-notifications",
@@ -1845,6 +1860,85 @@ def test_client_lead_notifications_combine_with_org_deduped(
         "+14805559991",
         "+14805559999",
     ]
+
+
+def test_client_lead_notification_template_overrides_org(
+    ln_org, api, twilio_creds_ok, captured_sends
+):
+    """A per-client template overrides the org-wide one for that client's
+    leads — every recipient (org-wide + client) gets the client body. Clearing
+    it falls back to the org template; unknown tokens are rejected at save."""
+    _mk_account(ln_org, api, from_number="+14805559989")
+    # Org-wide: one number + a distinctive org template.
+    r = api.put(
+        "/api/orgs/me/lead-notifications",
+        json={
+            "enabled": True,
+            "phones": ["+14805559991"],
+            "message_template": "ORG {{name}}",
+        },
+        headers=ln_org["headers"],
+    )
+    assert r.status_code == 200, r.text
+    # Per-client: its own number + its own template.
+    r = api.put(
+        f"/api/clients/{ln_org['client']}/lead-notifications",
+        json={
+            "enabled": True,
+            "phones": ["+14805559992"],
+            "message_template": "Hi {{first_name}} for {{brand}}",
+        },
+        headers=ln_org["headers"],
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["message_template"] == "Hi {{first_name}} for {{brand}}"
+
+    r = api.post(
+        "/api/track/lead",
+        json={
+            "client_id": ln_org["client"],
+            "session_key": "notify-tmpl",
+            "email": "tmpl@example.com",
+            "first_name": "Cara",
+            "last_name": "Lee",
+        },
+    )
+    assert r.status_code == 201, r.text
+    # Both recipients get the CLIENT template, not the org one.
+    assert {s["body"] for s in captured_sends} == {"Hi Cara for Notify Client"}
+    assert sorted(s["to"] for s in captured_sends) == [
+        "+14805559991",
+        "+14805559992",
+    ]
+
+    # Unknown token rejected at save.
+    r = api.put(
+        f"/api/clients/{ln_org['client']}/lead-notifications",
+        json={"enabled": True, "phones": ["+14805559992"], "message_template": "{{bogus}}"},
+        headers=ln_org["headers"],
+    )
+    assert r.status_code == 422
+
+    # Clearing the template falls back to the org-wide template.
+    r = api.put(
+        f"/api/clients/{ln_org['client']}/lead-notifications",
+        json={"enabled": True, "phones": ["+14805559992"], "message_template": ""},
+        headers=ln_org["headers"],
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["message_template"] is None
+    captured_sends.clear()
+    r = api.post(
+        "/api/track/lead",
+        json={
+            "client_id": ln_org["client"],
+            "session_key": "notify-tmpl-2",
+            "email": "tmpl2@example.com",
+            "first_name": "Deb",
+        },
+    )
+    assert r.status_code == 201, r.text
+    assert {s["body"] for s in captured_sends} == {"ORG Deb"}
 
 
 def test_render_notification_body_default_and_custom_template():

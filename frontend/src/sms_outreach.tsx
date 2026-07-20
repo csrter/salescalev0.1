@@ -677,7 +677,7 @@ function LeadNotificationsCard({ hasAccount }: { hasAccount: boolean }) {
             </div>
             <Field
               label="Message template"
-              description="Also used for a client's own alert numbers (CRM setup → Lead SMS notifications). Tokens: {{name}} {{first_name}} {{last_name}} {{phone}} {{email}} {{brand}} {{zip}} {{source}}"
+              description="The default for every client's alerts — a client can override it in CRM setup → Lead SMS notifications. Tokens: {{name}} {{first_name}} {{last_name}} {{phone}} {{email}} {{brand}} {{zip}} {{source}}"
             >
               <textarea
                 className="input sms-notify-template"

@@ -1669,6 +1669,14 @@ tr.negative td {
   min-width: 0;
 }
 
+/* Lead-notification template — a {{token}} spec block, so mono like the
+   other template editors (DESIGN v3). */
+.crm-notify-template {
+  font-family: var(--font-mono);
+  white-space: pre;
+  width: 100%;
+}
+
 .crm-setup code {
   word-break: break-all;
   color: #cfe0ff;

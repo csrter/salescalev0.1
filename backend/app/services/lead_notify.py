@@ -139,6 +139,18 @@ def render_notification_body(
     return body[:_MAX_BODY_LEN]
 
 
+def resolve_template(org: Organization, client: Client) -> Optional[str]:
+    """The effective template for a notification about one of `client`'s leads:
+    the client's own template overrides the org-wide one, and both fall back to
+    DEFAULT_TEMPLATE inside render_notification_body. One body is sent to every
+    recipient (org-wide ops numbers + the client's own numbers) — a client that
+    customizes its template customizes the alert for all of its own leads. The
+    per-client template lives next to its phones in
+    client.metric_settings["lead_notifications"]["template"]."""
+    client_cfg = (client.metric_settings or {}).get("lead_notifications") or {}
+    return client_cfg.get("template") or org.lead_notification_template
+
+
 def _recipient_phones(org: Organization, client: Client) -> list:
     phones: list = []
     if org.notify_new_leads:
@@ -192,7 +204,7 @@ def notify_new_lead(db: Session, client: Client, contact: Contact) -> None:
                 client.organization_id,
             )
             return
-        body = render_notification_body(db, org.lead_notification_template, client, contact)
+        body = render_notification_body(db, resolve_template(org, client), client, contact)
         for phone in phones:
             result, _row = sms_send.send_notification(db, account, phone, body)
             if result != sms_send.SENT:

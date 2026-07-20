@@ -269,15 +269,17 @@ export const setLeadRelay = (body: LeadRelayConfig) =>
   });
 
 /** Per-client counterpart — e.g. the client's own business owner, texted
- * alongside the agency's own ops numbers above. */
+ * alongside the agency's own ops numbers above. message_template, when set,
+ * overrides the org-wide template for this client's leads; null → the
+ * default_template (the org template, or the built-in). */
 export const getClientLeadNotifications = (clientId: string) =>
-  api<LeadNotificationsConfig>(`/api/clients/${clientId}/lead-notifications`);
+  api<OrgLeadNotificationsConfig>(`/api/clients/${clientId}/lead-notifications`);
 
 export const setClientLeadNotifications = (
   clientId: string,
-  body: LeadNotificationsConfig
+  body: LeadNotificationsConfig & { message_template?: string | null }
 ) =>
-  api<LeadNotificationsConfig>(`/api/clients/${clientId}/lead-notifications`, {
+  api<OrgLeadNotificationsConfig>(`/api/clients/${clientId}/lead-notifications`, {
     method: "PUT",
     body: JSON.stringify(body),
   });

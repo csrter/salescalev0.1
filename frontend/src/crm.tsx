@@ -3503,6 +3503,9 @@ function ClientLeadNotifications({ clientId }: { clientId: string }) {
   const toast = useToast();
   const [enabled, setEnabled] = useState<boolean | null>(null);
   const [phones, setPhones] = useState<string[]>([]);
+  const [template, setTemplate] = useState("");
+  const [defaultTemplate, setDefaultTemplate] = useState("");
+  const [customized, setCustomized] = useState(false);
   const [busy, setBusy] = useState(false);
 
   const load = useCallback(() => {
@@ -3510,20 +3513,34 @@ function ClientLeadNotifications({ clientId }: { clientId: string }) {
       .then((c) => {
         setEnabled(c.enabled);
         setPhones(c.phones.length > 0 ? c.phones : [""]);
+        setTemplate(c.message_template ?? c.default_template);
+        setDefaultTemplate(c.default_template);
+        setCustomized(c.message_template != null);
       })
       .catch(() => {});
   }, [clientId]);
   useEffect(load, [load]);
 
-  const save = (next: { enabled: boolean; phones: string[] }) => {
+  const save = (next: {
+    enabled: boolean;
+    phones: string[];
+    template: string;
+    customized: boolean;
+  }) => {
     setBusy(true);
     setClientLeadNotifications(clientId, {
       enabled: next.enabled,
       phones: next.phones.map((p) => p.trim()).filter(Boolean),
+      // Only send a template when this client has opted into a custom one;
+      // otherwise leave it null so it inherits the org-wide template.
+      message_template: next.customized ? next.template : null,
     })
       .then((saved) => {
         setEnabled(saved.enabled);
         setPhones(saved.phones.length > 0 ? saved.phones : [""]);
+        setTemplate(saved.message_template ?? saved.default_template);
+        setDefaultTemplate(saved.default_template);
+        setCustomized(saved.message_template != null);
         toast("Saved", "ok");
       })
       .catch((e) => toast((e as Error).message, "error"))
@@ -3543,7 +3560,7 @@ function ClientLeadNotifications({ clientId }: { clientId: string }) {
       </p>
       <Switch
         checked={enabled}
-        onChange={(next) => save({ enabled: next, phones })}
+        onChange={(next) => save({ enabled: next, phones, template, customized })}
         disabled={busy}
         label="Text this client when a new lead comes in"
       />
@@ -3577,13 +3594,52 @@ function ClientLeadNotifications({ clientId }: { clientId: string }) {
             >
               <Plus size={14} /> Add number
             </Button>
+          </div>
+          <Switch
+            checked={customized}
+            onChange={(next) => {
+              setCustomized(next);
+              if (next && !template) setTemplate(defaultTemplate);
+            }}
+            disabled={busy}
+            label="Use a custom message for this client"
+          />
+          {customized ? (
+            <>
+              <p className="crm-muted">
+                Overrides the org-wide template for this client's leads. Tokens:{" "}
+                {"{{name}} {{first_name}} {{last_name}} {{phone}} {{email}} {{brand}} {{zip}} {{source}}"}
+              </p>
+              <textarea
+                className="input crm-notify-template"
+                rows={6}
+                value={template}
+                onChange={(e) => setTemplate(e.target.value)}
+              />
+            </>
+          ) : (
+            <p className="crm-muted">
+              Using the org-wide template (edit it in SMS → Dashboard).
+            </p>
+          )}
+          <div className="crm-form-actions">
+            {customized && (
+              <Button
+                variant="ghost"
+                size="sm"
+                disabled={busy}
+                onClick={() => setTemplate(defaultTemplate)}
+              >
+                Reset to org template
+              </Button>
+            )}
             <Button
               variant="primary"
               size="sm"
               busy={busy}
-              onClick={() => save({ enabled, phones })}
+              onClick={() => save({ enabled, phones, template, customized })}
             >
-              Save numbers
+              Save
             </Button>
           </div>
         </div>
