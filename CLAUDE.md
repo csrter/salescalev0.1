@@ -2253,6 +2253,38 @@ live activation + the entitlement flip, the Outreach module build
       DEPLOYED to production 2026-07-20 (4826738): frontend rebuilt/recreated
       on the VPS (frontend-only + a backend test — no migration), /api/health
       ok, app serving the new bundle.
+- [x] Two-way lead-reply relay over BlueBubbles (2026-07-20): when enabled
+      (Organization.lead_relay_enabled + lead_relay_phone, migration
+      e2f9c1a7d4b6), an inbound lead reply on the org's BlueBubbles number is
+      forwarded to the operator's phone, labeled with the lead's name + a reply
+      CODE (the lead number's last 4); the operator replies starting with that
+      code ("1234 on my way") and services/lead_relay.py routes the rest back
+      to that lead through BlueBubbles. TAG-based routing (user's choice over
+      sticky last-lead) resolves the lead directly — no stored active-
+      conversation state, unambiguous with concurrent leads. Forward →
+      sms_send.send_notification (operator's own number, no consent gate);
+      reply to the lead → NEW sms_send.send_reply (skips the opt-in gate since
+      the lead texted first, still honors STOP/suppression + account cap,
+      records kind=manual on the lead). Wired into sms_webhooks._process_inbound:
+      a text FROM the relay phone is an operator command (routed, never treated
+      as a lead/STOP/enrollment), every other genuine (non-STOP) reply is
+      forwarded. BlueBubbles-only (account.provider gate); Twilio/Sendblue
+      inbound untouched. All best-effort — a relay failure never breaks the
+      inbound webhook. Config: GET/PUT /api/orgs/me/lead-relay (require_admin;
+      enabling requires a phone, normalized to E.164 so the webhook recognizes
+      the operator). Frontend: a "Forward lead replies to my phone" card on the
+      SMS Dashboard (admin), warns when no BlueBubbles account is connected.
+      Tests 561 → 564 (config validation incl. enable-without-phone 422; full
+      forward→tagged-reply round-trip with the lead-linked outbound; no-code
+      reply gets a help nudge, texts no lead). Verified live on the local stack
+      (card renders, phone saves + normalizes through the real endpoint, toggle
+      reflects the enabled state). DEPLOYED to production 2026-07-20 (0b661e5):
+      migration e2f9c1a7d4b6 applied to the live Supabase DB, backend+frontend
+      rebuilt/recreated, /api/health ok, /api/orgs/me/lead-relay auth-gated.
+      USER-SIDE to go live: a connected BlueBubbles account, the operator phone
+      (480-720-7351) reachable by the BlueBubbles Mac (iMessage, or SMS Text
+      Message Forwarding for a non-iMessage number), and the BlueBubbles
+      inbound webhook delivering (already set up for the CPA campaign).
 - [ ] Stripe live activation + entitlement flip (after 12–14, so real
       limits land everywhere in one pass)
 - [ ] Outreach module build (dev-mode) — go-live gated on Meta App
