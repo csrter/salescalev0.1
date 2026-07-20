@@ -2344,3 +2344,25 @@ def test_sms_campaign_inherits_timezone_client_over_org_over_default(
         api.put("/api/orgs/me/timezone", json={"timezone": None}, headers=h)
         api.put(f"/api/clients/{cid}/timezone", json={"timezone": None}, headers=h)
 
+
+def test_24_7_window_is_always_open():
+    """A campaign with a full 0–24 window on all seven days is inside its send
+    window at any hour, any day — the backend contract the frontend '24/7'
+    toggle relies on (no schema change; send_window_end already allows 24)."""
+    import datetime as _dt
+
+    camp = SmsCampaign(
+        organization_id="o",
+        name="always",
+        account_id="a",
+        timezone="America/Phoenix",
+        send_window_start=0,
+        send_window_end=24,
+        send_days=[0, 1, 2, 3, 4, 5, 6],
+    )
+    overnight = _dt.datetime(2026, 7, 20, 9, 0, tzinfo=_dt.timezone.utc)  # 2am Phoenix
+    assert gateway.in_send_window(camp, overnight) is True
+    # a normal 8am–9pm Mon–Fri campaign is (correctly) closed at that hour
+    camp.send_window_start, camp.send_window_end, camp.send_days = 8, 21, [0, 1, 2, 3, 4]
+    assert gateway.in_send_window(camp, overnight) is False
+

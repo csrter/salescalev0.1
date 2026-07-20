@@ -1154,6 +1154,12 @@ function ConfigForm({
     ? clients.find((c) => c.id === detail.client_id)?.name ?? "this client"
     : null;
 
+  // "24/7" = full-day window (end=24 through midnight) on all seven days.
+  const all247 =
+    detail.send_window_start === 0 &&
+    detail.send_window_end === 24 &&
+    detail.send_days.length === 7;
+
   return (
     <div className="sms-form">
       <Field label="Send from number">
@@ -1248,48 +1254,85 @@ function ConfigForm({
         </Field>
       </div>
 
-      <div className="sms-form-row">
-        <Field label="Send window start">
-          <select
-            value={detail.send_window_start}
-            onChange={(e) => onPatch({ send_window_start: Number(e.target.value) })}
-          >
-            {HOURS.map((h) => (
-              <option key={h} value={h}>
-                {hourLabel(h)}
-              </option>
-            ))}
-          </select>
-        </Field>
-        <Field label="Send window end">
-          <select
-            value={detail.send_window_end}
-            onChange={(e) => onPatch({ send_window_end: Number(e.target.value) })}
-          >
-            {HOURS.map((h) => (
-              <option key={h} value={h}>
-                {hourLabel(h)}
-              </option>
-            ))}
-          </select>
-        </Field>
+      <div className="sms-fieldset">
+        <Switch
+          checked={all247}
+          onChange={(v) =>
+            v
+              ? onPatch({
+                  // Full 24h window (end=24 = through midnight) on every day —
+                  // the backend's quiet-hours check reads this as always-open.
+                  send_window_start: 0,
+                  send_window_end: 24,
+                  send_days: [0, 1, 2, 3, 4, 5, 6],
+                })
+              : onPatch({
+                  // Back to a standard, compliant window the operator can adjust.
+                  send_window_start: 8,
+                  send_window_end: 21,
+                  send_days: [0, 1, 2, 3, 4],
+                })
+          }
+          label="Send at all hours (24/7)"
+        />
+        <p className="sms-hint">
+          Leads get a reply the moment they arrive — any hour, any day —
+          ignoring the send window below. Consent and STOP/opt-out still apply.
+          Note: standard SMS quiet hours are 8am–9pm local; this is intended for
+          immediate replies to inbound leads, not cold sends.
+        </p>
       </div>
 
-      <div className="sms-fieldset">
-        <span className="field-label">Send days</span>
-        <div className="sms-days">
-          {WEEKDAYS.map((label, day) => (
-            <label key={day} className="sms-check">
-              <input
-                type="checkbox"
-                checked={detail.send_days.includes(day)}
-                onChange={() => toggleDay(day)}
-              />
-              {label}
-            </label>
-          ))}
-        </div>
-      </div>
+      {!all247 && (
+        <>
+          <div className="sms-form-row">
+            <Field label="Send window start">
+              <select
+                value={detail.send_window_start}
+                onChange={(e) =>
+                  onPatch({ send_window_start: Number(e.target.value) })
+                }
+              >
+                {HOURS.map((h) => (
+                  <option key={h} value={h}>
+                    {hourLabel(h)}
+                  </option>
+                ))}
+              </select>
+            </Field>
+            <Field label="Send window end">
+              <select
+                value={detail.send_window_end}
+                onChange={(e) =>
+                  onPatch({ send_window_end: Number(e.target.value) })
+                }
+              >
+                {HOURS.map((h) => (
+                  <option key={h} value={h}>
+                    {hourLabel(h)}
+                  </option>
+                ))}
+              </select>
+            </Field>
+          </div>
+
+          <div className="sms-fieldset">
+            <span className="field-label">Send days</span>
+            <div className="sms-days">
+              {WEEKDAYS.map((label, day) => (
+                <label key={day} className="sms-check">
+                  <input
+                    type="checkbox"
+                    checked={detail.send_days.includes(day)}
+                    onChange={() => toggleDay(day)}
+                  />
+                  {label}
+                </label>
+              ))}
+            </div>
+          </div>
+        </>
+      )}
 
       <div className="sms-fieldset">
         <Switch
