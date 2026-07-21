@@ -114,6 +114,7 @@ import {
   Link2,
   LogOut,
   Mail,
+  Menu,
   MessageSquare,
   Moon,
   Palette,
@@ -236,6 +237,22 @@ export default function App() {
   const [sideCollapsed, setSideCollapsed] = useState(
     () => localStorage.getItem("sidebar-collapsed") === "1"
   );
+  // Off-canvas nav drawer on narrow screens (≤760px). Closed by navigating,
+  // tapping the scrim, or leaving the breakpoint. The desktop collapse state
+  // is suppressed while narrow so the drawer always shows the full labels.
+  const [mobileNav, setMobileNav] = useState(false);
+  const [isNarrow, setIsNarrow] = useState(
+    () => typeof window !== "undefined" && window.matchMedia("(max-width: 760px)").matches
+  );
+  useEffect(() => {
+    const mq = window.matchMedia("(max-width: 760px)");
+    const onChange = () => {
+      setIsNarrow(mq.matches);
+      if (!mq.matches) setMobileNav(false); // returning to desktop closes the drawer
+    };
+    mq.addEventListener("change", onChange);
+    return () => mq.removeEventListener("change", onChange);
+  }, []);
   const [closedSections, setClosedSections] = useState<string[]>(() => {
     try {
       return JSON.parse(localStorage.getItem("sidebar-closed") ?? "[]");
@@ -421,11 +438,11 @@ export default function App() {
     { key: "clients", label: "Clients", icon: Building2, section: "Workspace", show: true },
     { key: "crm", label: "CRM", icon: Table2, section: "Workspace", show: isTeam },
     { key: "leads", label: "Lead Finder", icon: Compass, section: "Workspace", show: isTeam },
-    { key: "outreach", label: "Outreach", icon: Send, section: "Workspace", show: isTeam },
-    { key: "email", label: "Email", icon: Mail, section: "Workspace", show: isTeam },
-    { key: "sms", label: "SMS", icon: MessageSquare, section: "Workspace", show: isTeam },
-    { key: "changes", label: "Pending changes", icon: GitBranch, section: "Ads", show: isTeam },
-    { key: "audit", label: "Audit log", icon: Eye, section: "Ads", show: true },
+    { key: "outreach", label: "Outreach", icon: Send, section: "Outreach", show: isTeam },
+    { key: "email", label: "Email", icon: Mail, section: "Outreach", show: isTeam },
+    { key: "sms", label: "SMS", icon: MessageSquare, section: "Outreach", show: isTeam },
+    { key: "changes", label: "Pending changes", icon: GitBranch, section: "Activity", show: isTeam },
+    { key: "audit", label: "Audit log", icon: Eye, section: "Activity", show: true },
     { key: "team", label: "Team", icon: Users, section: "Settings", show: isAdmin },
     { key: "integrations", label: "Integrations", icon: Link2, section: "Settings", show: isAdmin },
     { key: "billing", label: "Billing", icon: CreditCard, section: "Settings", show: isOwner },
@@ -438,6 +455,7 @@ export default function App() {
   const navigate = (k: Tab) => {
     setSelectedClient(null);
     setTab(k);
+    setMobileNav(false);
   };
 
   const logout = () => {
@@ -483,9 +501,10 @@ export default function App() {
     },
   ];
 
-  // Real breadcrumb: workspace › view › (client › campaign via the trail).
+  // Breadcrumb: the current view, then any deeper trail (client › campaign).
+  // The org name is intentionally omitted — it already lives in the sidebar
+  // footer, so repeating it here was pure duplication.
   const crumbs: Crumb[] = [
-    { label: session.organization_name, onClick: () => navigate("clients") },
     {
       label: PAGE_TITLES[tab],
       onClick:
@@ -500,7 +519,11 @@ export default function App() {
     <ToastProvider>
       <ManageProvider>
         <TrailCtx.Provider value={setTrail}>
-          <div className={`app ${sideCollapsed ? "side-collapsed" : ""}`}>
+          <div
+            className={`app ${sideCollapsed && !isNarrow ? "side-collapsed" : ""} ${
+              mobileNav ? "mobile-nav-open" : ""
+            }`.trim()}
+          >
             <Sidebar
               session={session}
               nav={visibleNav}
@@ -524,9 +547,17 @@ export default function App() {
                 })
               }
               onLogout={logout}
+              showDensity={isTeam}
             />
+            {mobileNav && (
+              <div
+                className="nav-scrim"
+                onClick={() => setMobileNav(false)}
+                aria-hidden="true"
+              />
+            )}
             <div className="main">
-              <Topbar crumbs={crumbs} showDensity={isTeam} />
+              <Topbar crumbs={crumbs} onOpenNav={() => setMobileNav(true)} />
               <div className="content">
                 {session.email_verified === false && <VerifyBanner />}
                 {/* Workspace views stay mounted once visited (state, scroll,
@@ -706,6 +737,7 @@ function Sidebar({
   closedSections,
   onToggleSection,
   onLogout,
+  showDensity,
 }: {
   session: Session;
   nav: NavItem[];
@@ -716,6 +748,7 @@ function Sidebar({
   closedSections: string[];
   onToggleSection: (section: string) => void;
   onLogout: () => void;
+  showDensity: boolean;
 }) {
   const sections = [...new Set(nav.map((n) => n.section))];
   const navRef = useRef<HTMLElement>(null);
@@ -847,12 +880,33 @@ function Sidebar({
           </div>
           <ThemeToggle />
         </div>
+        {showDensity && <DensityControl />}
         <button type="button" className="logout" onClick={onLogout} aria-label="Log out">
           <LogOut size={16} aria-hidden="true" />
           <span>Log out</span>
         </button>
       </div>
     </aside>
+  );
+}
+
+/** Row-density preference (Comfortable/Dense). Lives in the sidebar footer
+ * with the other display prefs (theme) rather than taking prime top-bar space
+ * on every view. Hidden on the collapsed rail. */
+function DensityControl() {
+  const { pref, setPref } = useDensity();
+  return (
+    <div className="side-density">
+      <Segmented
+        ariaLabel="Row density"
+        value={pref}
+        onChange={setPref}
+        options={[
+          { value: "comfortable", label: "Comfortable" },
+          { value: "dense", label: "Dense" },
+        ]}
+      />
+    </div>
   );
 }
 
@@ -904,7 +958,7 @@ function OrgSwitcher({ session }: { session: Session }) {
   );
 }
 
-function Topbar({ crumbs, showDensity }: { crumbs: Crumb[]; showDensity: boolean }) {
+function Topbar({ crumbs, onOpenNav }: { crumbs: Crumb[]; onOpenNav: () => void }) {
   // Transparent at scrollTop 0; glass once content scrolls under
   // (IntersectionObserver on a 1px sentinel; degrades to always-stuck).
   const [stuck, setStuck] = useState(false);
@@ -921,12 +975,19 @@ function Topbar({ crumbs, showDensity }: { crumbs: Crumb[]; showDensity: boolean
     io.observe(el);
     return () => io.disconnect();
   }, []);
-  const { pref, setPref } = useDensity();
 
   return (
     <>
       <div ref={sentinelRef} className="topbar-sentinel" aria-hidden="true" />
       <header className={`topbar ${stuck ? "topbar--stuck" : ""}`.trim()}>
+        <button
+          type="button"
+          className="topbar-menu-btn"
+          aria-label="Open navigation"
+          onClick={onOpenNav}
+        >
+          <Menu size={18} aria-hidden="true" />
+        </button>
         <nav className="crumb" aria-label="Breadcrumb">
           <ol>
             {crumbs.map((c, i) => {
@@ -957,17 +1018,6 @@ function Topbar({ crumbs, showDensity }: { crumbs: Crumb[]; showDensity: boolean
         </nav>
         <div className="topbar-tools">
           <SaveTick />
-          {showDensity && (
-            <Segmented
-              ariaLabel="Row density"
-              value={pref}
-              onChange={setPref}
-              options={[
-                { value: "comfortable", label: "Comfortable" },
-                { value: "dense", label: "Dense" },
-              ]}
-            />
-          )}
         </div>
       </header>
     </>

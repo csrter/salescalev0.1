@@ -105,9 +105,9 @@
      it under everything). Ticks are the corner registration marks cards
      carry. Both derive from brand vars so white-labeling repaints them. */
   --grid-line: light-dark(
-    color-mix(in srgb, var(--brand-blue) 6%, transparent),
-    color-mix(in srgb, var(--accent) 7%, transparent));
-  --grid-size: 24px;
+    color-mix(in srgb, var(--brand-blue) 3.5%, transparent),
+    color-mix(in srgb, var(--accent) 4.5%, transparent));
+  --grid-size: 32px;
   --tick-ink: light-dark(
     color-mix(in srgb, var(--brand-navy) 30%, transparent),
     color-mix(in srgb, var(--accent) 45%, transparent));

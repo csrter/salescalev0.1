@@ -444,36 +444,9 @@ h1, h2, h3, h4 {
   width: 100%;
 }
 
-@media (max-width: 760px) {
-  .app {
-    grid-template-columns: 1fr;
-  }
-  .sidebar {
-    position: static;
-    height: auto;
-    flex-direction: row;
-    align-items: center;
-    flex-wrap: wrap;
-  }
-  .side-nav {
-    flex-direction: row;
-    flex-wrap: wrap;
-  }
-  .nav-item span {
-    display: none;
-  }
-  .side-foot {
-    border: none;
-    padding: 0;
-    margin-left: auto;
-    flex-direction: row;
-  }
-  .content,
-  .topbar {
-    padding-left: 1rem;
-    padding-right: 1rem;
-  }
-}
+/* NOTE: the legacy ≤760px sidebar responsive block was removed here — the
+   narrow-screen behavior is now the off-canvas drawer owned by shell.css.
+   This stale duplicate was still hiding .nav-item labels inside the drawer. */
 
 /* --- buttons & inputs --- */
 

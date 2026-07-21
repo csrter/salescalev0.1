@@ -34,6 +34,7 @@ import {
   LogOut as LLogOut,
   Mail as LMail,
   Megaphone as LMegaphone,
+  Menu as LMenu,
   MessageSquare as LMessageSquare,
   Moon as LMoon,
   Palette as LPalette,
@@ -99,5 +100,6 @@ export const Table2 = withDefaults(LTable2, "Table2");
 export const Trash2 = withDefaults(LTrash2, "Trash2");
 export const Users = withDefaults(LUsers, "Users");
 export const X = withDefaults(LX, "X");
+export const Menu = withDefaults(LMenu, "Menu");
 
 export type { LucideIcon, LucideProps };

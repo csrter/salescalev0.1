@@ -413,6 +413,20 @@
   text-transform: capitalize;
 }
 
+/* Density preference — sits with the other display prefs in the footer,
+   full-width, and folds away on the collapsed rail. */
+.side-density {
+  padding: var(--space-1) var(--space-2) 0;
+}
+
+.side-density > * {
+  width: 100%;
+}
+
+.side-collapsed .side-density {
+  display: none;
+}
+
 .logout {
   display: flex;
   align-items: center;
@@ -531,6 +545,36 @@
   box-shadow: var(--shadow-xs);
 }
 
+/* Hamburger — drawer trigger, only shown on narrow screens (media query). */
+.topbar-menu-btn {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 38px;
+  height: 38px;
+  margin-left: calc(var(--space-2) * -1);
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--ink-soft);
+  cursor: pointer;
+  transition:
+    background-color var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out);
+}
+
+.topbar-menu-btn:hover {
+  background: var(--accent-ghost);
+  color: var(--ink);
+}
+
+/* Scrim behind the mobile nav drawer (hidden until the drawer exists). */
+.nav-scrim {
+  display: none;
+}
+
 @media (max-width: 1100px) {
   .topbar {
     padding-inline: var(--space-5);
@@ -645,66 +689,58 @@
   transform: none;
 }
 
-/* ---- small screens: stacked fallback (rail becomes a wrapping icon row) -- */
+/* ---- narrow screens (≤760px): off-canvas nav drawer --------------------
+   The sidebar keeps its full, labeled layout but slides in from the left as a
+   drawer over a scrim — triggered by the topbar hamburger, closed by tapping
+   the scrim or picking an item. No more unlabeled icon cramming. ---------- */
 
 @media (max-width: 760px) {
-  .app {
-    flex-direction: column;
+  .topbar-menu-btn {
+    display: inline-flex;
   }
 
   .sidebar {
-    position: static;
-    width: 100%;
-    height: auto;
-    flex-direction: row;
-    align-items: center;
-    flex-wrap: wrap;
-    gap: var(--space-2);
-    padding: var(--space-2) var(--space-3);
-    border-right: none;
-    border-bottom: 1px solid var(--field-border);
+    position: fixed;
+    top: 0;
+    left: 0;
+    height: 100vh;
+    width: min(300px, 84vw);
+    transform: translateX(-100%);
+    transition: transform var(--dur-med) var(--ease-out);
+    box-shadow: var(--shadow-lg);
+    z-index: var(--z-drawer, 60);
   }
 
-  .side-top {
-    height: auto;
+  .mobile-nav-open .sidebar {
+    transform: translateX(0);
   }
 
-  .side-nav {
-    flex-direction: row;
-    flex-wrap: wrap;
-    overflow: visible;
-  }
-
-  .side-section {
-    flex-direction: row;
-    align-items: center;
-  }
-
-  .side-section-head,
-  .nav-pill,
-  .nav-item span,
-  .user-meta {
+  /* Collapse control is desktop-only; the drawer is always full-width. */
+  .side-collapse {
     display: none;
   }
 
-  .nav-item {
-    width: auto;
+  .nav-scrim {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: calc(var(--z-drawer, 60) - 1);
+    background: color-mix(in srgb, var(--brand-navy, #0a0f1f) 55%, transparent);
+    -webkit-backdrop-filter: blur(2px);
+    backdrop-filter: blur(2px);
   }
 
-  .nav-item[aria-current="page"] {
-    background: color-mix(in srgb, var(--accent) 16%, transparent);
-    border: 1px solid color-mix(in srgb, var(--accent) 55%, transparent);
+  .content {
+    padding: var(--space-4);
   }
 
-  .side-foot {
-    border-top: none;
-    padding-top: 0;
-    margin-left: auto;
-    flex-direction: row;
-    align-items: center;
+  .topbar {
+    padding-inline: var(--space-4);
   }
+}
 
-  .logout span {
-    display: none;
+@media (prefers-reduced-motion: reduce) {
+  .sidebar {
+    transition: none;
   }
 }
