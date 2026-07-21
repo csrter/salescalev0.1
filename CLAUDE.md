@@ -2325,6 +2325,35 @@ live activation + the entitlement flip, the Outreach module build
       Config + leads_retrieval scope) is correct; publishing the Meta app +
       registering the webhook is the remaining user-side fix so Meta leads
       auto-import going forward.
+- [x] iOS PWA — installable client web app (2026-07-21): the web frontend
+      is now an installable Progressive Web App, so clients can add the
+      client-role portal to their iOS home screen (Safari → Share → Add to
+      Home Screen) and run it full-screen — no Apple Developer account, App
+      Store, or review. frontend/public/manifest.webmanifest (standalone,
+      navy theme, logo-derived icons: apple-touch-icon 180 + pwa-192/512 +
+      maskable-512, all generated from the Salescale mark), apple-mobile-web-
+      app meta tags + theme-color + apple-touch-icon in index.html, and a
+      dismissible iOS-Safari-only "Add to Home Screen" hint
+      (frontend/src/InstallHint.tsx — gated on iOS Safari && !standalone,
+      mounted in main.tsx, themed via the existing CSS tokens). nginx.conf
+      serves .webmanifest as application/manifest+json. NO service worker by
+      design (live server-backed dashboard needs no offline cache; also
+      avoids the Electron base:'./' build conflict). Inherits the existing
+      client-role portal scoping + white-label branding. Verified live in the
+      browser (manifest served, head tags in DOM, banner renders correctly +
+      stays hidden on desktop, zero console errors) and DEPLOYED to production
+      (2026-07-21, 950c7a1): frontend-only (no backend, no migration), git
+      archive frontend/ → VPS, frontend image rebuilt/recreated,
+      /manifest.webmanifest 200 application/manifest+json, apple-touch-icon
+      200, app + backend health green. Follow-up: per-agency branded manifest
+      (host-aware, like /api/branding/resolve) for white-label install icons.
+      SEPARATELY this session (NOT deployed; untracked in mobile/): a native
+      Expo/React Native iOS companion app was built — team app (leads + CRM +
+      ad-analytics dashboard) with a client-role Dashboard-only mode, logo
+      icons, and full EAS / TestFlight / unlisted-App-Store setup
+      (mobile/DISTRIBUTION.md). It awaits an Apple Developer Program account
+      ($99/yr, required for any iOS distribution to other devices) before it
+      can ship; the PWA above is the no-Apple-account path for clients.
 - [ ] Stripe live activation + entitlement flip (after 12–14, so real
       limits land everywhere in one pass)
 - [ ] Outreach module build (dev-mode) — go-live gated on Meta App
