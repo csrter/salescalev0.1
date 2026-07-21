@@ -10,6 +10,7 @@ Two surfaces:
 """
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import JSONResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -33,6 +34,54 @@ def resolve_branding(request: Request, host: str = "", db: Session = Depends(get
     lookup = host or request.headers.get("host", "")
     org = branding.resolve_for_host(db, lookup)
     return branding.public_branding(org)
+
+
+# Default PWA chrome color — brand navy, matching index.html's theme-color
+# meta and the static manifest the frontend ships as fallback.
+_MANIFEST_DEFAULT_COLOR = "#0f2147"
+
+
+@router.get("/api/branding/manifest")
+def pwa_manifest(request: Request, host: str = "", db: Session = Depends(get_db)):
+    """Host-resolved PWA web app manifest.
+
+    The frontend's nginx proxies /manifest.webmanifest here (Host header
+    forwarded), so a client installing an agency's white-labeled portal to
+    their home screen gets the agency's product name and chrome color, not
+    Salescale's — mirroring /api/branding/resolve. Same resolution rules:
+    only a VERIFIED custom domain maps to an Organization; everything else
+    (including the default app domain) gets the neutral manifest. Icons stay
+    the static defaults for now — per-tenant install icons need server-side
+    image generation and are the flagged follow-up.
+    """
+    lookup = host or request.headers.get("host", "")
+    org = branding.resolve_for_host(db, lookup)
+    b = branding.public_branding(org)
+    name = b["product_name"] or "Salescale"
+    colors = b["colors"] or {}
+    chrome = colors.get("header_start") or _MANIFEST_DEFAULT_COLOR
+    manifest = {
+        "name": name,
+        "short_name": name if len(name) <= 12 else name[:12].rstrip(),
+        "description": "Your ad performance and CRM, on the go.",
+        "start_url": "/",
+        "scope": "/",
+        "display": "standalone",
+        "orientation": "portrait",
+        "background_color": chrome,
+        "theme_color": chrome,
+        "icons": [
+            {"src": "/pwa-192.png", "sizes": "192x192", "type": "image/png"},
+            {"src": "/pwa-512.png", "sizes": "512x512", "type": "image/png"},
+            {
+                "src": "/pwa-maskable-512.png",
+                "sizes": "512x512",
+                "type": "image/png",
+                "purpose": "maskable",
+            },
+        ],
+    }
+    return JSONResponse(manifest, media_type="application/manifest+json")
 
 
 def _org_for(db: Session, user: User) -> Organization:

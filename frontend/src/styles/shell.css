@@ -689,6 +689,68 @@
   transform: none;
 }
 
+/* ---- mobile client-scope strip ------------------------------------------
+   The tenant-isolation cue: renders (JS-gated, team + narrow only) under the
+   topbar whenever an org member is drilled into one client's data. Accent
+   wash + mono stamp names the scope; the ✕ exits back to all clients. */
+
+.scope-strip {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-4);
+  background: var(--accent-soft);
+  border-bottom: 1px solid var(--accent-line);
+}
+
+.scope-strip-stamp {
+  flex: none;
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-medium);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-caps);
+  color: var(--accent-ink);
+  border: 1px solid var(--accent-line);
+  border-radius: var(--radius-xs);
+  padding: 1px var(--space-1);
+}
+
+.scope-strip-name {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+  color: var(--accent-ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.scope-strip-exit {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: none;
+  background: transparent;
+  color: var(--accent-ink);
+  border-radius: var(--radius-xs);
+  cursor: pointer;
+}
+
+.scope-strip-exit:hover {
+  background: var(--accent-ghost);
+}
+
+/* ---- bottom tab bar (mobile primary nav; hidden above 760px) ------------ */
+
+.tabbar {
+  display: none;
+}
+
 /* ---- narrow screens (≤760px): off-canvas nav drawer --------------------
    The sidebar keeps its full, labeled layout but slides in from the left as a
    drawer over a scrim — triggered by the topbar hamburger, closed by tapping
@@ -697,6 +759,76 @@
 @media (max-width: 760px) {
   .topbar-menu-btn {
     display: inline-flex;
+  }
+
+  /* Bottom tab bar: vellum over the home-indicator safe area, mono uppercase
+     labels, 2px accent top-rule on the active tab (the Schematic selected
+     state — no filled pills). ≥48px touch targets. */
+  .tabbar {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: var(--z-topbar);
+    display: flex;
+    padding: 0 var(--space-2) env(safe-area-inset-bottom);
+    background: var(--glass-bg-heavy);
+    -webkit-backdrop-filter: blur(var(--glass-blur));
+    backdrop-filter: blur(var(--glass-blur));
+    border-top: 1px solid var(--glass-border);
+  }
+
+  .tabbar-item {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 3px;
+    min-height: 52px;
+    padding: var(--space-2) 0;
+    border: none;
+    background: transparent;
+    color: var(--ink-faint);
+    border-radius: var(--radius-sm);
+    position: relative;
+    cursor: pointer;
+    transition: color var(--dur-fast) var(--ease-out);
+  }
+
+  .tabbar-item span {
+    font-family: var(--font-mono);
+    font-size: var(--text-2xs);
+    text-transform: uppercase;
+    letter-spacing: var(--tracking-caps);
+  }
+
+  .tabbar-item.is-active {
+    color: var(--accent-ink);
+  }
+
+  .tabbar-item.is-active::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    left: 26%;
+    right: 26%;
+    border-top: 2px solid var(--accent);
+  }
+
+  /* Content clears the fixed bar; the topbar and drawer respect the notch
+     in standalone (env() is 0 everywhere else). */
+  .main .content {
+    padding-bottom: calc(72px + env(safe-area-inset-bottom));
+  }
+
+  .topbar {
+    height: calc(var(--topbar-h) + env(safe-area-inset-top));
+    padding-top: env(safe-area-inset-top);
+  }
+
+  .sidebar {
+    padding-top: env(safe-area-inset-top);
   }
 
   .sidebar {

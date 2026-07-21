@@ -26,6 +26,7 @@ import {
   Eye as LEye,
   GitBranch as LGitBranch,
   GripVertical as LGripVertical,
+  Home as LHome,
   Inbox as LInbox,
   Info as LInfo,
   LayoutDashboard as LLayoutDashboard,
@@ -37,6 +38,7 @@ import {
   Menu as LMenu,
   MessageSquare as LMessageSquare,
   Moon as LMoon,
+  MoreHorizontal as LMoreHorizontal,
   Palette as LPalette,
   Pencil as LPencil,
   Plus as LPlus,
@@ -77,6 +79,7 @@ export const CreditCard = withDefaults(LCreditCard, "CreditCard");
 export const Eye = withDefaults(LEye, "Eye");
 export const GitBranch = withDefaults(LGitBranch, "GitBranch");
 export const GripVertical = withDefaults(LGripVertical, "GripVertical");
+export const Home = withDefaults(LHome, "Home");
 export const Inbox = withDefaults(LInbox, "Inbox");
 export const Info = withDefaults(LInfo, "Info");
 export const LayoutDashboard = withDefaults(LLayoutDashboard, "LayoutDashboard");
@@ -87,6 +90,7 @@ export const Mail = withDefaults(LMail, "Mail");
 export const Megaphone = withDefaults(LMegaphone, "Megaphone");
 export const MessageSquare = withDefaults(LMessageSquare, "MessageSquare");
 export const Moon = withDefaults(LMoon, "Moon");
+export const MoreHorizontal = withDefaults(LMoreHorizontal, "MoreHorizontal");
 export const Palette = withDefaults(LPalette, "Palette");
 export const Pencil = withDefaults(LPencil, "Pencil");
 export const Plus = withDefaults(LPlus, "Plus");

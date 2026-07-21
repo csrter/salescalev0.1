@@ -2382,6 +2382,52 @@ live activation + the entitlement flip, the Outreach module build
       the drawer classes, backend health green. Note: two pre-existing
       layout-transition lint findings in the legacy App.css/shell.css (sidebar
       width-collapse animation) were left as-is — intentional, predate this.
+- [x] Mobile PWA shell v1 (2026-07-21, follow-up to the mobile design-spec
+      artifact session — the spec itself lives at the claude.ai artifact
+      "Salescale Mobile — PWA Design Spec"): the ≤760px experience moves from
+      drawer-adapted desktop to native-mobile primitives, per the spec's
+      phase-1 scope. (1) BOTTOM TAB BAR (App.tsx mobileTabs + .tabbar in
+      shell.css): role-aware — team gets Home(clients)/CRM/Email/SMS/More,
+      client role gets Home/Activity(audit)/Security/More; "More" opens the
+      existing drawer (long-tail nav + theme/logout in its footer), with
+      active-state = 2px accent top-rule + accent ink (Schematic selected
+      state), mono uppercase labels, vellum surface, ≥48pt targets,
+      env(safe-area-inset-bottom). Gated by the existing isNarrow matchMedia
+      + display:none >760px; role gating reuses the same isTeam flags as the
+      nav array. (2) CLIENT-SCOPE STRIP (.scope-strip): accent-washed strip
+      under the topbar naming the drilled-into client (mono "CLIENT SCOPE"
+      stamp + name + ✕ exit) whenever a TEAM member is inside one client's
+      data on mobile — the tenant-isolation cue; clients never see it.
+      (3) SAFE AREAS: topbar/sidebar/content pick up env(safe-area-inset-*)
+      at ≤760px (previously only InstallHint did, despite viewport-fit=cover).
+      (4) INSTALL PROMPT upgrade (InstallHint.tsx): dismissal is now a
+      14-day SNOOZE (legacy "1" values read as expired), and Chromium
+      Android gets a real install path — beforeinstallprompt is captured
+      (mini-infobar suppressed) and the nudge grows an Install button that
+      fires the native dialog; iOS keeps the Share→Add coach copy.
+      (5) PER-TENANT MANIFEST: GET /api/branding/manifest (api/branding.py)
+      builds the PWA manifest from resolve_for_host — verified custom
+      domains get the agency's product_name + header_start chrome color,
+      everyone else the neutral Salescale manifest (never leaking that a
+      domain is claimed); frontend nginx now PROXIES /manifest.webmanifest
+      to it (Host forwarded, docker-DNS resolver variable so nginx starts
+      without the backend, error_page fallback to the static manifest baked
+      in the image). Icons stay the static defaults — per-tenant install
+      ICONS need server-side image generation: flagged follow-up. Tests
+      565 → 568 (test_manifest.py: default host, verified-custom-domain
+      branding, unverified-domain-stays-neutral). tsc + vite build clean;
+      verified live on alt2 at mobile width (tab bar renders + switches,
+      More→drawer→scrim-close, scope strip appears on drill-down and clears
+      on navigate, zero console errors; manifest endpoint curl-verified).
+      Toolchain note: both local venvs had died with their old session-
+      scratchpad base interpreters — standalone CPython 3.11.15 now lives
+      PERSISTENTLY at ~/.local/salescale-toolchain/python and backend/venv
+      is rebuilt against it (survives future sessions). Known pre-existing
+      at 375px, NOT this change: the client-detail dashboard filter row
+      overflows horizontally (page can h-scroll) — worth a wrap pass later.
+      DEPLOYED to production 2026-07-21 (web: backend+frontend rebuilt, no
+      migration; desktop unaffected — tab bar is narrow-viewport-only and
+      schedulers/nginx don't ship in the DMG).
 - [ ] Stripe live activation + entitlement flip (after 12–14, so real
       limits land everywhere in one pass)
 - [ ] Outreach module build (dev-mode) — go-live gated on Meta App

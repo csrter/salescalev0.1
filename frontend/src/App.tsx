@@ -111,12 +111,14 @@ import {
   CreditCard,
   Eye,
   GitBranch,
+  Home,
   Link2,
   LogOut,
   Mail,
   Menu,
   MessageSquare,
   Moon,
+  MoreHorizontal,
   Palette,
   Plus,
   Search,
@@ -126,6 +128,7 @@ import {
   Sun,
   Table2,
   Users,
+  X,
   type LucideIcon,
 } from "./components/icons";
 import {
@@ -452,6 +455,24 @@ export default function App() {
   ];
   const visibleNav = nav.filter((n) => n.show);
 
+  // Mobile bottom tab bar (≤760px): the thumb-reachable primary nav. Four
+  // high-frequency destinations per role + "More", which opens the existing
+  // drawer for the long tail (and, in the drawer footer, theme/logout).
+  // Role gating reuses the same flags as `nav` — no separate permission path.
+  const mobileTabs: { key: Tab; label: string; icon: LucideIcon }[] = isTeam
+    ? [
+        { key: "clients", label: "Home", icon: Home },
+        { key: "crm", label: "CRM", icon: Table2 },
+        { key: "email", label: "Email", icon: Mail },
+        { key: "sms", label: "SMS", icon: MessageSquare },
+      ]
+    : [
+        { key: "clients", label: "Home", icon: Home },
+        { key: "audit", label: "Activity", icon: Eye },
+        { key: "security", label: "Security", icon: Shield },
+      ];
+  const moreActive = mobileNav || !mobileTabs.some((t) => t.key === tab);
+
   const navigate = (k: Tab) => {
     setSelectedClient(null);
     setTab(k);
@@ -558,6 +579,23 @@ export default function App() {
             )}
             <div className="main">
               <Topbar crumbs={crumbs} onOpenNav={() => setMobileNav(true)} />
+              {/* Mobile client-scope strip: the tenant-isolation cue. Whenever
+                  a team member is drilled into one client's data on a phone,
+                  name the scope explicitly and offer the exit. Clients never
+                  see it — their scope is fixed server-side. */}
+              {isNarrow && isTeam && tab === "clients" && selectedClient && (
+                <div className="scope-strip">
+                  <span className="scope-strip-stamp">Client scope</span>
+                  <span className="scope-strip-name">{selectedClient.name}</span>
+                  <button
+                    className="scope-strip-exit"
+                    onClick={() => setSelectedClient(null)}
+                    aria-label="Back to all clients"
+                  >
+                    <X size={14} aria-hidden="true" />
+                  </button>
+                </div>
+              )}
               <div className="content">
                 {session.email_verified === false && <VerifyBanner />}
                 {/* Workspace views stay mounted once visited (state, scroll,
@@ -714,6 +752,34 @@ export default function App() {
                 )}
               </div>
             </div>
+            {/* Bottom tab bar — mobile primary nav (hidden >760px via CSS;
+                the isNarrow gate keeps it out of the desktop tree entirely). */}
+            {isNarrow && (
+              <nav className="tabbar" aria-label="Primary">
+                {mobileTabs.map((t) => {
+                  const active = tab === t.key && !mobileNav;
+                  return (
+                    <button
+                      key={t.key}
+                      className={`tabbar-item${active ? " is-active" : ""}`}
+                      aria-current={active ? "page" : undefined}
+                      onClick={() => navigate(t.key)}
+                    >
+                      <t.icon size={20} aria-hidden="true" />
+                      <span>{t.label}</span>
+                    </button>
+                  );
+                })}
+                <button
+                  className={`tabbar-item${moreActive ? " is-active" : ""}`}
+                  aria-expanded={mobileNav}
+                  onClick={() => setMobileNav(true)}
+                >
+                  <MoreHorizontal size={20} aria-hidden="true" />
+                  <span>More</span>
+                </button>
+              </nav>
+            )}
             <CommandPalette
               commands={paletteCommands}
               loadDynamic={loadClientCommands}
