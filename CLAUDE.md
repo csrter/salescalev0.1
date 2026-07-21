@@ -2354,6 +2354,34 @@ live activation + the entitlement flip, the Outreach module build
       (mobile/DISTRIBUTION.md). It awaits an Apple Developer Program account
       ($99/yr, required for any iOS distribution to other devices) before it
       can ship; the PWA above is the no-Apple-account path for clients.
+- [x] UI cleanup pass — navigation, clutter, mobile drawer (2026-07-21):
+      a "cleaner + easier to navigate" pass on the shell, within the existing
+      Schematic design system (tokens only, no re-architecture). (1) NAV
+      REGROUP (App.tsx nav array): new "Outreach" section (Outreach/Email/SMS,
+      previously buried in "Workspace"), "Ads" renamed "Activity" (Pending
+      changes/Audit log); "Workspace" now Clients/CRM/Lead Finder. (2) TOPBAR
+      DECLUTTER: dropped the redundant org-name breadcrumb crumb (org already
+      in the sidebar footer); moved the Comfortable/Dense density Segmented out
+      of the topbar into the sidebar footer beside the theme toggle (new
+      DensityControl + .side-density, passed showDensity to Sidebar). (3)
+      LIGHTER BACKDROP: calmed the drafting grid — --grid-size 24→32px,
+      --grid-line 6/7%→3.5/4.5% (theme.css). (4) NARROW-WIDTH NAV: the old
+      ≤760px "wrapping unlabeled icon row" is replaced by a proper off-canvas
+      DRAWER (shell.css) — a topbar hamburger (new Menu icon) toggles the
+      full labeled sidebar over a scrim (.nav-scrim, z-drawer 70/69), closed by
+      navigate/scrim-tap/leaving-the-breakpoint. React tracks isNarrow via
+      matchMedia and suppresses the desktop `side-collapsed` class while narrow
+      so the drawer always shows labels. Fixed a real bug: a STALE legacy
+      App.css @media(max-width:760px) block (a duplicate of the old shell.css
+      rules) was still setting `.nav-item span{display:none}`, hiding the
+      drawer's labels — removed it (shell.css owns responsive now). Verified
+      live on the alt2 stack at desktop + 600px (drawer open/close, nav-closes-
+      drawer, no console errors), tsc -b + vite build clean. DEPLOYED to
+      production (2026-07-21, d53fbd7): frontend-only, git archive frontend/ →
+      VPS, frontend image rebuilt/recreated, app 200, new CSS bundle carries
+      the drawer classes, backend health green. Note: two pre-existing
+      layout-transition lint findings in the legacy App.css/shell.css (sidebar
+      width-collapse animation) were left as-is — intentional, predate this.
 - [ ] Stripe live activation + entitlement flip (after 12–14, so real
       limits land everywhere in one pass)
 - [ ] Outreach module build (dev-mode) — go-live gated on Meta App
