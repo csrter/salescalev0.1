@@ -64,6 +64,8 @@ import {
   type SmsPickContact,
   type SmsProvider,
   type SmsStep,
+  type SmsStepBranch,
+  type SmsStepStats,
   type SmsSuppression,
   type SmsUsage,
 } from "./api";
@@ -338,6 +340,20 @@ function DashboardPanel({
       sortValue: (c) => c.delivery_rate ?? -1,
     },
     {
+      key: "read",
+      header: "Read",
+      align: "right",
+      render: (c) => pct(c.read_rate),
+      sortValue: (c) => c.read_rate ?? -1,
+    },
+    {
+      key: "replies",
+      header: "Replies",
+      align: "right",
+      render: (c) => int(c.replies),
+      sortValue: (c) => c.replies,
+    },
+    {
       key: "reply",
       header: "Reply",
       align: "right",
@@ -402,11 +418,15 @@ function DashboardPanel({
               <KpiSkeleton />
               <KpiSkeleton />
               <KpiSkeleton />
+              <KpiSkeleton />
+              <KpiSkeleton />
             </>
           ) : (
             <>
               <Kpi label="Sent" value={int(t.sent)} />
               <Kpi label="Delivery rate" value={pct(t.delivery_rate)} />
+              <Kpi label="Read rate (iMessage)" value={pct(t.read_rate)} />
+              <Kpi label="Replies" value={int(t.replies)} />
               <Kpi label="Reply rate" value={pct(t.reply_rate)} />
               <Kpi label="Opt-out rate" value={pct(t.opt_out_rate)} />
             </>
@@ -446,6 +466,7 @@ function DashboardPanel({
               series={[
                 { name: "Sent", data: data!.by_day.map((d) => d.sent) },
                 { name: "Delivered", data: data!.by_day.map((d) => d.delivered) },
+                { name: "Read", data: data!.by_day.map((d) => d.read) },
                 { name: "Replied", data: data!.by_day.map((d) => d.replied) },
                 { name: "Failed", data: data!.by_day.map((d) => d.failed) },
               ]}
@@ -814,6 +835,20 @@ function CampaignsPanel({ accounts }: { accounts: SmsAccount[] }) {
       sortValue: (c) => c.active_enrollments,
     },
     { key: "sent", header: "Sent", align: "right", render: (c) => int(c.sent), sortValue: (c) => c.sent },
+    {
+      key: "read",
+      header: "Read",
+      align: "right",
+      render: (c) => pct(c.read_rate),
+      sortValue: (c) => c.read_rate ?? -1,
+    },
+    {
+      key: "replies",
+      header: "Replies",
+      align: "right",
+      render: (c) => int(c.replies),
+      sortValue: (c) => c.replies,
+    },
     {
       key: "reply",
       header: "Reply",
@@ -1185,6 +1220,7 @@ function CampaignEditor({
             <PreviewDialog
               campaignId={detail.id}
               position={preview.position}
+              isReplyStep={steps[preview.position]?.trigger === "reply"}
               onClose={() => setPreview(null)}
             />
           )}
@@ -1414,6 +1450,21 @@ function ConfigForm({
 
       <div className="sms-fieldset">
         <Switch
+          checked={detail.exit_on_reply}
+          onChange={(v) => onPatch({ exit_on_reply: v })}
+          label="Stop the drip when they reply"
+        />
+        <p className="sms-hint">
+          When a lead replies, their remaining scheduled steps are cancelled
+          (status "replied") — nobody keeps getting cold follow-ups
+          mid-conversation. Steps set to send <em>after they reply</em> always
+          take precedence: a reply routes to the next reply-triggered step when
+          the sequence has one, and this setting only applies when none remain.
+        </p>
+      </div>
+
+      <div className="sms-fieldset">
+        <Switch
           checked={detail.include_compliance_footer}
           onChange={(v) => onPatch({ include_compliance_footer: v })}
           label="Sender ID + opt-out footer on the first message"
@@ -1461,7 +1512,11 @@ function StepsEditor({
       {
         position: steps.length,
         wait_days: steps.length === 0 ? 0 : 3,
+        wait_minutes: 0,
+        trigger: "schedule",
         body: "",
+        branches: [],
+        ai_branching: false,
         ai_instructions: null,
       },
     ]);
@@ -1471,8 +1526,9 @@ function StepsEditor({
       <p className="sms-tokens">{TOKENS_HINT}</p>
       {steps.length === 0 && (
         <EmptyState title="No steps yet">
-          Add a first text, then follow-ups. Each step waits a set number of
-          days after the previous one.
+          Add a first text, then follow-ups. A step either sends on a schedule
+          (a set delay after the previous step) or after the lead replies —
+          reply steps can branch on what they said.
         </EmptyState>
       )}
       {steps.map((step, i) => (
@@ -1501,6 +1557,126 @@ function StepsEditor({
   );
 }
 
+type DelayUnit = "minutes" | "hours" | "days";
+
+/** Display form of a step's wait_days + wait_minutes: the largest unit that
+ * expresses the total exactly. */
+function delayUi(step: SmsStep): { value: number; unit: DelayUnit } {
+  const totalMinutes = (step.wait_days || 0) * 1440 + (step.wait_minutes || 0);
+  if (totalMinutes === 0) return { value: 0, unit: "minutes" };
+  if (totalMinutes % 1440 === 0) return { value: totalMinutes / 1440, unit: "days" };
+  if (totalMinutes % 60 === 0) return { value: totalMinutes / 60, unit: "hours" };
+  return { value: totalMinutes, unit: "minutes" };
+}
+
+function delayFields(value: number, unit: DelayUnit): Pick<SmsStep, "wait_days" | "wait_minutes"> {
+  const v = Math.max(0, Math.floor(value) || 0);
+  if (unit === "days") return { wait_days: v, wait_minutes: 0 };
+  if (unit === "hours") return { wait_days: 0, wait_minutes: v * 60 };
+  return { wait_days: 0, wait_minutes: v };
+}
+
+function StepStatsLine({ stats }: { stats?: SmsStepStats }) {
+  if (!stats || (stats.sent === 0 && stats.failed === 0 && stats.replies === 0))
+    return null;
+  return (
+    <span className="sms-step-stats">
+      sent {int(stats.sent)} · delivered {int(stats.delivered)} · read{" "}
+      {int(stats.read)} · replies {int(stats.replies)} · failed {int(stats.failed)}
+    </span>
+  );
+}
+
+function BranchesEditor({
+  step,
+  onChange,
+}: {
+  step: SmsStep;
+  onChange: (s: SmsStep) => void;
+}) {
+  const branches = step.branches ?? [];
+  const update = (i: number, next: SmsStepBranch) =>
+    onChange({ ...step, branches: branches.map((b, j) => (j === i ? next : b)) });
+  const remove = (i: number) =>
+    onChange({ ...step, branches: branches.filter((_, j) => j !== i) });
+  const add = () =>
+    onChange({
+      ...step,
+      branches: [...branches, { label: "", keywords: [], body: "" }],
+    });
+
+  return (
+    <div className="sms-branches">
+      <span className="field-label">Response branches</span>
+      <p className="sms-hint">
+        Match what they text back: the first branch with a keyword found in
+        their reply (whole word, any casing) sends its response instead of the
+        default message above. Branch order is priority.
+      </p>
+      {branches.map((b, i) => (
+        <div className="sms-branch" key={i}>
+          <div className="sms-form-row">
+            <Field label="Branch name">
+              <input
+                value={b.label}
+                onChange={(e) => update(i, { ...b, label: e.target.value })}
+                placeholder="Interested"
+              />
+            </Field>
+            <Field label="Keywords (comma-separated)">
+              <input
+                // Uncontrolled + commit-on-blur so typing commas doesn't fight
+                // the normalized join (same pattern as the daily-cap input).
+                key={`${i}-${branches.length}`}
+                defaultValue={b.keywords.join(", ")}
+                onBlur={(e) =>
+                  update(i, {
+                    ...b,
+                    keywords: e.target.value
+                      .split(",")
+                      .map((k) => k.trim())
+                      .filter(Boolean),
+                  })
+                }
+                placeholder="yes, sure, interested"
+              />
+            </Field>
+          </div>
+          <Field label="Response">
+            <textarea
+              rows={2}
+              value={b.body}
+              onChange={(e) => update(i, { ...b, body: e.target.value })}
+              placeholder={"Great — what's the best time to call you, {{first_name|there}}?"}
+            />
+          </Field>
+          <Button variant="danger-outline" size="sm" onClick={() => remove(i)}>
+            Remove branch
+          </Button>
+        </div>
+      ))}
+      <Button variant="ghost" size="sm" onClick={add}>
+        <Plus size={14} />
+        Add branch
+      </Button>
+      {branches.length > 0 && (
+        <div className="sms-fieldset">
+          <Switch
+            checked={step.ai_branching}
+            onChange={(v) => onChange({ ...step, ai_branching: v })}
+            label="AI-match replies when no keyword hits"
+          />
+          <p className="sms-hint">
+            When no keyword matches, one AI call classifies the reply into a
+            branch by meaning ("yeah go ahead" → Interested). Falls back to the
+            default message on any AI failure — a reply is never left hanging.
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function StepRow({
   step,
   index,
@@ -1521,6 +1697,8 @@ function StepRow({
   onPreview: () => void;
 }) {
   const [showAi, setShowAi] = useState(Boolean(step.ai_instructions));
+  const isReply = step.trigger === "reply";
+  const delay = delayUi(step);
   const len = step.body.length;
   const segments = Math.max(1, Math.ceil(len / SMS_SEGMENT_LEN));
 
@@ -1529,8 +1707,9 @@ function StepRow({
       <div className="sms-step-head">
         <Badge tone="accent">{index + 1}</Badge>
         <strong className="sms-step-title">
-          {isFirst ? "First text" : `Follow-up ${index}`}
+          {isReply ? "Reply handler" : isFirst ? "First text" : `Follow-up ${index}`}
         </strong>
+        <StepStatsLine stats={step.stats} />
         <div className="sms-step-actions">
           <Button variant="ghost" size="sm" onClick={onPreview}>
             Preview
@@ -1548,25 +1727,103 @@ function StepRow({
       </div>
 
       <div className="sms-form">
-        {isFirst ? (
+        <Field label="Send this step">
+          <Segmented
+            ariaLabel={`Step ${index + 1} trigger`}
+            value={step.trigger}
+            onChange={(v) =>
+              onChange({
+                ...step,
+                trigger: v as SmsStep["trigger"],
+                // Branches only exist on reply steps (the API enforces it).
+                ...(v === "schedule" ? { branches: [], ai_branching: false } : {}),
+              })
+            }
+            options={[
+              { value: "schedule", label: "On a schedule" },
+              { value: "reply", label: "After they reply" },
+            ]}
+          />
+        </Field>
+
+        {isReply ? (
+          <>
+            <div className="sms-form-row">
+              <Field label="Wait after their reply">
+                <input
+                  type="number"
+                  min={0}
+                  value={delay.value}
+                  onChange={(e) =>
+                    onChange({ ...step, ...delayFields(Number(e.target.value), delay.unit) })
+                  }
+                />
+              </Field>
+              <Field label="Unit">
+                <select
+                  value={delay.unit}
+                  onChange={(e) =>
+                    onChange({
+                      ...step,
+                      ...delayFields(delay.value, e.target.value as DelayUnit),
+                    })
+                  }
+                >
+                  <option value="minutes">minutes</option>
+                  <option value="hours">hours</option>
+                  <option value="days">days</option>
+                </select>
+              </Field>
+            </div>
+            <p className="sms-hint">
+              The sequence pauses here ("awaiting reply") until the lead texts
+              back, then this sends after the wait above — 0 minutes means
+              within about a minute of their reply. The campaign's send window
+              still applies unless 24/7 sending is on.
+            </p>
+          </>
+        ) : isFirst ? (
           <p className="sms-hint">Sends immediately when a contact is enrolled.</p>
         ) : (
-          <Field label="Wait (days after previous step)">
-            <input
-              type="number"
-              min={0}
-              value={step.wait_days}
-              onChange={(e) => onChange({ ...step, wait_days: Number(e.target.value) })}
-            />
-          </Field>
+          <div className="sms-form-row">
+            <Field label="Wait after previous step">
+              <input
+                type="number"
+                min={0}
+                value={delay.value}
+                onChange={(e) =>
+                  onChange({ ...step, ...delayFields(Number(e.target.value), delay.unit) })
+                }
+              />
+            </Field>
+            <Field label="Unit">
+              <select
+                value={delay.unit}
+                onChange={(e) =>
+                  onChange({
+                    ...step,
+                    ...delayFields(delay.value, e.target.value as DelayUnit),
+                  })
+                }
+              >
+                <option value="minutes">minutes</option>
+                <option value="hours">hours</option>
+                <option value="days">days</option>
+              </select>
+            </Field>
+          </div>
         )}
 
-        <Field label="Message">
+        <Field label={isReply ? "Default response (when no branch matches)" : "Message"}>
           <textarea
             rows={4}
             value={step.body}
             onChange={(e) => onChange({ ...step, body: e.target.value })}
-            placeholder={"Hi {{first_name|there}}, quick question about {{company}}…"}
+            placeholder={
+              isReply
+                ? "Thanks for getting back to me, {{first_name|there}} — mind sharing a bit more?"
+                : "Hi {{first_name|there}}, quick question about {{company}}…"
+            }
           />
         </Field>
         <span className={`sms-step-charcount${segments > 1 ? " sms-step-charcount--over" : ""}`}>
@@ -1575,6 +1832,8 @@ function StepRow({
         <p className="sms-hint">
           Counted before personalization; sends are capped at 3 segments.
         </p>
+
+        {isReply && <BranchesEditor step={step} onChange={onChange} />}
 
         {showAi ? (
           <Field
@@ -1604,26 +1863,31 @@ function StepRow({
 function PreviewDialog({
   campaignId,
   position,
+  isReplyStep,
   onClose,
 }: {
   campaignId: string;
   position: number;
+  isReplyStep: boolean;
   onClose: () => void;
 }) {
   const toast = useToast();
   const contacts = useHouseContacts(true);
   const [contactId, setContactId] = useState("");
-  const [rendered, setRendered] = useState<{ body: string } | null>(null);
+  const [sampleReply, setSampleReply] = useState("");
+  const [rendered, setRendered] = useState<Awaited<
+    ReturnType<typeof previewSmsStep>
+  > | null>(null);
   const [busy, setBusy] = useState(false);
 
-  const run = async (cid: string) => {
+  const run = async (cid: string, reply: string) => {
     if (!cid) return;
     setBusy(true);
     setRendered(null);
     try {
       // `position` here is the 0-based array index within this dialog's own
       // state; the API's step positions are 1-indexed (matching saveSmsSteps).
-      const r = await previewSmsStep(campaignId, cid, position + 1);
+      const r = await previewSmsStep(campaignId, cid, position + 1, reply);
       setRendered(r);
     } catch (e) {
       toast(e instanceof Error ? e.message : "Preview failed", "error");
@@ -1649,7 +1913,7 @@ function PreviewDialog({
             value={contactId}
             onChange={(e) => {
               setContactId(e.target.value);
-              run(e.target.value);
+              run(e.target.value, sampleReply);
             }}
           >
             <option value="">Choose a contact…</option>
@@ -1661,6 +1925,22 @@ function PreviewDialog({
             ))}
           </select>
         </Field>
+        {isReplyStep && (
+          <Field
+            label="Sample reply"
+            description="What the lead might text back — the preview shows which response branch fires."
+          >
+            <input
+              value={sampleReply}
+              onChange={(e) => setSampleReply(e.target.value)}
+              onBlur={() => run(contactId, sampleReply)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") run(contactId, sampleReply);
+              }}
+              placeholder="yes sounds good"
+            />
+          </Field>
+        )}
         {contacts !== null && contacts.length === 0 && (
           <Alert tone="info">
             No contacts in the house CRM yet — import leads to preview
@@ -1670,7 +1950,19 @@ function PreviewDialog({
         {busy && <SkeletonText lines={4} />}
         {rendered && (
           <div className="sms-preview">
-            <span className="sms-preview-label">Message</span>
+            <span className="sms-preview-label">
+              Message
+              {isReplyStep && (
+                <>
+                  {" "}
+                  <Badge tone={rendered.branch_label ? "accent" : "neutral"}>
+                    {rendered.branch_label
+                      ? `branch: ${rendered.branch_label}`
+                      : "default response"}
+                  </Badge>
+                </>
+              )}
+            </span>
             <div className="sms-preview-body">{rendered.body}</div>
           </div>
         )}
@@ -1718,19 +2010,39 @@ function AudienceTab({
     {
       key: "status",
       header: "Status",
-      render: (e) => (
-        <Badge tone={e.status}>
-          {e.status}
-          {e.exit_reason ? ` (${e.exit_reason})` : ""}
-        </Badge>
-      ),
-      sortValue: (e) => e.status,
+      render: (e) =>
+        e.status === "active" && e.awaiting_reply ? (
+          <Badge tone="info">awaiting reply</Badge>
+        ) : (
+          <Badge tone={e.status}>
+            {e.status}
+            {e.exit_reason ? ` (${e.exit_reason})` : ""}
+          </Badge>
+        ),
+      sortValue: (e) => (e.awaiting_reply ? "awaiting" : e.status),
     },
     { key: "step", header: "Step", align: "right", render: (e) => int(e.current_position) },
     {
       key: "next",
       header: "Next send",
-      render: (e) => timeAgo(e.next_run_at),
+      render: (e) =>
+        e.status === "active" && e.awaiting_reply
+          ? "when they reply"
+          : timeAgo(e.next_run_at),
+    },
+    {
+      key: "lastreply",
+      header: "Last reply",
+      render: (e) =>
+        e.last_reply_at ? (
+          <span className="sms-last-reply" title={e.last_reply_body ?? undefined}>
+            {timeAgo(e.last_reply_at)}
+            {e.last_reply_body ? ` · “${e.last_reply_body.slice(0, 40)}${e.last_reply_body.length > 40 ? "…" : ""}”` : ""}
+          </span>
+        ) : (
+          "—"
+        ),
+      sortValue: (e) => e.last_reply_at ?? "",
     },
     {
       key: "manage",
@@ -1750,7 +2062,11 @@ function AudienceTab({
       <div className="sms-head">
         <p className="sms-sub">
           {int(campaign.enrolled)} enrolled · {int(campaign.active_enrollments)}{" "}
-          currently active.
+          currently active
+          {campaign.awaiting_reply > 0
+            ? ` · ${int(campaign.awaiting_reply)} awaiting a reply`
+            : ""}
+          .
         </p>
         <Button variant="primary" onClick={onEnrollClick}>
           <Plus size={16} />

@@ -2487,6 +2487,74 @@ live activation + the entitlement flip, the Outreach module build
       upserted correctly; re-import showed Created 0 · Unchanged N with the
       three columns mapped to custom:<key> and zero new defs. DEPLOYED to
       production 2026-07-21 (backend+frontend rebuilt, no migration).
+- [x] SMS reply-triggered steps, response branching & richer tracking
+      (2026-07-21): three user-requested campaign upgrades, all
+      extend-don't-redesign on the existing engine. NOT yet deployed
+      (adds migration a9c3f6e1d8b2). (1) TIMED REPLY-AFTER-RESPONSE:
+      SmsStep gained trigger ("schedule" = today's drip | "reply") and
+      wait_minutes (added to wait_days — finer-than-day delays for BOTH
+      trigger types); a reply step fires wait after THE LEAD'S REPLY.
+      Enrollments gained the awaiting-reply park state
+      (awaiting_reply_since set + next_run_at NULL — distinct from the
+      paused-park so rearm_parked/reactivate can never force-fire a step
+      nobody replied to; explicitly filtered there) plus last_reply_at/
+      last_reply_body (latest reply; replied_at stays the FIRST — the
+      stats definition). The inbound webhook routes every genuine
+      (non-STOP/HELP) reply through NEW sms_campaigns.handle_reply: a
+      reply-triggered step at/after the current position schedules
+      wait after the reply (landed in the send window — quiet hours
+      hold; 24/7 campaigns respond immediately), deliberately skipping
+      pending schedule steps ("stop the drip, respond"); with no reply
+      step left, exit_on_reply behaves exactly as before. The engine
+      parks at a reply step (webhook is the only scheduler of one) and
+      clears last_reply_body on send so a later reply step waits for the
+      lead's NEXT message. BlueBubbles/iMessage inbound inherits all of
+      it (shared _process_inbound). (2) RESPONSE BRANCHING: reply steps
+      carry branches [{label, keywords, body}] + ai_branching — at send
+      time the reply is matched deterministically first (word-boundary,
+      case-insensitive, branch order = priority; "no" can't fire on
+      "know"), then ONE cheap grounded AI classification when keywords
+      miss and ai_branching is on (classify_reply via resolve_outreach,
+      metered, output guarded to exact labels, fail-open) — no match
+      sends the step's default body_template. Branch bodies use the
+      same token grammar and are 422-validated at save exactly like
+      step bodies; branches on a schedule step 422 (schema validator).
+      Preview accepts sample_reply and returns branch_label (the same
+      select_branch as the engine). (3) TRACKING: fixed a real stats
+      bug — a Sendblue/iMessage read receipt moved a row sent→read and
+      thereby REMOVED it from the sent/delivered counts
+      (_campaign_stats + _analytics_accounts now use inclusive status
+      tuples like the cap counters); campaign stats gained read +
+      read_rate (read/delivered — honest "opened", iMessage-only),
+      replies (total inbound linked to the campaign) alongside replied
+      (unique enrollments), and awaiting_reply; inbound SmsMessage rows
+      are stamped with campaign/enrollment/step attribution keyed off
+      the contact's most recent outbound campaign message (so a lead
+      replying AFTER the sequence completed still counts + gets
+      replied_at); per-step funnel (sent/delivered/read/failed/replies)
+      on the full campaign serialization; analytics by_day gained read
+      (bucketed on read_at day). Frontend (sms_outreach.tsx):
+      step editor gained the On-a-schedule / After-they-reply Segmented,
+      value+unit delay input (minutes/hours/days), branches editor
+      (label + comma keywords + response, AI-match Switch), per-step
+      stats line; campaigns table + dashboard gained Read/Replies
+      columns + KPIs + a Read chart series; Audience tab shows
+      "awaiting reply" badges, "when they reply" next-send, and a Last
+      reply column; Config gained the previously-unsurfaced
+      exit_on_reply Switch with reply-step-precedence copy; PreviewDialog
+      gained the sample-reply input + matched-branch badge. Tests
+      581 → 589 (reply-step full loop incl. +30min scheduling + inbound
+      attribution + consumed-reply clearing; default-body fallback;
+      word-boundary unit; AI-branch wiring; exit-on-reply preserved;
+      rearm-skips-awaiting; branch-misuse 422s; read-receipt/replies
+      stats). Verified live on alt2 (migration applied on boot; REAL
+      signed Twilio webhook against the running server scheduled the
+      reply step exactly +45min, branch body sent on tick, stats/UI all
+      confirmed — campaigns table, step editor, audience badges render;
+      zero console errors). NOTE: alt2's TOKEN_ENCRYPTION_KEY scratchpad
+      file had been purged again (any Fernet path 500s) — regenerated at
+      the path .claude/launch.json expects; dev-alt2.db secrets encrypted
+      under older keys no longer decrypt.
 - [ ] Stripe live activation + entitlement flip (after 12–14, so real
       limits land everywhere in one pass)
 - [ ] Outreach module build (dev-mode) — go-live gated on Meta App

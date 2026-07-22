@@ -37,8 +37,10 @@ from ..models.sms_outreach import (
     SMS_KIND_MANUAL,
     SMS_MSG_DELIVERED,
     SMS_MSG_FAILED,
+    SMS_MSG_READ,
     SMS_MSG_SENT,
     SMS_SUPPRESS_MANUAL,
+    SMS_TRIGGER_REPLY,
     SmsAccount,
     SmsCampaign,
     SmsEnrollment,
@@ -432,29 +434,55 @@ def _contact_stub(contact: Optional[Contact]) -> Optional[dict]:
     }
 
 
+# A delivery receipt moves a row sent → delivered, and an iMessage read
+# receipt moves it delivered → read. Each status therefore INCLUDES its
+# successors when counting the funnel — otherwise a read receipt would
+# silently remove a message from the sent/delivered counts (the bug this
+# replaced; sms_send._COUNTED_SENT_STATUSES fixed the same thing for caps).
+_SENT_STATUSES = (SMS_MSG_SENT, SMS_MSG_DELIVERED, SMS_MSG_READ)
+_DELIVERED_STATUSES = (SMS_MSG_DELIVERED, SMS_MSG_READ)
+
+
 def _campaign_stats(db: Session, campaign: SmsCampaign) -> dict:
-    """Computed funnel for one campaign. Definitions (all campaign-scoped,
-    direction=out):
-      sent      = messages Twilio accepted (status sent or delivered)
-      delivered = messages confirmed delivered via the status callback
-      failed    = messages Twilio (or the network) rejected outright
-      replied   = enrollments with a reply recorded
+    """Computed funnel for one campaign. Definitions (all campaign-scoped):
+      sent      = messages the provider accepted (incl. later receipts)
+      delivered = confirmed delivered via the status callback (incl. read)
+      read      = iMessage/Sendblue read receipts — the closest thing SMS has
+                  to "opened"; plain carrier SMS never reports this
+      failed    = messages the provider (or the network) rejected outright
+      replied   = enrollments with at least one reply recorded
+      replies   = total inbound messages linked to this campaign (a lead
+                  texting back three times counts three here, once in replied)
       opted_out = enrollments exited via STOP/opt-out
+      awaiting_reply = active enrollments parked at a reply-triggered step
     Rates (None when the denominator is 0): delivery_rate = delivered/sent,
-    reply_rate = replied/sent, opt_out_rate = opted_out/sent."""
+    read_rate = read/delivered, reply_rate = replied/sent,
+    opt_out_rate = opted_out/sent."""
     cid = campaign.id
     base = select(func.count(SmsMessage.id)).where(
         SmsMessage.campaign_id == cid, SmsMessage.direction == SMS_DIR_OUT
     )
-    sent = _count(
-        db, base.where(SmsMessage.status.in_([SMS_MSG_SENT, SMS_MSG_DELIVERED]))
-    )
-    delivered = _count(db, base.where(SmsMessage.status == SMS_MSG_DELIVERED))
+    sent = _count(db, base.where(SmsMessage.status.in_(_SENT_STATUSES)))
+    delivered = _count(db, base.where(SmsMessage.status.in_(_DELIVERED_STATUSES)))
+    read = _count(db, base.where(SmsMessage.status == SMS_MSG_READ))
     failed = _count(db, base.where(SmsMessage.status == SMS_MSG_FAILED))
+    replies = _count(
+        db,
+        select(func.count(SmsMessage.id)).where(
+            SmsMessage.campaign_id == cid, SmsMessage.direction == SMS_DIR_IN
+        ),
+    )
 
     enr = select(func.count(SmsEnrollment.id)).where(SmsEnrollment.campaign_id == cid)
     enrolled = _count(db, enr)
     active = _count(db, enr.where(SmsEnrollment.status == SMS_ENROLL_ACTIVE))
+    awaiting = _count(
+        db,
+        enr.where(
+            SmsEnrollment.status == SMS_ENROLL_ACTIVE,
+            SmsEnrollment.awaiting_reply_since.is_not(None),
+        ),
+    )
     replied = _count(db, enr.where(SmsEnrollment.replied_at.is_not(None)))
     opted_out = _count(
         db, enr.where(SmsEnrollment.exit_reason == "opted_out")
@@ -466,24 +494,72 @@ def _campaign_stats(db: Session, campaign: SmsCampaign) -> dict:
         "steps_count": steps_count,
         "enrolled": enrolled,
         "active_enrollments": active,
+        "awaiting_reply": awaiting,
         "sent": sent,
         "delivered": delivered,
+        "read": read,
         "failed": failed,
         "replied": replied,
+        "replies": replies,
         "opted_out": opted_out,
         "delivery_rate": _rate(delivered, sent),
+        "read_rate": _rate(read, delivered),
         "reply_rate": _rate(replied, sent),
         "opt_out_rate": _rate(opted_out, sent),
     }
 
 
-def _step_out(s: SmsStep) -> dict:
+def _step_stats(db: Session, campaign_id: str) -> dict:
+    """Per-step funnel: step_id -> {sent, delivered, read, failed, replies}.
+    `replies` counts inbound messages attributed to the step the lead was
+    replying to (stamped by the inbound webhook going forward — historical
+    inbound rows predate the linkage and simply don't appear here)."""
+    out: dict = {}
+
+    def _bucket(step_id):
+        return out.setdefault(
+            step_id,
+            {"sent": 0, "delivered": 0, "read": 0, "failed": 0, "replies": 0},
+        )
+
+    rows = db.execute(
+        select(SmsMessage.step_id, SmsMessage.direction, SmsMessage.status,
+               func.count(SmsMessage.id))
+        .where(
+            SmsMessage.campaign_id == campaign_id,
+            SmsMessage.step_id.is_not(None),
+        )
+        .group_by(SmsMessage.step_id, SmsMessage.direction, SmsMessage.status)
+    ).all()
+    for step_id, direction, status, n in rows:
+        b = _bucket(step_id)
+        if direction == SMS_DIR_IN:
+            b["replies"] += n
+            continue
+        if status in _SENT_STATUSES:
+            b["sent"] += n
+        if status in _DELIVERED_STATUSES:
+            b["delivered"] += n
+        if status == SMS_MSG_READ:
+            b["read"] += n
+        if status == SMS_MSG_FAILED:
+            b["failed"] += n
+    return out
+
+
+def _step_out(s: SmsStep, stats: Optional[dict] = None) -> dict:
     return {
         "id": s.id,
         "position": s.position,
         "wait_days": s.wait_days,
+        "wait_minutes": s.wait_minutes,
+        "trigger": s.trigger or "schedule",
         "body": s.body_template,
+        "branches": s.branches or [],
+        "ai_branching": s.ai_branching,
         "ai_instructions": s.ai_instructions,
+        "stats": stats
+        or {"sent": 0, "delivered": 0, "read": 0, "failed": 0, "replies": 0},
     }
 
 
@@ -507,8 +583,9 @@ def _campaign_out(db: Session, c: SmsCampaign, *, full: bool = False) -> dict:
         **_campaign_stats(db, c),
     }
     if full:
+        per_step = _step_stats(db, c.id)
         out["steps"] = [
-            _step_out(s)
+            _step_out(s, per_step.get(s.id))
             for s in db.execute(
                 select(SmsStep)
                 .where(SmsStep.campaign_id == c.id)
@@ -652,9 +729,11 @@ def set_steps(
     research_keys = research_svc.active_keys(db, campaign.organization_id)
     bad: list = []
     for s in body.steps:
-        for tok in sms_campaigns.unknown_tokens(s.body, custom_keys, research_keys):
-            if tok not in bad:
-                bad.append(tok)
+        templates = [s.body] + [b.body for b in (s.branches or [])]
+        for template in templates:
+            for tok in sms_campaigns.unknown_tokens(template, custom_keys, research_keys):
+                if tok not in bad:
+                    bad.append(tok)
     if bad:
         raise HTTPException(
             422,
@@ -689,11 +768,18 @@ def set_steps(
             row.position = -(i + 1)
     db.flush()
     for s in body.steps:
+        branches = (
+            [b.model_dump() for b in s.branches] if s.branches else None
+        )
         if s.id:
             row = existing[s.id]
             row.position = s.position
             row.wait_days = s.wait_days
+            row.wait_minutes = s.wait_minutes
+            row.trigger = s.trigger
             row.body_template = s.body
+            row.branches = branches
+            row.ai_branching = s.ai_branching
             row.ai_instructions = s.ai_instructions
         else:
             db.add(
@@ -702,7 +788,11 @@ def set_steps(
                     campaign_id=campaign.id,
                     position=s.position,
                     wait_days=s.wait_days,
+                    wait_minutes=s.wait_minutes,
+                    trigger=s.trigger,
                     body_template=s.body,
+                    branches=branches,
+                    ai_branching=s.ai_branching,
                     ai_instructions=s.ai_instructions,
                 )
             )
@@ -849,6 +939,9 @@ def list_enrollments(
             "current_position": e.current_position,
             "next_run_at": e.next_run_at.isoformat() if e.next_run_at else None,
             "replied_at": e.replied_at.isoformat() if e.replied_at else None,
+            "awaiting_reply": e.awaiting_reply_since is not None,
+            "last_reply_at": e.last_reply_at.isoformat() if e.last_reply_at else None,
+            "last_reply_body": e.last_reply_body,
             "created_at": e.created_at.isoformat(),
             "contact": _contact_stub(contacts.get(e.contact_id)),
         }
@@ -902,7 +995,18 @@ def preview_campaign(
         # renders as empty here, same as the send path's `or ""`.
         snippet = sms_campaigns.generate_ai_snippet(db, org, contact, step) or ""
     ai_snippet_empty = bool((step.ai_instructions or "").strip()) and not snippet.strip()
-    rendered = sms_campaigns.render_body(db, contact, step, ai_snippet=snippet)
+    # Reply steps: match the caller's sample reply against the response
+    # branches — the same select_branch the engine uses at send time (incl.
+    # the AI fallback, so the preview is honest about what would fire).
+    branch_body = None
+    branch_label = None
+    if (step.trigger or "schedule") == SMS_TRIGGER_REPLY:
+        branch_body, branch_label = sms_campaigns.select_branch(
+            db, org, step, body.sample_reply
+        )
+    rendered = sms_campaigns.render_body(
+        db, contact, step, ai_snippet=snippet, body_template=branch_body
+    )
     # Show the compliance suffix too — it's what actually goes out.
     final = sms_send.apply_compliance_suffix(
         rendered,
@@ -910,7 +1014,13 @@ def preview_campaign(
         first_step=(step.position == 1),
         include_footer=campaign.include_compliance_footer,
     )
-    return {"body": final, "ai_snippet_empty": ai_snippet_empty}
+    return {
+        "body": final,
+        "ai_snippet_empty": ai_snippet_empty,
+        "trigger": step.trigger or "schedule",
+        # None = default response (no branch matched / no branches defined).
+        "branch_label": branch_label,
+    }
 
 
 # --- messages (conversation view — SMS has no threads, just a contact-number
@@ -1110,8 +1220,8 @@ def analytics(
     agg = {
         k: 0
         for k in (
-            "sent", "delivered", "failed", "replied", "opted_out",
-            "enrolled", "active_enrollments",
+            "sent", "delivered", "read", "failed", "replied", "replies",
+            "opted_out", "enrolled", "active_enrollments", "awaiting_reply",
         )
     }
     by_campaign = []
@@ -1123,6 +1233,7 @@ def analytics(
     totals = {
         **agg,
         "delivery_rate": _rate(agg["delivered"], agg["sent"]),
+        "read_rate": _rate(agg["read"], agg["delivered"]),
         "reply_rate": _rate(agg["replied"], agg["sent"]),
         "opt_out_rate": _rate(agg["opted_out"], agg["sent"]),
     }
@@ -1159,29 +1270,43 @@ def _analytics_by_day(db: Session, cids: list, since: dt.datetime) -> list:
 
     def _b(day: str) -> dict:
         return buckets.setdefault(
-            day, {"date": day, "sent": 0, "delivered": 0, "failed": 0, "replied": 0}
+            day,
+            {
+                "date": day,
+                "sent": 0,
+                "delivered": 0,
+                "read": 0,
+                "failed": 0,
+                "replied": 0,
+            },
         )
 
     msgs = db.execute(
-        select(SmsMessage.created_at, SmsMessage.status).where(
+        select(SmsMessage.created_at, SmsMessage.status, SmsMessage.read_at).where(
             SmsMessage.campaign_id.in_(cids),
             SmsMessage.direction == SMS_DIR_OUT,
         )
     ).all()
-    for created_at, status in msgs:
+    for created_at, status, read_at in msgs:
         aware = (
             created_at
             if created_at.tzinfo
             else created_at.replace(tzinfo=dt.timezone.utc)
         )
-        if aware < since:
-            continue
-        if status in (SMS_MSG_SENT, SMS_MSG_DELIVERED):
-            _b(_day_key(aware))["sent"] += 1
-        if status == SMS_MSG_DELIVERED:
-            _b(_day_key(aware))["delivered"] += 1
-        if status == SMS_MSG_FAILED:
-            _b(_day_key(aware))["failed"] += 1
+        if aware >= since:
+            if status in _SENT_STATUSES:
+                _b(_day_key(aware))["sent"] += 1
+            if status in _DELIVERED_STATUSES:
+                _b(_day_key(aware))["delivered"] += 1
+            if status == SMS_MSG_FAILED:
+                _b(_day_key(aware))["failed"] += 1
+        # Reads bucket on the day the RECIPIENT read it, not the send day.
+        if status == SMS_MSG_READ and read_at is not None:
+            read_aware = (
+                read_at if read_at.tzinfo else read_at.replace(tzinfo=dt.timezone.utc)
+            )
+            if read_aware >= since:
+                _b(_day_key(read_aware))["read"] += 1
     replies = db.execute(
         select(SmsEnrollment.replied_at).where(
             SmsEnrollment.campaign_id.in_(cids),
@@ -1213,7 +1338,7 @@ def _analytics_accounts(db: Session, scope: TenantScope) -> list:
             SmsMessage.direction == SMS_DIR_OUT,
             SmsMessage.created_at >= seven_days_ago,
         )
-        sent_7d = _count(db, base.where(SmsMessage.status.in_([SMS_MSG_SENT, SMS_MSG_DELIVERED])))
+        sent_7d = _count(db, base.where(SmsMessage.status.in_(_SENT_STATUSES)))
         failed_7d = _count(db, base.where(SmsMessage.status == SMS_MSG_FAILED))
         out.append(
             {

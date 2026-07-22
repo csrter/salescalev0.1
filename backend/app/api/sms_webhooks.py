@@ -9,8 +9,11 @@ Inbound handling is the compliance half of the module:
   every matching contact + exit ALL of the contact's active SMS enrollments
   org-wide (mirrors the email unsubscribe rule).
 - HELP → recorded; Twilio's own auto-responder answers it.
-- Any other body → inbound SmsMessage row; enrollments with exit_on_reply
-  exit with reason "replied".
+- Any other body → inbound SmsMessage row (stamped with the campaign/
+  enrollment/step it replies to, for per-campaign reply tracking) and routed
+  through services/sms_campaigns.handle_reply: campaigns with a
+  reply-triggered step ahead schedule it (the timed, branch-matched
+  response); otherwise exit_on_reply campaigns exit with reason "replied".
 """
 
 import base64
@@ -40,12 +43,11 @@ from ..models.sms_outreach import (
     SMS_SUPPRESS_STOP,
     STOP_KEYWORDS,
     SmsAccount,
-    SmsCampaign,
     SmsEnrollment,
     SmsMessage,
 )
 from ..security import decrypt_secret
-from ..services import crm, lead_relay, sms_consent
+from ..services import crm, lead_relay, sms_campaigns, sms_consent
 
 log = logging.getLogger("salescale.sms_outreach")
 
@@ -153,21 +155,20 @@ def _process_inbound(
         db.flush()
         contacts = [new_contact]
 
-    db.add(
-        SmsMessage(
-            organization_id=account.organization_id,
-            account_id=account.id,
-            contact_id=contacts[0].id if contacts else None,
-            direction=SMS_DIR_IN,
-            kind="inbound",
-            to_number=sms_consent.normalize_phone(to_raw) or "",
-            from_number=from_number,
-            body=body,
-            status=SMS_MSG_RECEIVED,
-            provider_sid=provider_sid,
-            service=service,
-        )
+    row = SmsMessage(
+        organization_id=account.organization_id,
+        account_id=account.id,
+        contact_id=contacts[0].id if contacts else None,
+        direction=SMS_DIR_IN,
+        kind="inbound",
+        to_number=sms_consent.normalize_phone(to_raw) or "",
+        from_number=from_number,
+        body=body,
+        status=SMS_MSG_RECEIVED,
+        provider_sid=provider_sid,
+        service=service,
     )
+    db.add(row)
 
     if (forced_stop or lowered in STOP_KEYWORDS) and from_number:
         sms_consent.record_opt_out(
@@ -180,20 +181,19 @@ def _process_inbound(
         for c in contacts:
             _exit_contact_enrollments(db, c, "opted_out")
     elif lowered not in HELP_KEYWORDS:
+        # Route the reply through the campaign engine: reply-triggered steps
+        # get scheduled (the timed, branch-matched response); exit_on_reply
+        # campaigns with no reply step exit "replied", as before. The
+        # returned linkage stamps this inbound row with the campaign/
+        # enrollment/step it replied to — per-campaign reply tracking.
+        linkage = None
         for c in contacts:
-            for e in db.execute(
-                select(SmsEnrollment).where(
-                    SmsEnrollment.contact_id == c.id,
-                    SmsEnrollment.status == SMS_ENROLL_ACTIVE,
-                )
-            ).scalars():
-                campaign = db.get(SmsCampaign, e.campaign_id)
-                if campaign is not None and campaign.exit_on_reply:
-                    e.status = SMS_ENROLL_EXITED
-                    e.exit_reason = "replied"
-                    e.next_run_at = None
-                    e.replied_at = utcnow()
-                    e.ended_at = utcnow()
+            routed = sms_campaigns.handle_reply(db, c, body)
+            linkage = linkage or routed
+        if linkage is not None:
+            row.campaign_id = linkage["campaign_id"]
+            row.enrollment_id = linkage["enrollment_id"]
+            row.step_id = linkage["step_id"]
         # Forward a genuine lead reply to the operator's phone (best-effort).
         # STOP is handled above and not forwarded (the lead opted out — there's
         # nothing to reply to).

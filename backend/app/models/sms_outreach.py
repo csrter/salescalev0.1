@@ -61,6 +61,16 @@ SMS_ENROLL_EXITED = "exited"  # exit_reason: replied | opted_out | manual | fail
 # rather than retry)
 SMS_ENROLL_ERROR = "error"
 
+# --- Step triggers ---
+# "schedule" (default) — fires wait_days/wait_minutes after the previous step,
+# the classic drip. "reply" — fires wait_days/wait_minutes AFTER THE LEAD
+# REPLIES: the engine parks the enrollment awaiting a reply
+# (awaiting_reply_since) and the inbound webhook schedules the step when one
+# arrives (services/sms_campaigns.handle_reply). A reply step may carry
+# `branches` so the response depends on WHAT they said.
+SMS_TRIGGER_SCHEDULE = "schedule"
+SMS_TRIGGER_REPLY = "reply"
+
 SMS_DIR_IN = "in"
 SMS_DIR_OUT = "out"
 SMS_MSG_QUEUED = "queued"
@@ -211,7 +221,26 @@ class SmsStep(Base):
     )
     position: Mapped[int] = mapped_column(Integer, nullable=False)
     wait_days: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    # Finer-grained delay ADDED to wait_days (total = days + minutes). For a
+    # reply-triggered step this is the delay after the lead's reply — "text
+    # them back 5 minutes after they respond".
+    wait_minutes: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    # SMS_TRIGGER_SCHEDULE | SMS_TRIGGER_REPLY (see constants above).
+    trigger: Mapped[str] = mapped_column(
+        String(20), default=SMS_TRIGGER_SCHEDULE, nullable=False
+    )
     body_template: Mapped[Optional[str]] = mapped_column(Text)
+    # Reply-step response branching: [{"label": str, "keywords": [str], "body":
+    # str}]. At send time the lead's last reply is matched against each
+    # branch's keywords in order (deterministic, word-boundary); the first hit's
+    # body is sent instead of body_template. body_template is the DEFAULT
+    # response when nothing matches. Branch bodies use the same {{token}}
+    # grammar and are validated at save time like body_template.
+    branches: Mapped[Optional[list]] = mapped_column(JSON)
+    # When keywords miss and this is on, ONE cheap grounded AI call classifies
+    # the reply into a branch label (services/sms_campaigns.classify_reply) —
+    # fail-open to the default body on any AI failure, never blocking a send.
+    ai_branching: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     # Grounded {{ai_snippet}} instructions (mirrors EmailStep.ai_instructions).
     ai_instructions: Mapped[Optional[str]] = mapped_column(Text)
 
@@ -246,6 +275,18 @@ class SmsEnrollment(Base):
         DateTime(timezone=True), index=True
     )
     replied_at: Mapped[Optional[dt.datetime]] = mapped_column(DateTime(timezone=True))
+    # Awaiting-a-reply park state: set (with next_run_at NULL) when the
+    # enrollment's current step is reply-triggered and no reply has arrived
+    # yet. Distinct from the paused/disconnected park (next_run_at NULL,
+    # awaiting NULL) so rearm_parked never force-fires a step that's supposed
+    # to wait for the lead.
+    awaiting_reply_since: Mapped[Optional[dt.datetime]] = mapped_column(
+        DateTime(timezone=True)
+    )
+    # Most recent inbound reply (branch-matching input + UI context). replied_at
+    # above stays the FIRST reply (the stats definition).
+    last_reply_at: Mapped[Optional[dt.datetime]] = mapped_column(DateTime(timezone=True))
+    last_reply_body: Mapped[Optional[str]] = mapped_column(Text)
     enrolled_by: Mapped[Optional[str]] = mapped_column(String(36))
     ended_at: Mapped[Optional[dt.datetime]] = mapped_column(DateTime(timezone=True))
     # Cache: step_id -> generated snippet text (mirrors EmailEnrollment.ai_snippets)

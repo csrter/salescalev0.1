@@ -2621,3 +2621,402 @@ def test_24_7_window_is_always_open():
     camp.send_window_start, camp.send_window_end, camp.send_days = 8, 21, [0, 1, 2, 3, 4]
     assert gateway.in_send_window(camp, overnight) is False
 
+
+
+# --- reply-triggered steps + response branching ------------------------------
+
+
+def _inbound_reply(api, acct, from_number, body, sid="SM_reply_x"):
+    """POST a correctly-signed Twilio inbound webhook for a genuine reply."""
+    url = f"http://testserver/api/sms/webhooks/inbound/{acct['id']}"
+    form = {
+        "From": from_number,
+        "To": acct["from_number"],
+        "Body": body,
+        "MessageSid": sid,
+    }
+    sig = _twilio_signature(_AUTH_TOKEN, url, form)
+    return api.post(
+        f"/api/sms/webhooks/inbound/{acct['id']}",
+        data=form,
+        headers={"X-Twilio-Signature": sig},
+    )
+
+
+def _force_due(enrollment_id):
+    import datetime as _dt
+
+    db = SessionLocal()
+    try:
+        e = db.get(SmsEnrollment, enrollment_id)
+        e.next_run_at = utcnow() - _dt.timedelta(seconds=5)
+        db.commit()
+    finally:
+        db.close()
+
+
+def test_reply_step_waits_schedules_after_reply_and_branches(
+    sc_org, api, twilio_creds_ok, captured_sends
+):
+    """The full loop: step 1 sends -> enrollment parks 'awaiting reply' -> the
+    lead replies -> the reply step schedules wait_minutes after the reply
+    (NOT exiting, despite exit_on_reply's default) -> the branch matching what
+    they said sends -> sequence completes. Also proves the inbound ledger row
+    is stamped with campaign/enrollment/step attribution."""
+    import datetime as _dt
+
+    acct = _mk_account(sc_org, api, from_number="+14805550710")
+    camp = _mk_campaign(sc_org, api, acct["id"], **_ALWAYS)
+    contact = _mk_contact(sc_org, api, mobile_phone="4805557101", first="Rina")
+    detail = _set_steps(
+        sc_org,
+        api,
+        camp["id"],
+        [
+            {"position": 1, "body": "First touch"},
+            {
+                "position": 2,
+                "trigger": "reply",
+                "wait_minutes": 30,
+                "body": "Thanks for getting back to me!",
+                "branches": [
+                    {
+                        "label": "Yes",
+                        "keywords": ["yes", "interested"],
+                        "body": "Great {{first_name}} — when works for a call?",
+                    },
+                    {"label": "No", "keywords": ["no"], "body": "No worries, {{first_name}}."},
+                ],
+            },
+        ],
+    )
+    step1_id = detail["steps"][0]["id"]
+    assert detail["steps"][1]["trigger"] == "reply"
+    assert detail["steps"][1]["wait_minutes"] == 30
+    assert len(detail["steps"][1]["branches"]) == 2
+    assert _activate(sc_org, api, camp["id"]).status_code == 200
+    _enroll(sc_org, api, camp["id"], [contact])
+
+    _tick()  # sends step 1, parks at the reply step awaiting the lead
+    assert len(captured_sends) == 1
+    e = _get_enrollment(camp["id"], contact)
+    assert e.status == "active"
+    assert e.current_position == 2
+    assert e.next_run_at is None
+    assert e.awaiting_reply_since is not None
+
+    # No amount of ticking sends the reply step while nobody replied.
+    _tick()
+    assert len(captured_sends) == 1
+
+    before = utcnow()
+    r = _inbound_reply(api, acct, "+14805557101", "Yes, interested!", sid="SM_reply_1")
+    assert r.status_code == 200, r.text
+
+    e = _get_enrollment(camp["id"], contact)
+    assert e.status == "active"  # reply step takes precedence over exit_on_reply
+    assert e.awaiting_reply_since is None
+    assert e.replied_at is not None
+    assert e.last_reply_body == "Yes, interested!"
+    assert e.next_run_at is not None
+    # Scheduled ~30 minutes after the reply.
+    nra = e.next_run_at if e.next_run_at.tzinfo else e.next_run_at.replace(
+        tzinfo=_dt.timezone.utc
+    )
+    delta = (nra - before).total_seconds()
+    assert 29 * 60 <= delta <= 32 * 60
+
+    # The inbound ledger row carries the reply's attribution: the campaign,
+    # the enrollment, and the step the lead was replying to (step 1).
+    db = SessionLocal()
+    try:
+        row = db.execute(
+            select(SmsMessage).where(
+                SmsMessage.provider_sid == "SM_reply_1",
+                SmsMessage.organization_id == sc_org["org"],
+            )
+        ).scalar_one()
+        assert row.campaign_id == camp["id"]
+        assert row.enrollment_id == e.id
+        assert row.step_id == step1_id
+    finally:
+        db.close()
+
+    # Not due yet — the timed delay is respected.
+    _tick()
+    assert len(captured_sends) == 1
+
+    _force_due(e.id)
+    _tick()
+    assert len(captured_sends) == 2
+    assert "Great Rina — when works for a call?" in captured_sends[-1]["body"]
+
+    e = _get_enrollment(camp["id"], contact)
+    assert e.status == "completed"
+    assert e.last_reply_body is None  # consumed by the send
+
+
+def test_reply_step_default_body_when_no_branch_matches(
+    sc_org, api, twilio_creds_ok, captured_sends
+):
+    acct = _mk_account(sc_org, api, from_number="+14805550711")
+    camp = _mk_campaign(sc_org, api, acct["id"], **_ALWAYS)
+    contact = _mk_contact(sc_org, api, mobile_phone="4805557102", first="Deb")
+    _set_steps(
+        sc_org,
+        api,
+        camp["id"],
+        [
+            {"position": 1, "body": "First touch"},
+            {
+                "position": 2,
+                "trigger": "reply",
+                "body": "Thanks {{first_name}} — mind sharing more?",
+                "branches": [
+                    {"label": "Yes", "keywords": ["yes"], "body": "Branch body"}
+                ],
+            },
+        ],
+    )
+    assert _activate(sc_org, api, camp["id"]).status_code == 200
+    _enroll(sc_org, api, camp["id"], [contact])
+    _tick()
+    assert len(captured_sends) == 1
+
+    # Word-boundary matching: "know" must not fire the "no"/"yes" branches.
+    r = _inbound_reply(
+        api, acct, "+14805557102", "let me know more", sid="SM_reply_2"
+    )
+    assert r.status_code == 200
+    e = _get_enrollment(camp["id"], contact)
+    _force_due(e.id)
+    _tick()
+    assert len(captured_sends) == 2
+    assert "Thanks Deb — mind sharing more?" in captured_sends[-1]["body"]
+
+
+def test_reply_branch_keyword_word_boundaries():
+    """'no' must not match inside 'know'; matching is case-insensitive."""
+    step = SmsStep(
+        organization_id="o",
+        campaign_id="c",
+        position=2,
+        trigger="reply",
+        branches=[
+            {"label": "No", "keywords": ["no"], "body": "ok"},
+            {"label": "Yes", "keywords": ["yes"], "body": "great"},
+        ],
+    )
+    assert sms_campaigns.match_branch_keywords(step, "I know about it") is None
+    assert sms_campaigns.match_branch_keywords(step, "NO thanks")["label"] == "No"
+    assert sms_campaigns.match_branch_keywords(step, "well... Yes!")["label"] == "Yes"
+    assert sms_campaigns.match_branch_keywords(step, "") is None
+
+
+def test_ai_branching_classifies_when_keywords_miss(
+    sc_org, api, twilio_creds_ok, captured_sends, monkeypatch
+):
+    """A reply with no keyword hit routes through the AI classifier when
+    ai_branching is on; the classified branch's body sends. (classify_reply is
+    stubbed — its own guard behavior is fail-open and returns None on any
+    error, which the default-body test above already exercises.)"""
+    acct = _mk_account(sc_org, api, from_number="+14805550712")
+    camp = _mk_campaign(sc_org, api, acct["id"], **_ALWAYS)
+    contact = _mk_contact(sc_org, api, mobile_phone="4805557103", first="Ana")
+    _set_steps(
+        sc_org,
+        api,
+        camp["id"],
+        [
+            {"position": 1, "body": "First touch"},
+            {
+                "position": 2,
+                "trigger": "reply",
+                "ai_branching": True,
+                "body": "Default response",
+                "branches": [
+                    {"label": "Interested", "keywords": ["yes"], "body": "AI matched {{first_name}}"}
+                ],
+            },
+        ],
+    )
+    assert _activate(sc_org, api, camp["id"]).status_code == 200
+    _enroll(sc_org, api, camp["id"], [contact])
+    _tick()
+    assert len(captured_sends) == 1
+
+    monkeypatch.setattr(
+        sms_campaigns, "classify_reply", lambda db, org, step, text: "Interested"
+    )
+    r = _inbound_reply(
+        api, acct, "+14805557103", "sure go ahead", sid="SM_reply_3"
+    )
+    assert r.status_code == 200
+    e = _get_enrollment(camp["id"], contact)
+    _force_due(e.id)
+    _tick()
+    assert len(captured_sends) == 2
+    assert "AI matched Ana" in captured_sends[-1]["body"]
+
+
+def test_reply_exits_when_no_reply_step_and_exit_on_reply(
+    sc_org, api, twilio_creds_ok, captured_sends
+):
+    """The pre-reply-step behavior is unchanged for plain drip campaigns: a
+    reply exits the enrollment (exit_on_reply default true) — and now also
+    records the reply on the enrollment for tracking."""
+    acct = _mk_account(sc_org, api, from_number="+14805550713")
+    camp = _mk_campaign(sc_org, api, acct["id"], **_ALWAYS)
+    contact = _mk_contact(sc_org, api, mobile_phone="4805557104")
+    _set_steps(
+        sc_org,
+        api,
+        camp["id"],
+        [
+            {"position": 1, "body": "First touch"},
+            {"position": 2, "wait_days": 3, "body": "Bump"},
+        ],
+    )
+    assert _activate(sc_org, api, camp["id"]).status_code == 200
+    _enroll(sc_org, api, camp["id"], [contact])
+    _tick()
+
+    r = _inbound_reply(api, acct, "+14805557104", "sounds good", sid="SM_reply_4")
+    assert r.status_code == 200
+    e = _get_enrollment(camp["id"], contact)
+    assert e.status == "exited"
+    assert e.exit_reason == "replied"
+    assert e.replied_at is not None
+    assert e.last_reply_body == "sounds good"
+
+
+def test_rearm_never_force_fires_awaiting_reply(
+    sc_org, api, twilio_creds_ok, captured_sends
+):
+    """Pause -> reactivate re-arms parked enrollments, but an enrollment
+    awaiting a lead's reply must stay parked — re-arming it would force-send
+    a reply step nobody replied to."""
+    acct = _mk_account(sc_org, api, from_number="+14805550714")
+    camp = _mk_campaign(sc_org, api, acct["id"], **_ALWAYS)
+    contact = _mk_contact(sc_org, api, mobile_phone="4805557105")
+    _set_steps(
+        sc_org,
+        api,
+        camp["id"],
+        [
+            {"position": 1, "body": "First touch"},
+            {"position": 2, "trigger": "reply", "body": "Reply handler"},
+        ],
+    )
+    assert _activate(sc_org, api, camp["id"]).status_code == 200
+    _enroll(sc_org, api, camp["id"], [contact])
+    _tick()
+    assert len(captured_sends) == 1
+
+    assert api.post(
+        f"/api/sms/campaigns/{camp['id']}/pause", headers=sc_org["headers"]
+    ).status_code == 200
+    assert _activate(sc_org, api, camp["id"]).status_code == 200
+
+    e = _get_enrollment(camp["id"], contact)
+    assert e.status == "active"
+    assert e.next_run_at is None  # NOT re-armed
+    assert e.awaiting_reply_since is not None
+    _tick()
+    assert len(captured_sends) == 1  # nothing force-fired
+
+
+def test_step_validation_rejects_branch_misuse(sc_org, api, twilio_creds_ok):
+    acct = _mk_account(sc_org, api, from_number="+14805550715")
+    camp = _mk_campaign(sc_org, api, acct["id"], **_ALWAYS)
+    # branches on a schedule step -> 422 (pydantic model validator)
+    r = api.put(
+        f"/api/sms/campaigns/{camp['id']}/steps",
+        json={
+            "steps": [
+                {
+                    "position": 1,
+                    "body": "Hi",
+                    "branches": [{"label": "x", "keywords": ["a"], "body": "b"}],
+                }
+            ]
+        },
+        headers=sc_org["headers"],
+    )
+    assert r.status_code == 422
+    # unknown token inside a BRANCH body -> same 422 as the step body
+    r = api.put(
+        f"/api/sms/campaigns/{camp['id']}/steps",
+        json={
+            "steps": [
+                {"position": 1, "body": "Hi"},
+                {
+                    "position": 2,
+                    "trigger": "reply",
+                    "body": "ok",
+                    "branches": [
+                        {"label": "x", "keywords": ["a"], "body": "Hi {{bogus_token}}"}
+                    ],
+                },
+            ]
+        },
+        headers=sc_org["headers"],
+    )
+    assert r.status_code == 422
+    assert "bogus_token" in r.text
+
+
+def test_campaign_stats_count_read_receipts_and_replies(
+    sc_org, api, twilio_creds_ok, captured_sends
+):
+    """A read receipt must not remove a message from sent/delivered (the bug
+    this session fixed), and the new read/replies fields flow through the
+    campaign stats and the analytics endpoint."""
+    acct = _mk_account(sc_org, api, from_number="+14805550716")
+    camp = _mk_campaign(sc_org, api, acct["id"], **_ALWAYS)
+    contact = _mk_contact(sc_org, api, mobile_phone="4805557106")
+    _set_steps(sc_org, api, camp["id"], [{"position": 1, "body": "First touch"}])
+    assert _activate(sc_org, api, camp["id"]).status_code == 200
+    _enroll(sc_org, api, camp["id"], [contact])
+    _tick()
+    assert len(captured_sends) == 1
+
+    # Simulate the provider's receipts: delivered -> read (iMessage).
+    db = SessionLocal()
+    try:
+        row = db.execute(
+            select(SmsMessage).where(
+                SmsMessage.campaign_id == camp["id"],
+                SmsMessage.direction == "out",
+            )
+        ).scalar_one()
+        row.status = "read"
+        row.read_at = utcnow()
+        db.commit()
+    finally:
+        db.close()
+
+    r = _inbound_reply(api, acct, "+14805557106", "who is this?", sid="SM_reply_5")
+    assert r.status_code == 200
+
+    detail = api.get(
+        f"/api/sms/campaigns/{camp['id']}", headers=sc_org["headers"]
+    ).json()
+    assert detail["sent"] == 1  # read receipt did NOT remove it from sent
+    assert detail["delivered"] == 1
+    assert detail["read"] == 1
+    assert detail["read_rate"] == 1.0
+    assert detail["replies"] == 1
+    assert detail["replied"] == 1
+    # Per-step funnel on the full serialization.
+    st = detail["steps"][0]["stats"]
+    assert st["sent"] == 1 and st["read"] == 1 and st["replies"] == 1
+
+    analytics = api.get(
+        f"/api/sms/analytics?campaign_id={camp['id']}", headers=sc_org["headers"]
+    ).json()
+    assert analytics["totals"]["read"] == 1
+    assert analytics["totals"]["replies"] == 1
+    assert analytics["totals"]["read_rate"] == 1.0
+    day = analytics["by_day"][-1]
+    assert day["sent"] == 1 and day["read"] == 1

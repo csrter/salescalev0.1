@@ -50,14 +50,17 @@ from ..models.crm import Company, Contact
 from ..models.sms_outreach import (
     SMS_ACCOUNT_ACTIVE,
     SMS_CAMPAIGN_ACTIVE,
+    SMS_DIR_OUT,
     SMS_ENROLL_ACTIVE,
     SMS_ENROLL_COMPLETED,
     SMS_ENROLL_ERROR,
     SMS_ENROLL_EXITED,
     SMS_KIND_CAMPAIGN,
+    SMS_TRIGGER_REPLY,
     SmsAccount,
     SmsCampaign,
     SmsEnrollment,
+    SmsMessage,
     SmsStep,
 )
 from . import ai_insights, ai_provider
@@ -204,7 +207,14 @@ def infer_city_failsafe(db: Session, org: Organization, contact: Contact) -> str
         return ""
 
 
-def render_body(db: Session, contact: Contact, step: SmsStep, *, ai_snippet: str = "") -> str:
+def render_body(
+    db: Session,
+    contact: Contact,
+    step: SmsStep,
+    *,
+    ai_snippet: str = "",
+    body_template: Optional[str] = None,
+) -> str:
     """Render one step's body for one contact. Reuses email_personalize's
     template substitution (casing normalization, #if/spin, the emptied-token
     tidy pass) so `{{first_name|there}}` etc. behave identically to email.
@@ -217,14 +227,16 @@ def render_body(db: Session, contact: Contact, step: SmsStep, *, ai_snippet: str
     that used to live here is disabled for now (proved unreliable in
     practice — a retired Gemini model + inconsistent per-lead behavior);
     infer_city_failsafe/_clean_city are kept, just uncalled, so it's a
-    one-line change to re-enable rather than a rebuild."""
+    one-line change to re-enable rather than a rebuild.
+
+    `body_template` overrides step.body_template — the branch-selected
+    response body on a reply-triggered step (select_branch)."""
     facts = email_personalize._company_facts(db, contact)
     extra = {"ai_snippet": ai_snippet}
     if not (contact.first_name or "").strip() and (facts.get("company") or "").strip():
         extra["first_name"] = business_case(facts["company"])
-    return email_personalize._render_template(
-        step.body_template or "", contact, facts, extra
-    )
+    template = body_template if body_template is not None else (step.body_template or "")
+    return email_personalize._render_template(template, contact, facts, extra)
 
 
 def _cached_or_generate(
@@ -315,14 +327,116 @@ def render_full(
     enrollment: Optional[SmsEnrollment],
     step: SmsStep,
     contact: Optional[Contact] = None,
+    body_template: Optional[str] = None,
 ) -> str:
     """Full render incl. {{ai_snippet}} (from the enrollment cache,
     generating once if absent). `contact` may be passed directly (preview);
-    otherwise it is loaded from the enrollment."""
+    otherwise it is loaded from the enrollment. `body_template` is the
+    branch-selected body override for reply steps."""
     if contact is None:
         contact = db.get(Contact, enrollment.contact_id)
     snippet = _cached_or_generate(db, org, contact, enrollment, step)
-    return render_body(db, contact, step, ai_snippet=snippet)
+    return render_body(
+        db, contact, step, ai_snippet=snippet, body_template=body_template
+    )
+
+
+# --- reply-step branching -----------------------------------------------------
+# A reply-triggered step may carry `branches`: [{"label", "keywords", "body"}].
+# Matching is deterministic-first (word-boundary keyword search over the lead's
+# reply, branch order = priority), then optionally ONE cheap grounded AI
+# classification (step.ai_branching) — fail-open to the step's default
+# body_template on any AI failure, mirroring every other AI seam in outreach.
+
+_CLASSIFY_REPLY_SYSTEM = (
+    "You classify an inbound SMS reply into one of the given categories. "
+    "Use ONLY the reply text and the category descriptions given. Answer "
+    "with the category label ALONE, exactly as written — no punctuation, no "
+    "explanation. If none clearly fits, answer exactly NONE."
+)
+
+
+def _branch_options(step: SmsStep) -> list:
+    """The step's branches as a sanitized list of dicts (defensive against
+    hand-edited JSON: non-dict entries and blank labels are skipped)."""
+    out = []
+    for b in step.branches or []:
+        if not isinstance(b, dict):
+            continue
+        label = str(b.get("label") or "").strip()
+        if not label:
+            continue
+        keywords = [
+            str(k).strip() for k in (b.get("keywords") or []) if str(k).strip()
+        ]
+        out.append({"label": label, "keywords": keywords, "body": b.get("body") or ""})
+    return out
+
+
+def match_branch_keywords(step: SmsStep, reply_text: str) -> Optional[dict]:
+    """First branch (in order) with a keyword appearing in the reply as a
+    whole word, case-insensitive. Word boundaries matter: a "no" branch must
+    not fire on "know"."""
+    text = (reply_text or "").lower()
+    if not text:
+        return None
+    for branch in _branch_options(step):
+        for kw in branch["keywords"]:
+            if re.search(r"(?<!\w)" + re.escape(kw.lower()) + r"(?!\w)", text):
+                return branch
+    return None
+
+
+def classify_reply(
+    db: Session, org: Organization, step: SmsStep, reply_text: str
+) -> Optional[str]:
+    """One grounded AI call to pick a branch label for `reply_text`, or None
+    on any failure / no confident fit (fail-open — the default body sends).
+    Metered like every other outreach AI call."""
+    options = _branch_options(step)
+    if not options or not (reply_text or "").strip():
+        return None
+    labels = {b["label"].casefold(): b["label"] for b in options}
+    grounding = {
+        "reply": reply_text[:500],
+        "categories": [
+            {"label": b["label"], "example_keywords": b["keywords"]} for b in options
+        ],
+    }
+    try:
+        ai_insights.check_allowance(db, org)
+        res = ai_provider.resolve_outreach(db, org)
+        user_content = f"DATA:\n{json.dumps(grounding, sort_keys=True, default=str)}"
+        with ai_provider.using(res):
+            text, input_tokens, output_tokens = email_personalize._call_model(
+                _CLASSIFY_REPLY_SYSTEM, user_content, max_tokens=16
+            )
+        email_personalize._record_usage(db, org, res.model, input_tokens, output_tokens)
+        answer = (text or "").strip().strip("\"'").rstrip(".").strip()
+        return labels.get(answer.casefold())
+    except Exception as e:  # never let AI failure stop a send
+        log.info("sms reply classification skipped for step %s: %s", step.id, e)
+        return None
+
+
+def select_branch(
+    db: Session, org: Organization, step: SmsStep, reply_text: Optional[str]
+) -> tuple[Optional[str], Optional[str]]:
+    """(body_template, branch_label) for a reply step given the lead's reply.
+    (None, None) means no branch matched — send the step's default
+    body_template. Keywords first (deterministic), then AI when enabled."""
+    if not _branch_options(step):
+        return None, None
+    matched = match_branch_keywords(step, reply_text or "")
+    if matched is None and step.ai_branching:
+        label = classify_reply(db, org, step, reply_text or "")
+        if label is not None:
+            matched = next(
+                (b for b in _branch_options(step) if b["label"] == label), None
+            )
+    if matched is None:
+        return None, None
+    return matched["body"] or None, matched["label"]
 
 
 # --- enrollment -------------------------------------------------------------
@@ -441,6 +555,14 @@ def _next_valid_send_time(
     return None
 
 
+def _step_delay(step: SmsStep) -> dt.timedelta:
+    """Total wait for a step: days + minutes. For a schedule step it's the
+    delay after the previous step; for a reply step, after the lead's reply."""
+    return dt.timedelta(
+        days=max(0, step.wait_days or 0), minutes=max(0, getattr(step, "wait_minutes", 0) or 0)
+    )
+
+
 def _steps(db: Session, campaign_id: str) -> List[SmsStep]:
     return list(
         db.execute(
@@ -456,7 +578,11 @@ def rearm_parked(db: Session, campaign: SmsCampaign) -> int:
     (next_run_at = NULL — campaign paused or account disconnected at the
     time). Without this, reactivating a campaign leaves its audience
     dormant forever: run_due only scans non-NULL next_run_at. Scheduled at
-    the next valid window open, never immediately-past-quiet-hours."""
+    the next valid window open, never immediately-past-quiet-hours.
+
+    Enrollments parked AWAITING A REPLY (awaiting_reply_since set) are
+    deliberately excluded — they're waiting on the lead, not on the campaign,
+    and re-arming would force-fire a reply step nobody replied to."""
     now = utcnow()
     when = _next_valid_send_time(now, campaign) or now
     parked = (
@@ -465,6 +591,7 @@ def rearm_parked(db: Session, campaign: SmsCampaign) -> int:
                 SmsEnrollment.campaign_id == campaign.id,
                 SmsEnrollment.status == SMS_ENROLL_ACTIVE,
                 SmsEnrollment.next_run_at.is_(None),
+                SmsEnrollment.awaiting_reply_since.is_(None),
             )
         )
         .scalars()
@@ -525,6 +652,104 @@ def _end(enrollment: SmsEnrollment, status: str, reason: Optional[str] = None) -
     enrollment.ended_at = utcnow()
 
 
+# --- inbound reply routing ----------------------------------------------------
+
+
+def handle_reply(
+    db: Session,
+    contact: Contact,
+    reply_body: str,
+    now: Optional[dt.datetime] = None,
+) -> Optional[dict]:
+    """Route one genuine inbound reply (non-STOP, non-HELP — the webhook
+    already filtered those) through every ACTIVE enrollment this contact has:
+
+    - Record the reply on the enrollment (replied_at stays the FIRST reply;
+      last_reply_at/last_reply_body track the latest — the branch input).
+    - If a reply-triggered step exists at/after the current position, jump to
+      it and schedule it wait_days/wait_minutes after the reply (landed inside
+      the campaign's send window — quiet hours still hold). This intentionally
+      skips any pending schedule steps: the reply handler IS the response.
+    - Otherwise, exit_on_reply campaigns exit with reason "replied" (the
+      pre-reply-step behavior, unchanged); campaigns with exit_on_reply off
+      keep dripping as before.
+
+    Returns {campaign_id, enrollment_id, step_id} for inbound-message
+    attribution: the contact's most recent OUTBOUND campaign message is the
+    text the lead is replying to, so its campaign/enrollment/step is the
+    linkage — including when that enrollment already completed/exited (a lead
+    replying after the drip finished is still a campaign reply, and gets
+    replied_at recorded for the stats). None when the contact has never been
+    sent a campaign message."""
+    now = now or utcnow()
+
+    # Attribution: the last campaign text this contact received.
+    prompted = db.execute(
+        select(SmsMessage)
+        .where(
+            SmsMessage.contact_id == contact.id,
+            SmsMessage.organization_id == contact.organization_id,
+            SmsMessage.direction == SMS_DIR_OUT,
+            SmsMessage.campaign_id.is_not(None),
+        )
+        .order_by(SmsMessage.created_at.desc())
+        .limit(1)
+    ).scalar_one_or_none()
+    linkage: Optional[dict] = None
+    if prompted is not None:
+        linkage = {
+            "campaign_id": prompted.campaign_id,
+            "enrollment_id": prompted.enrollment_id,
+            "step_id": prompted.step_id,
+        }
+        # Record the reply on that enrollment even when it's no longer active
+        # (tracking only — a completed/exited enrollment is never resurrected).
+        if prompted.enrollment_id is not None:
+            attributed = db.get(SmsEnrollment, prompted.enrollment_id)
+            if attributed is not None and attributed.status != SMS_ENROLL_ACTIVE:
+                attributed.replied_at = attributed.replied_at or now
+                attributed.last_reply_at = now
+
+    enrollments = (
+        db.execute(
+            select(SmsEnrollment).where(
+                SmsEnrollment.organization_id == contact.organization_id,
+                SmsEnrollment.contact_id == contact.id,
+                SmsEnrollment.status == SMS_ENROLL_ACTIVE,
+            )
+        )
+        .scalars()
+        .all()
+    )
+    for e in enrollments:
+        campaign = db.get(SmsCampaign, e.campaign_id)
+        if campaign is None:
+            continue
+        e.replied_at = e.replied_at or now
+        e.last_reply_at = now
+        e.last_reply_body = reply_body
+        reply_step = next(
+            (
+                s
+                for s in _steps(db, campaign.id)
+                if s.position >= e.current_position
+                and (s.trigger or "schedule") == SMS_TRIGGER_REPLY
+            ),
+            None,
+        )
+        if reply_step is not None:
+            # Route to the reply handler. Scheduling happens even when the
+            # campaign is paused/account down — the engine re-checks status at
+            # send time and parks if needed (and rearm re-arms it later).
+            e.current_position = reply_step.position
+            e.awaiting_reply_since = None
+            base = now + _step_delay(reply_step)
+            e.next_run_at = _next_valid_send_time(base, campaign) or base
+        elif campaign.exit_on_reply:
+            _end(e, SMS_ENROLL_EXITED, "replied")
+    return linkage
+
+
 # --- the step state machine -------------------------------------------------
 
 
@@ -550,6 +775,17 @@ def process_enrollment(db: Session, enrollment: SmsEnrollment) -> None:
         return
     enrollment.current_position = current.position
 
+    # A reply-triggered step only fires once the lead has actually replied —
+    # the webhook (handle_reply) is what schedules it. Reaching it here with
+    # no reply recorded (e.g. a campaign whose FIRST step is a reply handler,
+    # or a re-armed enrollment) parks the enrollment awaiting one.
+    if (current.trigger or "schedule") == SMS_TRIGGER_REPLY and not (
+        enrollment.last_reply_body or ""
+    ).strip():
+        enrollment.awaiting_reply_since = enrollment.awaiting_reply_since or now
+        enrollment.next_run_at = None
+        return
+
     # Window / day gating (campaign timezone) — the TCPA quiet-hours guard.
     valid_at = _next_valid_send_time(now, campaign)
     if valid_at is None:
@@ -567,7 +803,16 @@ def process_enrollment(db: Session, enrollment: SmsEnrollment) -> None:
 
     org = db.get(Organization, campaign.organization_id)
     contact = db.get(Contact, enrollment.contact_id)
-    body = render_full(db, org, enrollment, current, contact=contact)
+    # Reply steps pick a response branch from what the lead actually said;
+    # no match (or no branches) sends the step's default body.
+    branch_body: Optional[str] = None
+    if (current.trigger or "schedule") == SMS_TRIGGER_REPLY:
+        branch_body, _branch_label = select_branch(
+            db, org, current, enrollment.last_reply_body
+        )
+    body = render_full(
+        db, org, enrollment, current, contact=contact, body_template=branch_body
+    )
 
     # Send-time failsafes — all deterministic, so exit rather than retry.
     if not body.strip():
@@ -619,12 +864,22 @@ def process_enrollment(db: Session, enrollment: SmsEnrollment) -> None:
     del msg  # the ledger row itself isn't needed by the engine
 
     if code == gateway.SENT:
+        # A consumed reply doesn't re-fire a later reply step — the NEXT reply
+        # step waits for the lead's NEXT message.
+        if (current.trigger or "schedule") == SMS_TRIGGER_REPLY:
+            enrollment.last_reply_body = None
         nxt = next((s for s in steps if s.position > current.position), None)
         if nxt is None:
             _end(enrollment, SMS_ENROLL_COMPLETED)
             return
         enrollment.current_position = nxt.position
-        base = now + dt.timedelta(days=max(0, nxt.wait_days or 0))
+        if (nxt.trigger or "schedule") == SMS_TRIGGER_REPLY:
+            # The next step waits for the lead — park until the webhook
+            # schedules it (handle_reply).
+            enrollment.awaiting_reply_since = now
+            enrollment.next_run_at = None
+            return
+        base = now + _step_delay(nxt)
         enrollment.next_run_at = _next_valid_send_time(base, campaign) or base
         return
     if code == gateway.CAP_REACHED:

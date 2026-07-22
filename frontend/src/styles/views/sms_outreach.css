@@ -322,6 +322,45 @@
   color: var(--danger);
 }
 
+/* Per-step funnel readout in the step head — mono engraved figures, same
+   register as the KPI labels. */
+.sms-step-stats {
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  color: var(--ink-faint);
+  white-space: nowrap;
+}
+
+/* ---- reply-step response branches --------------------------------------- */
+
+.sms-branches {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+}
+
+.sms-branch {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--border));
+  border-radius: var(--radius-sm);
+}
+
+.sms-branch > .btn {
+  align-self: flex-start;
+}
+
+.sms-last-reply {
+  font-size: var(--text-xs);
+  color: var(--ink-soft);
+}
+
 /* ---- preview ------------------------------------------------------------ */
 
 .sms-preview {

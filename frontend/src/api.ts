@@ -2090,19 +2090,54 @@ export interface SmsCampaign {
   steps_count: number;
   enrolled: number;
   active_enrollments: number;
+  /** Active enrollments parked at a reply-triggered step, waiting on the lead. */
+  awaiting_reply: number;
   sent: number;
+  delivered: number;
+  /** iMessage/Sendblue read receipts — the SMS equivalent of "opened". */
+  read: number;
+  /** Total inbound messages linked to this campaign (a lead texting back
+   * three times counts three here, once in reply_rate's numerator). */
+  replies: number;
   delivery_rate: number | null;
+  read_rate: number | null;
   reply_rate: number | null;
   opt_out_rate: number | null;
   created_at: string;
 }
 
+export interface SmsStepBranch {
+  label: string;
+  keywords: string[];
+  body: string;
+}
+
+export interface SmsStepStats {
+  sent: number;
+  delivered: number;
+  read: number;
+  failed: number;
+  replies: number;
+}
+
+export type SmsStepTrigger = "schedule" | "reply";
+
 export interface SmsStep {
   id?: string;
   position: number;
   wait_days: number;
+  /** Added to wait_days (total delay = days + minutes). For a reply step,
+   * the delay after the lead's reply. */
+  wait_minutes: number;
+  /** "schedule" = classic drip; "reply" = fires only after the lead replies,
+   * optionally branching on what they said. */
+  trigger: SmsStepTrigger;
   body: string;
+  branches: SmsStepBranch[];
+  ai_branching: boolean;
   ai_instructions: string | null;
+  /** Server-computed per-step funnel; absent on steps not yet saved. */
+  stats?: SmsStepStats;
 }
 
 export interface SmsCampaignDetail extends SmsCampaign {
@@ -2112,6 +2147,7 @@ export interface SmsCampaignDetail extends SmsCampaign {
   send_window_end: number;
   send_days: number[];
   daily_cap: number | null;
+  exit_on_reply: boolean;
   include_compliance_footer: boolean;
   /** Auto-enroll new leads for client_id into this campaign on arrival. */
   auto_enroll_new_leads: boolean;
@@ -2127,6 +2163,7 @@ export interface SmsCampaignBody {
   send_window_end?: number;
   send_days?: number[];
   daily_cap?: number | null;
+  exit_on_reply?: boolean;
   include_compliance_footer?: boolean;
   auto_enroll_new_leads?: boolean;
 }
@@ -2144,6 +2181,11 @@ export interface SmsEnrollment {
   exit_reason: string | null;
   current_position: number;
   next_run_at: string | null;
+  replied_at: string | null;
+  /** Parked at a reply-triggered step, waiting for the lead to text back. */
+  awaiting_reply: boolean;
+  last_reply_at: string | null;
+  last_reply_body: string | null;
   created_at: string;
 }
 
@@ -2184,10 +2226,14 @@ export interface SmsSuppression {
 export interface SmsRateBlock {
   sent: number;
   delivered: number;
+  read: number;
   failed: number;
   replied: number;
+  replies: number;
   opted_out: number;
+  awaiting_reply: number;
   delivery_rate: number | null;
+  read_rate: number | null;
   reply_rate: number | null;
   opt_out_rate: number | null;
 }
@@ -2200,6 +2246,7 @@ export interface SmsAnalytics {
     date: string;
     sent: number;
     delivered: number;
+    read: number;
     replied: number;
     failed: number;
   }[];
@@ -2207,7 +2254,9 @@ export interface SmsAnalytics {
     campaign_id: string;
     name: string;
     sent: number;
+    replies: number;
     delivery_rate: number | null;
+    read_rate: number | null;
     reply_rate: number | null;
   }[];
   accounts: {
@@ -2279,10 +2328,25 @@ export const listSmsEnrollments = (id: string) =>
   api<SmsEnrollment[]>(`${SO}/campaigns/${id}/enrollments`);
 export const unenrollSms = (campaignId: string, enrollmentId: string) =>
   api(`${SO}/campaigns/${campaignId}/enrollments/${enrollmentId}`, { method: "DELETE" });
-export const previewSmsStep = (id: string, contactId: string, position: number) =>
-  api<{ body: string }>(`${SO}/campaigns/${id}/preview`, {
+export const previewSmsStep = (
+  id: string,
+  contactId: string,
+  position: number,
+  sampleReply?: string,
+) =>
+  api<{
+    body: string;
+    ai_snippet_empty?: boolean;
+    trigger?: SmsStepTrigger;
+    /** Which response branch the sample reply matched; null = default body. */
+    branch_label?: string | null;
+  }>(`${SO}/campaigns/${id}/preview`, {
     method: "POST",
-    body: JSON.stringify({ contact_id: contactId, position }),
+    body: JSON.stringify({
+      contact_id: contactId,
+      position,
+      sample_reply: sampleReply || null,
+    }),
   });
 
 // --- messages (conversation list — SMS has no threads) ---
