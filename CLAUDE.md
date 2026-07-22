@@ -2592,8 +2592,26 @@ live activation + the entitlement flip, the Outreach module build
       (full retro flow: drip reply exits → reply step added → dry-run
       no-mutation → catch-up → branch-matched send from historical reply
       text → completed → second run queues 0; revoked-consent skip +
-      no-reply-step response). DEPLOYED to production 2026-07-21 with the
-      main reply-steps deploy flow (web + desktop).
+      no-reply-step response). SAME-SESSION FIX before it mattered: candidate
+      detection is EVIDENCE-BASED (any inbound after the enrollment's first
+      outbound), not replied_at-based — the old code only stamped replied_at
+      on stop-on-reply exits, so an exit_on_reply=false campaign's
+      pre-feature repliers carried no marker (found live: "hvac outreach",
+      whose real count went 1 → 8 under evidence detection). Active mid-drip
+      repliers jump to the reply handler; handle_reply-scheduled responses
+      are left untouched; bulk-prefetched; non-repliers stay out of the
+      receipt (test simulates the pre-feature data shape by nulling the
+      markers). Tests 589 → 592. DEPLOYED to production 2026-07-21 (e191eb2),
+      web + desktop (DMG rebuilt/installed/launch-verified), and RUN on prod
+      with user authorization ("make sure leads who replied prior get
+      responses"): hvac outreach — the one campaign with a reply step —
+      queued all 8 past repliers ({queued: 8, skipped: []}), first sends
+      confirmed live through the real BlueBubbles account (status sent,
+      correct reply-step body, real historical reply texts primed for branch
+      matching), remainder draining at the account's 15–45s spacing inside
+      the 8–21 Phoenix window, 0 errors. BSD auto / Pag auto / CPA OUTREACH
+      have no reply step yet — the Audience-tab prompt will surface their
+      past repliers the moment one is added.
 - [ ] Stripe live activation + entitlement flip (after 12–14, so real
       limits land everywhere in one pass)
 - [ ] Outreach module build (dev-mode) — go-live gated on Meta App
