@@ -2675,6 +2675,37 @@ live activation + the entitlement flip, the Outreach module build
       phrases), and one polite human decline ("we're all set on marketing")
       matched nothing — add phrases like "all set" to the parting branch so
       future ones auto-close.
+- [x] SMS delivery backfill + notification auto-retry (2026-07-22): user
+      asked to make failed lead notifications and failed outreach go
+      through. AUDIT: 14 failed notification texts (2 were an old TEST-lead
+      artifact, most already re-covered by past sessions; NOT covered: both
+      operator alerts for lead Hilary Lace and two lead-reply relay
+      forwards, all failed on BlueBubbles 502/timeouts); 35 errored SMS
+      enrollments (1 BSD auto + 3 hvac active, 31 in the paused CPA
+      campaign); email module fully clean (0 errored, 3 active mailboxes).
+      REMEDIATION: both relay forwards re-sent (delivered), the Hilary Lace
+      alert re-sent to both numbers (took 3 attempts — the BlueBubbles
+      Mac's Messages.app was intermittently returning \"[500] Message sent
+      with an error\" on ~60% of sends in that window; content-bisect probes
+      proved it was NOT body-specific), all 35 errored enrollments revived
+      via rearm_account/_revive_errored (paused-CPA ones park until the
+      campaign is reactivated — deliberate). PERMANENT FIX: lead
+      notifications/forwards were single-shot best-effort — new
+      lead_notify.retry_failed() runs every scheduler tick: a failed
+      (org, number, body) pair retries with ~60s backoff while younger than
+      6h, never after any attempt succeeded, capped at 4 total attempts —
+      self-limiting via the ledger alone (no migration), deliberately
+      gentle (machine-gunning a flaky device is what gets an Apple ID
+      flagged). Tests 597 → 598 (flaky-then-succeeds + permanent-failure
+      cap; test ages out other tests\x27 failed rows — the retry pass scans
+      the module-scoped DB org-wide). DEPLOYED 2026-07-22 (db7ac3d),
+      backend-only (desktop runs no schedulers — no DMG rebuild needed).
+      Post-deploy: 0 failed notifications without a successful delivery.
+      Two enrollments re-errored on the same intermittent device error and
+      were revived again; NOTE the recurring Messages.app send errors on
+      the BlueBubbles Mac are device-side — if they persist, check the Mac
+      (Messages signed in, storage, forwarding) or consider Sendblue for
+      ops alerts.
 - [ ] Stripe live activation + entitlement flip (after 12–14, so real
       limits land everywhere in one pass)
 - [ ] Outreach module build (dev-mode) — go-live gated on Meta App
