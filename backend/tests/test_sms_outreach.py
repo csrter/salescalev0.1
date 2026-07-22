@@ -3161,3 +3161,66 @@ def test_catch_up_skips_revoked_consent_and_needs_reply_step(
     assert any(s["reason"] == "no_consent" for s in out["skipped"])
     e = _get_enrollment(camp["id"], contact)
     assert e.status == "exited"  # untouched
+
+
+def test_catch_up_finds_repliers_without_replied_at_marker(
+    sc_org, api, twilio_creds_ok, captured_sends
+):
+    """An exit_on_reply=false campaign never stamped replied_at pre-feature —
+    the lead replied and just kept dripping to completion. Catch-up must find
+    them from message evidence (inbound after the campaign's own send), not
+    the marker."""
+    acct = _mk_account(sc_org, api, from_number="+14805550722")
+    camp = _mk_campaign(sc_org, api, acct["id"], exit_on_reply=False, **_ALWAYS)
+    contact = _mk_contact(sc_org, api, mobile_phone="4805557203", first="Ivy")
+    _set_steps(sc_org, api, camp["id"], [{"position": 1, "body": "First touch"}])
+    assert _activate(sc_org, api, camp["id"]).status_code == 200
+    _enroll(sc_org, api, camp["id"], [contact])
+    _tick()
+    assert len(captured_sends) == 1
+    e = _get_enrollment(camp["id"], contact)
+    assert e.status == "completed"
+
+    r = _inbound_reply(api, acct, "+14805557203", "yes tell me more", sid="SM_cu_3")
+    assert r.status_code == 200
+
+    # Simulate the PRE-FEATURE data shape: no replied_at / last_reply_* on the
+    # enrollment (today's webhook records them; old data has only the inbound
+    # message row itself).
+    db = SessionLocal()
+    try:
+        row = db.get(SmsEnrollment, e.id)
+        row.replied_at = None
+        row.last_reply_at = None
+        row.last_reply_body = None
+        db.commit()
+    finally:
+        db.close()
+
+    _set_steps(
+        sc_org, api, camp["id"],
+        [
+            {"position": 1, "body": "First touch"},
+            {
+                "position": 2,
+                "trigger": "reply",
+                "body": "Default",
+                "branches": [
+                    {"label": "Yes", "keywords": ["yes"], "body": "Perfect {{first_name}} — sending details now."}
+                ],
+            },
+        ],
+    )
+    out = api.post(
+        f"/api/sms/campaigns/{camp['id']}/catch-up-replies",
+        json={"dry_run": False},
+        headers=sc_org["headers"],
+    ).json()
+    assert out["queued"] == 1, out
+
+    e = _get_enrollment(camp["id"], contact)
+    assert e.status == "active" and e.current_position == 2
+    _force_due(e.id)
+    _tick()
+    assert len(captured_sends) == 2
+    assert "Perfect Ivy — sending details now." in captured_sends[-1]["body"]

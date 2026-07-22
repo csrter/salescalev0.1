@@ -41,7 +41,7 @@ import logging
 import re
 from typing import List, Optional
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from ..models.base import utcnow
@@ -771,6 +771,16 @@ def catch_up_past_replies(
     - `dry_run` computes the receipt without touching anything — the API
       uses it so the admin confirms real counts before anything queues.
 
+    Who counts as "replied": evidence-based, NOT replied_at-based — the old
+    code only stamped replied_at on stop-on-reply exits, so an
+    exit_on_reply=false campaign's repliers (who just kept dripping to
+    completion) carry no marker at all. A replier here is any enrollment
+    whose contact has an inbound message AFTER the enrollment's first
+    outbound send. Enrollments never replied to are silently ignored (they
+    aren't in the receipt); active enrollments count too — a mid-drip
+    replier jumps to the reply handler, exactly what handle_reply would
+    have done had the feature existed when they replied.
+
     Returns {queued, skipped: [{contact_id, reason}]}; reasons:
     already_responded | no_applicable_step | no_reply_text | no_consent |
     suppressed | no_number | not_found. {"no_reply_step": True} when the
@@ -780,17 +790,17 @@ def catch_up_past_replies(
     if not reply_steps:
         return {"queued": 0, "skipped": [], "no_reply_step": True}
     reply_step_ids = [s.id for s in reply_steps]
+    reply_positions = {s.position for s in reply_steps}
 
     candidates = (
         db.execute(
             select(SmsEnrollment).where(
                 SmsEnrollment.campaign_id == campaign.id,
-                SmsEnrollment.replied_at.is_not(None),
                 SmsEnrollment.status.in_(
-                    [SMS_ENROLL_EXITED, SMS_ENROLL_COMPLETED]
+                    [SMS_ENROLL_ACTIVE, SMS_ENROLL_EXITED, SMS_ENROLL_COMPLETED]
                 ),
-                # "replied" exits and clean completions only — never resurrect
-                # opted_out/manual/failed exits.
+                # "replied" exits, clean completions, and live enrollments —
+                # never resurrect opted_out/manual/failed exits.
                 (SmsEnrollment.exit_reason.is_(None))
                 | (SmsEnrollment.exit_reason == "replied"),
             )
@@ -799,21 +809,69 @@ def catch_up_past_replies(
         .all()
     )
 
+    # Bulk prefetches so a large audience doesn't turn into per-row queries.
+    responded_ids = set(
+        db.execute(
+            select(SmsMessage.enrollment_id)
+            .where(
+                SmsMessage.campaign_id == campaign.id,
+                SmsMessage.direction == SMS_DIR_OUT,
+                SmsMessage.step_id.in_(reply_step_ids),
+                SmsMessage.enrollment_id.is_not(None),
+            )
+            .distinct()
+        ).scalars()
+    )
+    first_out_by_enrollment = {
+        eid: created
+        for eid, created in db.execute(
+            select(SmsMessage.enrollment_id, func.min(SmsMessage.created_at))
+            .where(
+                SmsMessage.campaign_id == campaign.id,
+                SmsMessage.direction == SMS_DIR_OUT,
+                SmsMessage.enrollment_id.is_not(None),
+            )
+            .group_by(SmsMessage.enrollment_id)
+        ).all()
+    }
+    contact_ids = [e.contact_id for e in candidates]
+    last_in_by_contact: dict = {}
+    if contact_ids:
+        for m in db.execute(
+            select(SmsMessage)
+            .where(
+                SmsMessage.organization_id == campaign.organization_id,
+                SmsMessage.contact_id.in_(contact_ids),
+                SmsMessage.direction == SMS_DIR_IN,
+            )
+            .order_by(SmsMessage.created_at.desc())
+        ).scalars():
+            last_in_by_contact.setdefault(m.contact_id, m)
+
     now = utcnow()
     queued = 0
     skipped: List[dict] = []
     for e in candidates:
-        already = db.execute(
-            select(SmsMessage.id)
-            .where(
-                SmsMessage.enrollment_id == e.id,
-                SmsMessage.direction == SMS_DIR_OUT,
-                SmsMessage.step_id.in_(reply_step_ids),
-            )
-            .limit(1)
-        ).scalar_one_or_none()
-        if already is not None:
+        first_out = first_out_by_enrollment.get(e.id)
+        last_in = last_in_by_contact.get(e.contact_id)
+        replied = (
+            first_out is not None
+            and last_in is not None
+            and _aware(last_in.created_at) >= _aware(first_out)
+        ) or e.replied_at is not None
+        if not replied:
+            continue  # never replied — not part of this at all
+        if e.id in responded_ids:
             skipped.append({"contact_id": e.contact_id, "reason": "already_responded"})
+            continue
+        if (
+            e.status == SMS_ENROLL_ACTIVE
+            and e.current_position in reply_positions
+            and e.next_run_at is not None
+            and (e.last_reply_body or "").strip()
+        ):
+            # handle_reply already routed this one — its scheduled response
+            # (with the reply-delay honored) must not be re-timed to now.
             continue
         reply_step = next(
             (s for s in reply_steps if s.position >= e.current_position), None
@@ -829,16 +887,6 @@ def catch_up_past_replies(
         if not ok:
             skipped.append({"contact_id": e.contact_id, "reason": reason})
             continue
-        last_in = db.execute(
-            select(SmsMessage)
-            .where(
-                SmsMessage.organization_id == campaign.organization_id,
-                SmsMessage.contact_id == contact.id,
-                SmsMessage.direction == SMS_DIR_IN,
-            )
-            .order_by(SmsMessage.created_at.desc())
-            .limit(1)
-        ).scalar_one_or_none()
         if last_in is None or not (last_in.body or "").strip():
             # replied_at without any recorded inbound text (edge, e.g. a
             # provider-reported opt-in state) — nothing to branch on, and a
@@ -855,6 +903,7 @@ def catch_up_past_replies(
         e.awaiting_reply_since = None
         e.last_reply_body = last_in.body
         e.last_reply_at = _aware(last_in.created_at)
+        e.replied_at = e.replied_at or _aware(last_in.created_at)
         # Their reply is in the past, so the "wait after their reply" delay
         # has already elapsed — respond at the next valid window open.
         e.next_run_at = _next_valid_send_time(now, campaign) or now
