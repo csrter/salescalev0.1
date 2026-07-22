@@ -2337,6 +2337,18 @@ export const catchUpSmsReplies = (id: string, dryRun: boolean) =>
     method: "POST",
     body: JSON.stringify({ dry_run: dryRun }),
   });
+/** Resume completed enrollments through steps added after they finished
+ * (e.g. a new parting-message step). dryRun=true returns counts only. */
+export const resumeCompletedSms = (id: string, dryRun: boolean) =>
+  api<{
+    queued: number;
+    awaiting: number;
+    skipped: { contact_id: string; reason: string }[];
+    no_new_steps?: boolean;
+  }>(`${SO}/campaigns/${id}/resume-completed`, {
+    method: "POST",
+    body: JSON.stringify({ dry_run: dryRun }),
+  });
 export const unenrollSms = (campaignId: string, enrollmentId: string) =>
   api(`${SO}/campaigns/${campaignId}/enrollments/${enrollmentId}`, { method: "DELETE" });
 export const previewSmsStep = (

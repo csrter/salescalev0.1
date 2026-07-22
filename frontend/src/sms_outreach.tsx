@@ -20,6 +20,7 @@ import {
   archiveSmsCampaign,
   catchUpSmsReplies,
   composeSms,
+  resumeCompletedSms,
   createSmsAccount,
   createSmsCampaign,
   deleteSmsAccount,
@@ -2026,6 +2027,36 @@ function AudienceTab({
     }
   };
 
+  // Leads who COMPLETED the sequence before its newest steps existed (e.g. a
+  // parting-message step written later) — dry-run counts only; explicit
+  // confirm before anything queues.
+  const [resume, setResume] = useState<{ queued: number; awaiting: number } | null>(null);
+  const [resumeConfirm, setResumeConfirm] = useState(false);
+  const [resumeBusy, setResumeBusy] = useState(false);
+  useEffect(() => {
+    resumeCompletedSms(campaign.id, true)
+      .then((r) => setResume(r.no_new_steps ? null : r))
+      .catch(() => {});
+  }, [campaign.id, campaign.enrolled, campaign.steps_count]);
+
+  const runResume = async () => {
+    setResumeBusy(true);
+    try {
+      const r = await resumeCompletedSms(campaign.id, false);
+      onToast(
+        `Resumed ${r.queued + r.awaiting} completed ${r.queued + r.awaiting === 1 ? "lead" : "leads"} through the new steps`,
+        "ok",
+      );
+      setResumeConfirm(false);
+      setResume(null);
+      refresh();
+    } catch (e) {
+      onToast(e instanceof Error ? e.message : "Resume failed", "error");
+    } finally {
+      setResumeBusy(false);
+    }
+  };
+
   const unenroll = (e: SmsEnrollment) => {
     unenrollSms(campaign.id, e.id)
       .then(() => {
@@ -2109,6 +2140,41 @@ function AudienceTab({
           Enroll contacts
         </Button>
       </div>
+      {resume !== null && resume.queued + resume.awaiting > 0 && (
+        <Alert
+          tone="info"
+          title={`${int(resume.queued + resume.awaiting)} completed ${resume.queued + resume.awaiting === 1 ? "lead" : "leads"} finished before this campaign's newest steps`}
+        >
+          They went through the sequence as it existed at the time — steps
+          added since (like a parting message) never reached them. Resuming
+          sends {int(resume.queued)} of them the next scheduled step
+          {resume.awaiting > 0
+            ? ` and parks ${int(resume.awaiting)} at a reply step (no text sent — they're simply answerable again if they ever reply)`
+            : ""}
+          . Consent and STOP are re-checked per lead.
+          <div className="sms-catchup-actions">
+            {resumeConfirm ? (
+              <>
+                <Button variant="primary" size="sm" busy={resumeBusy} onClick={runResume}>
+                  Resume {int(resume.queued + resume.awaiting)} {resume.queued + resume.awaiting === 1 ? "lead" : "leads"}
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  disabled={resumeBusy}
+                  onClick={() => setResumeConfirm(false)}
+                >
+                  Cancel
+                </Button>
+              </>
+            ) : (
+              <Button variant="ghost" size="sm" onClick={() => setResumeConfirm(true)}>
+                Resume them…
+              </Button>
+            )}
+          </div>
+        </Alert>
+      )}
       {catchUp !== null && catchUp.queued > 0 && (
         <Alert
           tone="info"

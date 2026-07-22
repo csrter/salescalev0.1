@@ -3325,3 +3325,178 @@ def test_reply_response_skips_campaign_cap_but_not_account_cap(
     assert len(captured_sends) == sends_before  # blocked by the account cap
     e2 = _get_enrollment(camp2["id"], lead2)
     assert e2.status == "active" and e2.next_run_at is not None  # retries later
+
+
+# --- completed is not a dead end: branch re-open + resume-through-new-steps --
+
+
+def test_completed_lead_reply_reopens_on_branch_match_only(
+    sc_org, api, twilio_creds_ok, captured_sends
+):
+    """A lead who finished the sequence and texts again gets the authored
+    branch response (e.g. "Not interested" -> the parting message) — but a
+    reply matching NO branch (auto-responders, new questions) never re-opens
+    the enrollment or robo-repeats the default pitch."""
+    acct = _mk_account(sc_org, api, from_number="+14805550730")
+    camp = _mk_campaign(sc_org, api, acct["id"], **_ALWAYS)
+    contact = _mk_contact(sc_org, api, mobile_phone="4805557301", first="Lou")
+    _set_steps(
+        sc_org, api, camp["id"],
+        [
+            {"position": 1, "body": "First touch"},
+            {
+                "position": 2,
+                "trigger": "reply",
+                "body": "The pitch",
+                "branches": [
+                    {
+                        "label": "Not interested",
+                        "keywords": ["not interested", "no thanks"],
+                        "body": "No problem {{first_name}} — reach out anytime!",
+                    }
+                ],
+            },
+        ],
+    )
+    assert _activate(sc_org, api, camp["id"]).status_code == 200
+    _enroll(sc_org, api, camp["id"], [contact])
+    _tick()  # step 1
+    assert _inbound_reply(api, acct, "+14805557301", "yeah?", sid="SM_ro_1").status_code == 200
+    e = _get_enrollment(camp["id"], contact)
+    _force_due(e.id)
+    _tick()  # reply step sends the default pitch -> enrollment completes
+    assert len(captured_sends) == 2
+    e = _get_enrollment(camp["id"], contact)
+    assert e.status == "completed"
+
+    # Non-matching post-completion reply (an office auto-responder): silence.
+    r = _inbound_reply(
+        api, acct, "+14805557301",
+        "You have reached us outside of normal office hours", sid="SM_ro_2",
+    )
+    assert r.status_code == 200
+    e = _get_enrollment(camp["id"], contact)
+    assert e.status == "completed"  # not re-opened
+    _tick()
+    assert len(captured_sends) == 2  # nothing sent
+
+    # Branch-matching post-completion reply: re-opened, parting message sends.
+    r = _inbound_reply(api, acct, "+14805557301", "Not interested", sid="SM_ro_3")
+    assert r.status_code == 200
+    e = _get_enrollment(camp["id"], contact)
+    assert e.status == "active" and e.last_reply_body == "Not interested"
+    _force_due(e.id)
+    _tick()
+    assert len(captured_sends) == 3
+    assert "No problem Lou — reach out anytime!" in captured_sends[-1]["body"]
+    e = _get_enrollment(camp["id"], contact)
+    assert e.status == "completed"  # cleanly re-completed after the parting send
+
+
+def test_resume_completed_sends_new_parting_step(
+    sc_org, api, twilio_creds_ok, captured_sends
+):
+    """Leads who completed the sequence receive a schedule step added later
+    (the parting-message flow); a later-added reply step parks them awaiting
+    instead (zero sends). Dry-run mutates nothing; second run is a no-op."""
+    acct = _mk_account(sc_org, api, from_number="+14805550731")
+    camp = _mk_campaign(sc_org, api, acct["id"], **_ALWAYS)
+    done = _mk_contact(sc_org, api, mobile_phone="4805557302", first="Fin")
+    revoked = _mk_contact(sc_org, api, mobile_phone="4805557303", first="Rev")
+    _set_steps(sc_org, api, camp["id"], [{"position": 1, "body": "Only step"}])
+    assert _activate(sc_org, api, camp["id"]).status_code == 200
+    _enroll(sc_org, api, camp["id"], [done, revoked])
+    _tick()
+    assert len(captured_sends) == 2
+    assert _get_enrollment(camp["id"], done).status == "completed"
+
+    # No new steps yet -> explicit no_new_steps, nothing to resume.
+    none_yet = api.post(
+        f"/api/sms/campaigns/{camp['id']}/resume-completed",
+        json={"dry_run": True},
+        headers=sc_org["headers"],
+    ).json()
+    assert none_yet.get("no_new_steps") is True
+
+    # The org writes a parting step (keep step 1's id via upsert semantics is
+    # irrelevant here — replace works the same for resume).
+    _set_steps(
+        sc_org, api, camp["id"],
+        [
+            {"position": 1, "body": "Only step"},
+            {"position": 2, "wait_minutes": 5, "body": "Closing the loop, {{first_name}} — all the best!"},
+        ],
+    )
+    # One lead revoked consent since completing -> skipped, never resumed.
+    assert api.patch(
+        f"/api/crm/contacts/{revoked}",
+        json={"sms_opt_in": False},
+        headers=sc_org["headers"],
+    ).status_code == 200
+
+    dry = api.post(
+        f"/api/sms/campaigns/{camp['id']}/resume-completed",
+        json={"dry_run": True},
+        headers=sc_org["headers"],
+    ).json()
+    assert dry["queued"] == 1 and dry["awaiting"] == 0
+    assert any(s["reason"] == "no_consent" for s in dry["skipped"])
+    assert _get_enrollment(camp["id"], done).status == "completed"  # untouched
+
+    real = api.post(
+        f"/api/sms/campaigns/{camp['id']}/resume-completed",
+        json={"dry_run": False},
+        headers=sc_org["headers"],
+    ).json()
+    assert real["queued"] == 1
+    e = _get_enrollment(camp["id"], done)
+    assert e.status == "active" and e.current_position == 2
+    assert e.next_run_at is not None
+
+    _force_due(e.id)
+    _tick()
+    assert "Closing the loop, Fin — all the best!" in captured_sends[-1]["body"]
+    assert _get_enrollment(camp["id"], done).status == "completed"
+    assert _get_enrollment(camp["id"], revoked).status == "completed"  # skipped stays
+
+    # Idempotent: everyone eligible is active/re-completed at max position.
+    again = api.post(
+        f"/api/sms/campaigns/{camp['id']}/resume-completed",
+        json={"dry_run": False},
+        headers=sc_org["headers"],
+    ).json()
+    assert again["queued"] == 0 and again["awaiting"] == 0
+
+
+def test_resume_completed_parks_awaiting_at_new_reply_step(
+    sc_org, api, twilio_creds_ok, captured_sends
+):
+    acct = _mk_account(sc_org, api, from_number="+14805550732")
+    camp = _mk_campaign(sc_org, api, acct["id"], **_ALWAYS)
+    contact = _mk_contact(sc_org, api, mobile_phone="4805557304")
+    _set_steps(sc_org, api, camp["id"], [{"position": 1, "body": "Only step"}])
+    assert _activate(sc_org, api, camp["id"]).status_code == 200
+    _enroll(sc_org, api, camp["id"], [contact])
+    _tick()
+    assert _get_enrollment(camp["id"], contact).status == "completed"
+
+    _set_steps(
+        sc_org, api, camp["id"],
+        [
+            {"position": 1, "body": "Only step"},
+            {"position": 2, "trigger": "reply", "body": "Answer"},
+        ],
+    )
+    out = api.post(
+        f"/api/sms/campaigns/{camp['id']}/resume-completed",
+        json={"dry_run": False},
+        headers=sc_org["headers"],
+    ).json()
+    assert out["awaiting"] == 1 and out["queued"] == 0
+    e = _get_enrollment(camp["id"], contact)
+    assert e.status == "active"
+    assert e.awaiting_reply_since is not None
+    assert e.next_run_at is None
+    sends_before = len(captured_sends)
+    _tick()
+    assert len(captured_sends) == sends_before  # zero sends — just answerable again

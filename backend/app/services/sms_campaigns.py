@@ -748,7 +748,135 @@ def handle_reply(
             e.next_run_at = _next_valid_send_time(base, campaign) or base
         elif campaign.exit_on_reply:
             _end(e, SMS_ENROLL_EXITED, "replied")
+
+    # A COMPLETED enrollment is not a conversational dead end. If the lead
+    # texts again and the campaign author wrote a response branch for THAT
+    # kind of reply (deterministic keyword match ONLY — e.g. "Not interested"
+    # → the parting message), re-open the enrollment and send it. No branch
+    # match means no re-open: repeating the step's default body at a lead who
+    # said something new would be a robotic re-pitch, and auto-responder
+    # texts ("we're closed, we'll get back to you") deserve silence. Only
+    # clean completions re-open — exited/opted_out/manual stay terminal.
+    completed = (
+        db.execute(
+            select(SmsEnrollment).where(
+                SmsEnrollment.organization_id == contact.organization_id,
+                SmsEnrollment.contact_id == contact.id,
+                SmsEnrollment.status == SMS_ENROLL_COMPLETED,
+                SmsEnrollment.exit_reason.is_(None),
+            )
+        )
+        .scalars()
+        .all()
+    )
+    for e in completed:
+        campaign = db.get(SmsCampaign, e.campaign_id)
+        if campaign is None:
+            continue
+        reply_step = next(
+            (
+                s
+                for s in _steps(db, campaign.id)
+                if s.position >= e.current_position
+                and (s.trigger or "schedule") == SMS_TRIGGER_REPLY
+            ),
+            None,
+        )
+        if reply_step is None:
+            continue
+        if match_branch_keywords(reply_step, reply_body) is None:
+            continue
+        e.status = SMS_ENROLL_ACTIVE
+        e.ended_at = None
+        e.current_position = reply_step.position
+        e.awaiting_reply_since = None
+        e.replied_at = e.replied_at or now
+        e.last_reply_at = now
+        e.last_reply_body = reply_body
+        base = now + _step_delay(reply_step)
+        e.next_run_at = _next_valid_send_time(base, campaign) or base
     return linkage
+
+
+def resume_completed(
+    db: Session, campaign: SmsCampaign, *, dry_run: bool = False
+) -> dict:
+    """Resume COMPLETED enrollments through steps added AFTER they finished —
+    the "send the new parting message to leads who already went through the
+    sequence" action. A lead completes at the last step that existed at the
+    time; steps appended later never reach them otherwise.
+
+    Per resumed enrollment: re-activate at the first step past its position.
+    A schedule step is timed wait_days/wait_minutes AFTER THE COMPLETION
+    (already-elapsed waits send at the next window open — never before the
+    step's own delay would have allowed). A reply step parks the enrollment
+    "awaiting reply" — zero sends now, but the lead's next text gets
+    answered instead of hitting a completed dead end.
+
+    Safeties mirror catch_up_past_replies: only clean completions (never
+    opted_out/manual/failed exits), consent/suppression re-checked per lead
+    here and again at send time, naturally idempotent (resumed enrollments
+    are active — a second run finds nothing), `dry_run` for the confirm-
+    with-real-counts UI. Returns {queued, awaiting, skipped}; queued counts
+    resumes that will SEND (schedule step next), awaiting counts parked-
+    awaiting resumes. {"no_new_steps": True} when no step extends past any
+    completed enrollment."""
+    steps = _steps(db, campaign.id)
+    if not steps:
+        return {"queued": 0, "awaiting": 0, "skipped": [], "no_new_steps": True}
+    max_position = max(s.position for s in steps)
+
+    candidates = (
+        db.execute(
+            select(SmsEnrollment).where(
+                SmsEnrollment.campaign_id == campaign.id,
+                SmsEnrollment.status == SMS_ENROLL_COMPLETED,
+                SmsEnrollment.exit_reason.is_(None),
+                SmsEnrollment.current_position < max_position,
+            )
+        )
+        .scalars()
+        .all()
+    )
+    if not candidates:
+        return {"queued": 0, "awaiting": 0, "skipped": [], "no_new_steps": True}
+
+    now = utcnow()
+    queued = 0
+    awaiting = 0
+    skipped: List[dict] = []
+    for e in candidates:
+        nxt = next((s for s in steps if s.position > e.current_position), None)
+        if nxt is None:
+            continue
+        contact = db.get(Contact, e.contact_id)
+        if contact is None:
+            skipped.append({"contact_id": e.contact_id, "reason": "not_found"})
+            continue
+        ok, reason = sms_consent.sendable(db, contact)
+        if not ok:
+            skipped.append({"contact_id": e.contact_id, "reason": reason})
+            continue
+        is_reply = (nxt.trigger or "schedule") == SMS_TRIGGER_REPLY
+        if is_reply:
+            awaiting += 1
+        else:
+            queued += 1
+        if dry_run:
+            continue
+        e.status = SMS_ENROLL_ACTIVE
+        e.exit_reason = None
+        ended = _aware(e.ended_at) if e.ended_at else now
+        e.ended_at = None
+        e.current_position = nxt.position
+        if is_reply:
+            e.awaiting_reply_since = now
+            e.next_run_at = None
+        else:
+            e.awaiting_reply_since = None
+            base = max(ended + _step_delay(nxt), now)
+            e.next_run_at = _next_valid_send_time(base, campaign) or base
+    return {"queued": queued, "awaiting": awaiting, "skipped": skipped}
 
 
 def catch_up_past_replies(

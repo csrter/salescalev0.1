@@ -940,6 +940,28 @@ def catch_up_replies(
     return result
 
 
+@router.post("/campaigns/{campaign_id}/resume-completed")
+def resume_completed(
+    campaign_id: str,
+    body: CatchUpIn,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_admin),
+    scope: TenantScope = Depends(get_scope),
+):
+    """Resume completed enrollments through steps added after they finished —
+    how a newly written parting-message step reaches leads who already went
+    through the sequence. Explicit + admin-only with a dry-run confirm, same
+    posture as catch-up-replies; consent re-checked per lead."""
+    campaign = _scoped_get(db, scope, SmsCampaign, campaign_id)
+    org = db.get(Organization, scope.organization_id)
+    if not body.dry_run:
+        entitlements.enforce_can_send_sms(db, org)
+    result = sms_campaigns.resume_completed(db, campaign, dry_run=body.dry_run)
+    if not body.dry_run:
+        db.commit()
+    return result
+
+
 @router.get("/campaigns/{campaign_id}/enrollments")
 def list_enrollments(
     campaign_id: str,
