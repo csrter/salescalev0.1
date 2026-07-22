@@ -2612,6 +2612,31 @@ live activation + the entitlement flip, the Outreach module build
       the 8–21 Phoenix window, 0 errors. BSD auto / Pag auto / CPA OUTREACH
       have no reply step yet — the Audience-tab prompt will surface their
       past repliers the moment one is added.
+- [x] SMS reply-response timeliness (2026-07-21, same-day follow-up): user
+      reported reply responses arriving long after the configured 3-minute
+      delay — measured live gaps on hvac outreach were 16–130 min. Three
+      compounding causes, all in the engine's cold-send machinery treating a
+      conversational response like drip volume: (1) run_due processed due
+      enrollments plain-FIFO by next_run_at while the account min-spacing
+      throttle serializes to ~one send per 60s tick, so a due reply response
+      queued behind an arbitrary backlog of step-1 drip sends; (2) the
+      min-spacing throttle itself deferred it further; (3) the campaign
+      daily cap (100/day, at 74 when found) would park it +1h once
+      saturated. Fix — reply-step sends are CONVERSATIONAL (they answer the
+      lead's own inbound; same reasoning that already exempts manual 1:1
+      replies from pacing): run_due now sorts reply-current-step enrollments
+      FIRST within each tick's batch (steps prefetched per campaign), and
+      the gateway + engine pre-check exempt reply responses from the
+      min-spacing throttle and the CAMPAIGN daily cap. Deliberately NOT
+      exempt: the consent gate, the send window (TCPA quiet hours), and the
+      ACCOUNT daily cap (the hard tenant guardrail) — all still
+      unconditional. Net: "respond 3 minutes after their reply" now lands
+      ~3–4 min (delay + ≤1 tick). Step-editor hint documents the contract.
+      Tests 592 → 594 (priority + spacing-exemption in one scenario — cold
+      send defers on SPACING while the later-due reply response sends;
+      campaign-cap bypass + account-cap-still-blocks). DEPLOYED to
+      production 2026-07-21 (2c9f83b), web + desktop (DMG rebuilt,
+      installed, launch-verified), health green, zero boot errors.
 - [ ] Stripe live activation + entitlement flip (after 12–14, so real
       limits land everywhere in one pass)
 - [ ] Outreach module build (dev-mode) — go-live gated on Meta App
