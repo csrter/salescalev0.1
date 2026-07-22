@@ -49,6 +49,7 @@ from ..models.sms_outreach import (
     SMS_MSG_READ,
     SMS_MSG_SENT,
     SMS_SUPPRESS_CARRIER,
+    SMS_TRIGGER_REPLY,
     SmsAccount,
     SmsCampaign,
     SmsMessage,
@@ -660,11 +661,28 @@ def send(
         del ok
         log.info("sms send refused (%s): contact=%s — %s", reason, contact.id, e)
         return (SUPPRESSED if reason == "suppressed" else BLOCKED), None
+    # A reply-step send answers the lead's OWN inbound message — a live
+    # conversation, not cold volume. It is therefore exempt from the two
+    # cold-outbound throttles below (campaign daily cap + min-spacing), the
+    # same reasoning that already exempts a human's manual 1:1 reply:
+    # timeliness IS the feature ("respond 3 minutes after they text back"),
+    # reply volume is bounded by real inbound replies, and answering an
+    # inbound quickly is the most human-looking pattern there is. The
+    # consent gate, send window, and the ACCOUNT daily cap (the hard tenant
+    # guardrail) still apply unconditionally.
+    is_reply_response = (
+        step is not None
+        and (getattr(step, "trigger", None) or "schedule") == SMS_TRIGGER_REPLY
+    )
     if campaign is not None and not in_send_window(campaign, now):
         return OUTSIDE_WINDOW, None
     if sends_today(db, account) >= account.daily_send_cap:
         return CAP_REACHED, None
-    if campaign is not None and campaign_sends_today(db, campaign) >= campaign.daily_cap:
+    if (
+        campaign is not None
+        and not is_reply_response
+        and campaign_sends_today(db, campaign) >= campaign.daily_cap
+    ):
         return CAP_REACHED, None
 
     # Minimum spacing between sends on this account. This is the anti-detection
@@ -677,7 +695,7 @@ def send(
     # SPACING, which the engine reschedules to a jittered short delay
     # (next_spacing_time) rather than the coarse cap backoff.
     spacing = account.min_send_spacing_seconds or 0
-    if campaign is not None and spacing > 0:
+    if campaign is not None and spacing > 0 and not is_reply_response:
         last = _last_out_created_at(db, account)
         ref = now or utcnow()
         if last is not None and (ref - last).total_seconds() < spacing:

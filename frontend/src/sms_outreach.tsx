@@ -1779,8 +1779,10 @@ function StepRow({
             <p className="sms-hint">
               The sequence pauses here ("awaiting reply") until the lead texts
               back, then this sends after the wait above — 0 minutes means
-              within about a minute of their reply. The campaign's send window
-              still applies unless 24/7 sending is on.
+              within about a minute of their reply. Responses are prioritized
+              over scheduled sends and skip the campaign's daily cap and
+              send pacing, so the wait you set is the wait they get. The
+              campaign's send window still applies unless 24/7 sending is on.
             </p>
           </>
         ) : isFirst ? (

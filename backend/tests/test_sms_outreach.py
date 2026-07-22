@@ -3224,3 +3224,104 @@ def test_catch_up_finds_repliers_without_replied_at_marker(
     _tick()
     assert len(captured_sends) == 2
     assert "Perfect Ivy — sending details now." in captured_sends[-1]["body"]
+
+
+# --- reply-response timeliness: priority + throttle exemptions ---------------
+
+
+def test_reply_response_skips_spacing_and_takes_priority(
+    sc_org, api, twilio_creds_ok, captured_sends
+):
+    """A reply response must go out on the first tick after its delay — not
+    queue behind the cold drip. With a huge account min-spacing (which
+    serializes cold sends to ~one per tick), a due reply response still
+    sends, processed BEFORE an earlier-due cold send, which defers."""
+    acct = _mk_account(
+        sc_org, api, from_number="+14805550723", min_send_spacing_seconds=3600
+    )
+    camp = _mk_campaign(sc_org, api, acct["id"], **_ALWAYS)
+    lead = _mk_contact(sc_org, api, mobile_phone="4805557204", first="Kip")
+    cold = _mk_contact(sc_org, api, mobile_phone="4805557205", first="Colda")
+    _set_steps(
+        sc_org, api, camp["id"],
+        [
+            {"position": 1, "body": "First touch"},
+            {"position": 2, "trigger": "reply", "body": "Quick answer for {{first_name}}"},
+        ],
+    )
+    assert _activate(sc_org, api, camp["id"]).status_code == 200
+    _enroll(sc_org, api, camp["id"], [lead])
+    _tick()  # lead's step 1 sends; account's last outbound is NOW
+    assert len(captured_sends) == 1
+
+    # Lead replies -> reply step due immediately (0 delay). A second, cold
+    # contact enrolls with step 1 due — its next_run_at is EARLIER-or-equal,
+    # so plain FIFO would try it first and everything would sit in SPACING.
+    r = _inbound_reply(api, acct, "+14805557204", "sounds good", sid="SM_pr_1")
+    assert r.status_code == 200
+    _enroll(sc_org, api, camp["id"], [cold])
+
+    lead_e = _get_enrollment(camp["id"], lead)
+    _force_due(lead_e.id)
+    _tick()
+    # The reply response went out despite the 3600s spacing (exempt) and
+    # despite the cold send's earlier slot (priority)...
+    assert len(captured_sends) == 2
+    assert "Quick answer for Kip" in captured_sends[-1]["body"]
+    # ...while the cold send correctly deferred on spacing.
+    cold_e = _get_enrollment(camp["id"], cold)
+    assert cold_e.status == "active" and cold_e.current_position == 1
+    assert cold_e.next_run_at is not None
+
+
+def test_reply_response_skips_campaign_cap_but_not_account_cap(
+    sc_org, api, twilio_creds_ok, captured_sends
+):
+    acct = _mk_account(sc_org, api, from_number="+14805550724")
+    camp = _mk_campaign(sc_org, api, acct["id"], daily_cap=1, **_ALWAYS)
+    lead = _mk_contact(sc_org, api, mobile_phone="4805557208", first="Cap")
+    _set_steps(
+        sc_org, api, camp["id"],
+        [
+            {"position": 1, "body": "First touch"},
+            {"position": 2, "trigger": "reply", "body": "Still answered!"},
+        ],
+    )
+    assert _activate(sc_org, api, camp["id"]).status_code == 200
+    _enroll(sc_org, api, camp["id"], [lead])
+    _tick()  # consumes the ENTIRE campaign daily cap (1)
+    assert len(captured_sends) == 1
+
+    r = _inbound_reply(api, acct, "+14805557208", "ok", sid="SM_pr_2")
+    assert r.status_code == 200
+    e = _get_enrollment(camp["id"], lead)
+    _force_due(e.id)
+    _tick()
+    assert len(captured_sends) == 2  # cap of 1 did not block the response
+    assert captured_sends[-1]["body"] == "Still answered!"
+
+    # The ACCOUNT daily cap stays a hard guardrail even for reply responses.
+    acct2 = _mk_account(
+        sc_org, api, from_number="+14805550725", daily_send_cap=1
+    )
+    camp2 = _mk_campaign(sc_org, api, acct2["id"], **_ALWAYS)
+    lead2 = _mk_contact(sc_org, api, mobile_phone="4805557210", first="Hard")
+    _set_steps(
+        sc_org, api, camp2["id"],
+        [
+            {"position": 1, "body": "First touch"},
+            {"position": 2, "trigger": "reply", "body": "Should wait"},
+        ],
+    )
+    assert _activate(sc_org, api, camp2["id"]).status_code == 200
+    _enroll(sc_org, api, camp2["id"], [lead2])
+    _tick()  # consumes the account's whole daily cap (1)
+    sends_before = len(captured_sends)
+    r = _inbound_reply(api, acct2, "+14805557210", "ok", sid="SM_pr_3")
+    assert r.status_code == 200
+    e2 = _get_enrollment(camp2["id"], lead2)
+    _force_due(e2.id)
+    _tick()
+    assert len(captured_sends) == sends_before  # blocked by the account cap
+    e2 = _get_enrollment(camp2["id"], lead2)
+    assert e2.status == "active" and e2.next_run_at is not None  # retries later

@@ -956,8 +956,13 @@ def process_enrollment(db: Session, enrollment: SmsEnrollment) -> None:
         return
 
     # Campaign daily cap (UTC) — an early exit that avoids rendering/sending
-    # only to have the gateway hand back CAP_REACHED anyway.
-    if gateway.campaign_sends_today(db, campaign) >= campaign.daily_cap:
+    # only to have the gateway hand back CAP_REACHED anyway. Reply-step
+    # responses are exempt (mirrors the gateway): they answer a lead's own
+    # inbound message, and timeliness is the point — a saturated cold-drip
+    # cap must not park a conversational response for an hour.
+    if (current.trigger or "schedule") != SMS_TRIGGER_REPLY and (
+        gateway.campaign_sends_today(db, campaign) >= campaign.daily_cap
+    ):
         enrollment.next_run_at = now + dt.timedelta(hours=1)
         return
 
@@ -1078,7 +1083,12 @@ def process_enrollment(db: Session, enrollment: SmsEnrollment) -> None:
 
 def run_due(db: Session, limit: int = 200) -> int:
     """One scheduler tick: process due enrollments, isolated per enrollment so
-    one failure never stalls the rest (email_campaigns.run_due pattern)."""
+    one failure never stalls the rest (email_campaigns.run_due pattern).
+
+    Reply-step responses are processed FIRST within the batch: the account
+    min-spacing throttle effectively serializes an account to ~one send per
+    tick, so plain FIFO would leave a time-sensitive "answer their reply in 3
+    minutes" send queued behind an arbitrary backlog of cold drip sends."""
     now = utcnow()
     due = (
         db.execute(
@@ -1094,6 +1104,26 @@ def run_due(db: Session, limit: int = 200) -> int:
         .scalars()
         .all()
     )
+    if due:
+        steps_by_campaign = {
+            cid: _steps(db, cid) for cid in {e.campaign_id for e in due}
+        }
+
+        def _priority(e: SmsEnrollment):
+            current = next(
+                (
+                    s
+                    for s in steps_by_campaign.get(e.campaign_id, [])
+                    if s.position >= e.current_position
+                ),
+                None,
+            )
+            is_reply = current is not None and (
+                (current.trigger or "schedule") == SMS_TRIGGER_REPLY
+            )
+            return (0 if is_reply else 1, _aware(e.next_run_at))
+
+        due.sort(key=_priority)
     processed = 0
     for enrollment in due:
         try:
