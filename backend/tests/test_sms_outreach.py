@@ -3500,3 +3500,84 @@ def test_resume_completed_parks_awaiting_at_new_reply_step(
     sends_before = len(captured_sends)
     _tick()
     assert len(captured_sends) == sends_before  # zero sends — just answerable again
+
+
+# --- automatic retry of failed lead-notification texts -----------------------
+
+
+def test_failed_notification_retries_then_succeeds_and_caps(
+    sc_org, api, twilio_creds_ok, monkeypatch
+):
+    """A transiently failing team notification is retried by the scheduler
+    pass until it sends; a successful pair is never re-sent; a permanently
+    failing pair stops at NOTIFY_MAX_ATTEMPTS total attempts."""
+    from app.services import lead_notify
+
+    acct = _mk_account(sc_org, api, from_number="+14805550733")
+
+    outcomes = {"fail_times": 2, "calls": 0}
+
+    def _flaky(account, to, body):
+        outcomes["calls"] += 1
+        if outcomes["calls"] <= outcomes["fail_times"]:
+            return None, "500", "Message sent with an error"
+        return f"SM_notify_{outcomes['calls']}", None, None
+
+    monkeypatch.setattr(gateway, "_twilio_send", _flaky)
+
+    db = SessionLocal()
+    try:
+        from app.models.sms_outreach import SmsAccount
+        import datetime as _dt
+
+        # Age out failed notification rows earlier tests left in this
+        # module-scoped DB so the retry pass only sees this test's pairs.
+        old = utcnow() - _dt.timedelta(hours=lead_notify.NOTIFY_RETRY_WINDOW_HOURS + 1)
+        for stale in db.execute(
+            select(SmsMessage).where(
+                SmsMessage.kind == "notification", SmsMessage.status == "failed"
+            )
+        ).scalars():
+            stale.created_at = old
+        db.commit()
+
+        account = db.get(SmsAccount, acct["id"])
+        # Attempt 1 fails (writes the failed ledger row the retry pass keys on).
+        code, _ = gateway.send_notification(db, account, "+14805557777", "ALERT A")
+        assert code == "failed"
+        db.commit()
+
+        # Tick 1: retry -> fails again (attempt 2). Tick 2: retry -> sends.
+        assert lead_notify.retry_failed(db) == 1
+        assert lead_notify.retry_failed(db) == 1
+        # Pair now has a success — no further retries ever.
+        assert lead_notify.retry_failed(db) == 0
+
+        sent_rows = db.execute(
+            select(SmsMessage).where(
+                SmsMessage.to_number == "+14805557777",
+                SmsMessage.body == "ALERT A",
+                SmsMessage.status == "sent",
+            )
+        ).scalars().all()
+        assert len(sent_rows) == 1
+
+        # Permanent failure: caps at NOTIFY_MAX_ATTEMPTS total attempts.
+        outcomes["fail_times"] = 10_000
+        outcomes["calls"] = 0
+        code, _ = gateway.send_notification(db, account, "+14805557778", "ALERT B")
+        assert code == "failed"
+        db.commit()
+        total_retries = 0
+        for _ in range(10):
+            total_retries += lead_notify.retry_failed(db)
+        # original + retries == NOTIFY_MAX_ATTEMPTS rows, then it stops.
+        attempts = db.execute(
+            select(SmsMessage).where(
+                SmsMessage.to_number == "+14805557778", SmsMessage.body == "ALERT B"
+            )
+        ).scalars().all()
+        assert len(attempts) == lead_notify.NOTIFY_MAX_ATTEMPTS
+        assert total_retries == lead_notify.NOTIFY_MAX_ATTEMPTS - 1
+    finally:
+        db.close()

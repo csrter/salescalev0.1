@@ -293,7 +293,7 @@ async def _email_outreach_scheduler():
 
     from .db import SchedulerSessionLocal
     from .services import email_campaigns, email_outreach_sync, email_warmup
-    from .services import sms_campaigns
+    from .services import lead_notify, sms_campaigns
 
     log = logging.getLogger("salescale.email_outreach")
 
@@ -311,6 +311,10 @@ async def _email_outreach_scheduler():
             sms_db = SchedulerSessionLocal()
             try:
                 sms_campaigns.run_due(sms_db)
+                # Re-attempt recently failed team notification texts (lead
+                # alerts / relay forwards) — transient BlueBubbles/device
+                # errors must not silently cost an alert.
+                lead_notify.retry_failed(sms_db)
             finally:
                 sms_db.close()
         except Exception:

@@ -20,16 +20,28 @@ this is a nice-to-have side effect of lead creation, never something that
 should fail or block the request that created the lead.
 """
 
+import datetime as dt
 import logging
 import re
 from typing import Optional
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from ..models.base import utcnow
 from ..models.core import Client, Organization
 from ..models.crm import Contact
-from ..models.sms_outreach import SMS_ACCOUNT_ACTIVE, SmsAccount
+from ..models.sms_outreach import (
+    SMS_ACCOUNT_ACTIVE,
+    SMS_DIR_OUT,
+    SMS_KIND_NOTIFICATION,
+    SMS_MSG_DELIVERED,
+    SMS_MSG_FAILED,
+    SMS_MSG_READ,
+    SMS_MSG_SENT,
+    SmsAccount,
+    SmsMessage,
+)
 from . import custom_fields as custom_fields_svc
 from . import sms_send
 
@@ -220,3 +232,84 @@ def notify_new_lead(db: Session, client: Client, contact: Contact) -> None:
             client.organization_id,
             contact.id,
         )
+
+
+# --- automatic retry of failed notification texts ----------------------------
+# notify_new_lead / the relay forwards are single-shot best-effort at lead-
+# creation time (a webhook request can't sit in a retry loop), but the
+# BlueBubbles path runs through a real Mac whose Messages.app intermittently
+# errors — observed live: the same alert failing several times then sending
+# minutes later. The scheduler calls retry_failed() every tick so a transient
+# device/relay error can't silently cost the team an alert.
+
+NOTIFY_RETRY_WINDOW_HOURS = 6
+# Total attempt rows per (number, body) pair — the original + 3 retries.
+# Self-limiting via the ledger alone: every attempt IS a row, so no schema.
+NOTIFY_MAX_ATTEMPTS = 4
+
+_SUCCESS_STATUSES = (SMS_MSG_SENT, SMS_MSG_DELIVERED, SMS_MSG_READ)
+
+
+def retry_failed(db: Session, limit: int = 20) -> int:
+    """One scheduler tick's retry pass over recently failed notification
+    texts (lead alerts AND relay forwards — everything kind="notification").
+    A (to_number, body) pair is retried while: its newest attempt is younger
+    than NOTIFY_RETRY_WINDOW_HOURS, no attempt ever succeeded, and total
+    attempts < NOTIFY_MAX_ATTEMPTS. One retry per pair per tick gives a
+    natural ~60s backoff — deliberately gentle, so a genuinely broken device
+    isn't machine-gunned (which is exactly what gets an Apple ID flagged)."""
+    since = utcnow() - dt.timedelta(hours=NOTIFY_RETRY_WINDOW_HOURS)
+    rows = (
+        db.execute(
+            select(SmsMessage)
+            .where(
+                SmsMessage.kind == SMS_KIND_NOTIFICATION,
+                SmsMessage.direction == SMS_DIR_OUT,
+                SmsMessage.status == SMS_MSG_FAILED,
+                SmsMessage.created_at >= since,
+            )
+            .order_by(SmsMessage.created_at.desc())
+        )
+        .scalars()
+        .all()
+    )
+    retried = 0
+    seen: set = set()
+    for m in rows:
+        key = (m.organization_id, m.to_number, m.body)
+        if key in seen:
+            continue
+        seen.add(key)
+        pair_filter = (
+            SmsMessage.kind == SMS_KIND_NOTIFICATION,
+            SmsMessage.organization_id == m.organization_id,
+            SmsMessage.to_number == m.to_number,
+            SmsMessage.body == m.body,
+        )
+        succeeded = db.execute(
+            select(SmsMessage.id)
+            .where(*pair_filter, SmsMessage.status.in_(_SUCCESS_STATUSES))
+            .limit(1)
+        ).scalar_one_or_none()
+        if succeeded is not None:
+            continue
+        attempts = (
+            db.execute(select(func.count(SmsMessage.id)).where(*pair_filter)).scalar_one()
+            or 0
+        )
+        if attempts >= NOTIFY_MAX_ATTEMPTS:
+            continue
+        account = db.get(SmsAccount, m.account_id)
+        if account is None or account.status != SMS_ACCOUNT_ACTIVE:
+            continue
+        try:
+            sms_send.send_notification(db, account, m.to_number, m.body)
+        except Exception:
+            log.exception("notification retry errored for message %s", m.id)
+            continue
+        retried += 1
+        if retried >= limit:
+            break
+    if retried:
+        db.commit()
+    return retried
