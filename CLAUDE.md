@@ -2637,6 +2637,44 @@ live activation + the entitlement flip, the Outreach module build
       campaign-cap bypass + account-cap-still-blocks). DEPLOYED to
       production 2026-07-21 (2c9f83b), web + desktop (DMG rebuilt,
       installed, launch-verified), health green, zero boot errors.
+- [x] SMS completed-lead guarantees (2026-07-22): user asked to "make sure
+      any leads marked completed have opted out or been sent parting
+      message". Prod audit found 45 completed enrollments, ZERO opted out,
+      27 (hvac outreach) completed back when the campaign was one opener
+      step, and 3 dead-ended conversations (lead replied after the final
+      send, nobody answered — incl. a literal "Not interested" that never
+      got the campaign's own parting branch). Two structural fixes:
+      (1) BRANCH RE-OPEN — handle_reply now also checks a contact's
+      COMPLETED enrollments (exit_reason None only): a new reply that
+      DETERMINISTICALLY keyword-matches an authored response branch
+      re-opens the enrollment and sends that branch ("Not interested" →
+      parting message); no match stays silent — never a robotic repeat of
+      the default pitch at auto-responders/novel questions, and AI matching
+      is deliberately excluded from the re-open gate. (2) RESUME-COMPLETED —
+      sms_campaigns.resume_completed + POST /campaigns/{id}/resume-completed
+      (require_admin, dry_run confirm, second Audience-tab prompt):
+      completed enrollments resume through steps added AFTER they finished —
+      a new parting-message schedule step reaches them (timed from their
+      completion, max'd with now, landed in window), a new reply step parks
+      them awaiting (zero sends, answerable again). Consent/suppression
+      re-checked per lead in both; naturally idempotent. Tests 594 → 597.
+      DEPLOYED 2026-07-22 (927d78f) web + desktop (DMG rebuilt/installed/
+      launch-verified). PROD REMEDIATION (user-directed): hvac outreach —
+      by then grown to 3 steps (opener + 2 reply turns) — resume_completed
+      moved 41 completed leads to awaiting (zero sends; note the first
+      remediation attempt crashed pre-commit on scalar_one() because the
+      campaign now has TWO reply steps — multi-step-aware rerun succeeded),
+      and the dead-end pass queued the parting branch for the 2
+      keyword-matching replies (both confirmed SENT ~3 min later — also
+      live-proving the reply-timeliness fix), leaving auto-responder /
+      unmatched replies deliberately silent. Closing audit: 0 completed
+      enrollments remain, 0 unanswered replies, 91 awaiting, 1 opted_out, 3
+      pre-existing error(failed). FLAGGED to user: step 2's branch keyword
+      bare "no" is broad — it matched inside an office auto-attendant's
+      text (parting message sent to a bot; harmless but worth tightening to
+      phrases), and one polite human decline ("we're all set on marketing")
+      matched nothing — add phrases like "all set" to the parting branch so
+      future ones auto-close.
 - [ ] Stripe live activation + entitlement flip (after 12–14, so real
       limits land everywhere in one pass)
 - [ ] Outreach module build (dev-mode) — go-live gated on Meta App
