@@ -2489,8 +2489,23 @@ live activation + the entitlement flip, the Outreach module build
       production 2026-07-21 (backend+frontend rebuilt, no migration).
 - [x] SMS reply-triggered steps, response branching & richer tracking
       (2026-07-21): three user-requested campaign upgrades, all
-      extend-don't-redesign on the existing engine. NOT yet deployed
-      (adds migration a9c3f6e1d8b2). (1) TIMED REPLY-AFTER-RESPONSE:
+      extend-don't-redesign on the existing engine. DEPLOYED to
+      production 2026-07-21 (b5f2d90), web + desktop: migration
+      a9c3f6e1d8b2 applied cleanly to the live Supabase DB via the
+      container-boot flow (alembic current = a9c3f6e1d8b2 head), backend/
+      frontend rebuilt on the VPS, /api/health ok, SMS routes auth-gated,
+      fresh bundle served; post-deploy prod state verified read-only —
+      zero log errors, the 3 active campaigns intact, 29 scheduled
+      enrollments untouched, 0 enrollments in the new awaiting state
+      (correct: no reply steps exist yet), and the 63 parked-active
+      enrollments all belong to PAUSED campaigns (hvac outreach 62 /
+      test2 1 — expected pause behavior, predates this deploy; the 31
+      error-status ones are the known pre-existing BlueBubbles
+      SMS-forwarding strandings). Desktop: PyInstaller backend + DMG
+      rebuilt (148MB, backend hash-matched, new sms_outreach chunks in
+      the asar), installed to /Applications, launch-verified (own
+      backend bound :8000, health 200, boot alembic no-op'd).
+      (1) TIMED REPLY-AFTER-RESPONSE:
       SmsStep gained trigger ("schedule" = today's drip | "reply") and
       wait_minutes (added to wait_days — finer-than-day delays for BOTH
       trigger types); a reply step fires wait after THE LEAD'S REPLY.
