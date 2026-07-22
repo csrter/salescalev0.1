@@ -3020,3 +3020,144 @@ def test_campaign_stats_count_read_receipts_and_replies(
     assert analytics["totals"]["read_rate"] == 1.0
     day = analytics["by_day"][-1]
     assert day["sent"] == 1 and day["read"] == 1
+
+
+# --- catch-up: leads who replied BEFORE the campaign had reply handling ------
+
+
+def test_catch_up_past_repliers_get_the_reply_step(
+    sc_org, api, twilio_creds_ok, captured_sends
+):
+    """A lead who replied while the campaign was plain drip (exit_on_reply
+    exited them with no answer) gets the reply step retroactively: the
+    catch-up endpoint re-activates the enrollment at the reply step, primes
+    branch matching with the lead's ACTUAL historical reply text, and the
+    next tick sends the matched response. Idempotent — a second catch-up
+    queues nothing."""
+    acct = _mk_account(sc_org, api, from_number="+14805550720")
+    camp = _mk_campaign(sc_org, api, acct["id"], **_ALWAYS)
+    contact = _mk_contact(sc_org, api, mobile_phone="4805557201", first="Gus")
+    _set_steps(
+        sc_org, api, camp["id"],
+        [
+            {"position": 1, "body": "First touch"},
+            {"position": 2, "wait_days": 3, "body": "Bump"},
+        ],
+    )
+    assert _activate(sc_org, api, camp["id"]).status_code == 200
+    _enroll(sc_org, api, camp["id"], [contact])
+    _tick()
+    assert len(captured_sends) == 1
+
+    # The pre-feature world: reply arrives, no reply step exists -> exited.
+    r = _inbound_reply(api, acct, "+14805557201", "yes very interested", sid="SM_cu_1")
+    assert r.status_code == 200
+    e = _get_enrollment(camp["id"], contact)
+    assert e.status == "exited" and e.exit_reason == "replied"
+
+    # NOW the org adds a reply step with branches (keeping existing step ids
+    # via upsert isn't needed here — replace with first step + reply handler).
+    _set_steps(
+        sc_org, api, camp["id"],
+        [
+            {"position": 1, "body": "First touch"},
+            {
+                "position": 2,
+                "trigger": "reply",
+                "body": "Default response",
+                "branches": [
+                    {"label": "Yes", "keywords": ["interested"], "body": "Awesome {{first_name}} — call tomorrow?"}
+                ],
+            },
+        ],
+    )
+
+    # Dry run reports the candidate without touching anything.
+    dry = api.post(
+        f"/api/sms/campaigns/{camp['id']}/catch-up-replies",
+        json={"dry_run": True},
+        headers=sc_org["headers"],
+    )
+    assert dry.status_code == 200, dry.text
+    assert dry.json()["queued"] == 1
+    e = _get_enrollment(camp["id"], contact)
+    assert e.status == "exited"  # dry run mutated nothing
+
+    real = api.post(
+        f"/api/sms/campaigns/{camp['id']}/catch-up-replies",
+        json={"dry_run": False},
+        headers=sc_org["headers"],
+    )
+    assert real.status_code == 200, real.text
+    assert real.json()["queued"] == 1
+
+    e = _get_enrollment(camp["id"], contact)
+    assert e.status == "active"
+    assert e.current_position == 2
+    assert e.last_reply_body == "yes very interested"
+    assert e.next_run_at is not None
+
+    _force_due(e.id)
+    _tick()
+    assert len(captured_sends) == 2
+    assert "Awesome Gus — call tomorrow?" in captured_sends[-1]["body"]
+    e = _get_enrollment(camp["id"], contact)
+    assert e.status == "completed"
+
+    # Idempotency: the enrollment now completed WITH a reply-step send on
+    # record — a second catch-up must skip it, never double-text.
+    again = api.post(
+        f"/api/sms/campaigns/{camp['id']}/catch-up-replies",
+        json={"dry_run": False},
+        headers=sc_org["headers"],
+    ).json()
+    assert again["queued"] == 0
+    assert any(s["reason"] == "already_responded" for s in again["skipped"])
+    _tick()
+    assert len(captured_sends) == 2
+
+
+def test_catch_up_skips_revoked_consent_and_needs_reply_step(
+    sc_org, api, twilio_creds_ok, captured_sends
+):
+    acct = _mk_account(sc_org, api, from_number="+14805550721")
+    camp = _mk_campaign(sc_org, api, acct["id"], **_ALWAYS)
+    contact = _mk_contact(sc_org, api, mobile_phone="4805557202")
+    _set_steps(sc_org, api, camp["id"], [{"position": 1, "body": "First touch"}, {"position": 2, "wait_days": 3, "body": "Bump"}])
+    assert _activate(sc_org, api, camp["id"]).status_code == 200
+    _enroll(sc_org, api, camp["id"], [contact])
+    _tick()
+    r = _inbound_reply(api, acct, "+14805557202", "tell me more", sid="SM_cu_2")
+    assert r.status_code == 200
+
+    # No reply step yet -> the endpoint says so and queues nothing.
+    none_yet = api.post(
+        f"/api/sms/campaigns/{camp['id']}/catch-up-replies",
+        json={"dry_run": True},
+        headers=sc_org["headers"],
+    ).json()
+    assert none_yet.get("no_reply_step") is True and none_yet["queued"] == 0
+
+    _set_steps(
+        sc_org, api, camp["id"],
+        [
+            {"position": 1, "body": "First touch"},
+            {"position": 2, "trigger": "reply", "body": "Answer"},
+        ],
+    )
+    # Consent revoked after they replied -> skipped, never queued.
+    r = api.patch(
+        f"/api/crm/contacts/{contact}",
+        json={"sms_opt_in": False},
+        headers=sc_org["headers"],
+    )
+    assert r.status_code == 200, r.text
+    out = api.post(
+        f"/api/sms/campaigns/{camp['id']}/catch-up-replies",
+        json={"dry_run": False},
+        headers=sc_org["headers"],
+    ).json()
+    assert out["queued"] == 0
+    assert any(s["reason"] == "no_consent" for s in out["skipped"])
+    e = _get_enrollment(camp["id"], contact)
+    assert e.status == "exited"  # untouched

@@ -50,6 +50,7 @@ from ..models.crm import Company, Contact
 from ..models.sms_outreach import (
     SMS_ACCOUNT_ACTIVE,
     SMS_CAMPAIGN_ACTIVE,
+    SMS_DIR_IN,
     SMS_DIR_OUT,
     SMS_ENROLL_ACTIVE,
     SMS_ENROLL_COMPLETED,
@@ -748,6 +749,116 @@ def handle_reply(
         elif campaign.exit_on_reply:
             _end(e, SMS_ENROLL_EXITED, "replied")
     return linkage
+
+
+def catch_up_past_replies(
+    db: Session, campaign: SmsCampaign, *, dry_run: bool = False
+) -> dict:
+    """Queue the campaign's reply step for leads who replied BEFORE the
+    campaign had reply handling. Those enrollments are terminal — exited
+    "replied" (the old exit_on_reply behavior), or completed with a
+    post-sequence reply recorded — so a reply step added later can never
+    reach them through the webhook path. This re-activates each one at the
+    first applicable reply step, primes last_reply_body with the lead's
+    ACTUAL most recent inbound text (so branch matching answers what they
+    really said), and schedules at the next valid send window.
+
+    Safeties:
+    - Idempotent: an enrollment that already received ANY reply-step send is
+      skipped ("already_responded") — running this twice never double-texts.
+    - The consent gate re-checks at queue time (opted-out/suppressed leads
+      are skipped, and the gateway re-checks again at send time).
+    - `dry_run` computes the receipt without touching anything — the API
+      uses it so the admin confirms real counts before anything queues.
+
+    Returns {queued, skipped: [{contact_id, reason}]}; reasons:
+    already_responded | no_applicable_step | no_reply_text | no_consent |
+    suppressed | no_number | not_found. {"no_reply_step": True} when the
+    campaign has no reply-triggered step at all."""
+    steps = _steps(db, campaign.id)
+    reply_steps = [s for s in steps if (s.trigger or "schedule") == SMS_TRIGGER_REPLY]
+    if not reply_steps:
+        return {"queued": 0, "skipped": [], "no_reply_step": True}
+    reply_step_ids = [s.id for s in reply_steps]
+
+    candidates = (
+        db.execute(
+            select(SmsEnrollment).where(
+                SmsEnrollment.campaign_id == campaign.id,
+                SmsEnrollment.replied_at.is_not(None),
+                SmsEnrollment.status.in_(
+                    [SMS_ENROLL_EXITED, SMS_ENROLL_COMPLETED]
+                ),
+                # "replied" exits and clean completions only — never resurrect
+                # opted_out/manual/failed exits.
+                (SmsEnrollment.exit_reason.is_(None))
+                | (SmsEnrollment.exit_reason == "replied"),
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+    now = utcnow()
+    queued = 0
+    skipped: List[dict] = []
+    for e in candidates:
+        already = db.execute(
+            select(SmsMessage.id)
+            .where(
+                SmsMessage.enrollment_id == e.id,
+                SmsMessage.direction == SMS_DIR_OUT,
+                SmsMessage.step_id.in_(reply_step_ids),
+            )
+            .limit(1)
+        ).scalar_one_or_none()
+        if already is not None:
+            skipped.append({"contact_id": e.contact_id, "reason": "already_responded"})
+            continue
+        reply_step = next(
+            (s for s in reply_steps if s.position >= e.current_position), None
+        )
+        if reply_step is None:
+            skipped.append({"contact_id": e.contact_id, "reason": "no_applicable_step"})
+            continue
+        contact = db.get(Contact, e.contact_id)
+        if contact is None:
+            skipped.append({"contact_id": e.contact_id, "reason": "not_found"})
+            continue
+        ok, reason = sms_consent.sendable(db, contact)
+        if not ok:
+            skipped.append({"contact_id": e.contact_id, "reason": reason})
+            continue
+        last_in = db.execute(
+            select(SmsMessage)
+            .where(
+                SmsMessage.organization_id == campaign.organization_id,
+                SmsMessage.contact_id == contact.id,
+                SmsMessage.direction == SMS_DIR_IN,
+            )
+            .order_by(SmsMessage.created_at.desc())
+            .limit(1)
+        ).scalar_one_or_none()
+        if last_in is None or not (last_in.body or "").strip():
+            # replied_at without any recorded inbound text (edge, e.g. a
+            # provider-reported opt-in state) — nothing to branch on, and a
+            # blank last_reply_body would just re-park the enrollment.
+            skipped.append({"contact_id": e.contact_id, "reason": "no_reply_text"})
+            continue
+        queued += 1
+        if dry_run:
+            continue
+        e.status = SMS_ENROLL_ACTIVE
+        e.exit_reason = None
+        e.ended_at = None
+        e.current_position = reply_step.position
+        e.awaiting_reply_since = None
+        e.last_reply_body = last_in.body
+        e.last_reply_at = _aware(last_in.created_at)
+        # Their reply is in the past, so the "wait after their reply" delay
+        # has already elapsed — respond at the next valid window open.
+        e.next_run_at = _next_valid_send_time(now, campaign) or now
+    return {"queued": queued, "skipped": skipped}
 
 
 # --- the step state machine -------------------------------------------------

@@ -2326,6 +2326,17 @@ export const enrollSmsContacts = (
   });
 export const listSmsEnrollments = (id: string) =>
   api<SmsEnrollment[]>(`${SO}/campaigns/${id}/enrollments`);
+/** Queue the reply step for leads who replied before the campaign had reply
+ * handling. dryRun=true returns the counts without queuing anything. */
+export const catchUpSmsReplies = (id: string, dryRun: boolean) =>
+  api<{
+    queued: number;
+    skipped: { contact_id: string; reason: string }[];
+    no_reply_step?: boolean;
+  }>(`${SO}/campaigns/${id}/catch-up-replies`, {
+    method: "POST",
+    body: JSON.stringify({ dry_run: dryRun }),
+  });
 export const unenrollSms = (campaignId: string, enrollmentId: string) =>
   api(`${SO}/campaigns/${campaignId}/enrollments/${enrollmentId}`, { method: "DELETE" });
 export const previewSmsStep = (

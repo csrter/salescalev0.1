@@ -907,6 +907,39 @@ def enroll_campaign(
     return result
 
 
+class CatchUpIn(BaseModel):
+    # True computes the receipt without queuing anything — the UI shows the
+    # real counts in a confirm step before the admin commits to sending.
+    dry_run: bool = False
+
+
+@router.post("/campaigns/{campaign_id}/catch-up-replies")
+def catch_up_replies(
+    campaign_id: str,
+    body: CatchUpIn,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_admin),
+    scope: TenantScope = Depends(get_scope),
+):
+    """Queue the campaign's reply step for leads who replied before the
+    campaign had reply handling (enrollments that exited "replied" under the
+    old stop-on-reply behavior, or completed and then replied). Explicit and
+    admin-only by design — texting past repliers is a deliberate action with
+    a visible receipt, never a side effect of saving steps. Idempotent; the
+    consent gate applies per lead here and again at send time."""
+    campaign = _scoped_get(db, scope, SmsCampaign, campaign_id)
+    org = db.get(Organization, scope.organization_id)
+    if not body.dry_run:
+        # Queuing implies future sends — same monthly-quota gate as enroll.
+        entitlements.enforce_can_send_sms(db, org)
+    result = sms_campaigns.catch_up_past_replies(
+        db, campaign, dry_run=body.dry_run
+    )
+    if not body.dry_run:
+        db.commit()
+    return result
+
+
 @router.get("/campaigns/{campaign_id}/enrollments")
 def list_enrollments(
     campaign_id: str,

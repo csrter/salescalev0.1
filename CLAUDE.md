@@ -2570,6 +2570,30 @@ live activation + the entitlement flip, the Outreach module build
       file had been purged again (any Fernet path 500s) — regenerated at
       the path .claude/launch.json expects; dev-alt2.db secrets encrypted
       under older keys no longer decrypt.
+- [x] SMS reply catch-up for pre-feature repliers (2026-07-21, same-day
+      follow-up): leads who replied BEFORE a campaign had reply handling
+      (enrollments exited "replied" under the old stop-on-reply behavior, or
+      completed then replied) are terminal — a reply step added later could
+      never reach them through the webhook path. New sms_campaigns.
+      catch_up_past_replies + POST /api/sms/campaigns/{id}/catch-up-replies
+      (require_admin, dry_run param): re-activates each eligible enrollment
+      at the first applicable reply step, primes last_reply_body with the
+      lead's ACTUAL most recent inbound text (branch matching answers what
+      they really said), schedules at the next valid window (their reply's
+      delay has already elapsed). Deliberately explicit, never automatic on
+      step-save (guardrail #2 spirit — texting past repliers is a confirmed
+      admin action with a receipt): the Audience tab auto-runs a DRY RUN when
+      the campaign has a reply step and shows an Alert with the real count +
+      a two-step confirm. Safeties: idempotent (any enrollment with a
+      reply-step send on record skips "already_responded" — never
+      double-texts), consent/suppression re-checked per lead at queue time
+      AND again at send time, opted_out/manual/failed exits never
+      resurrected, monthly send quota enforced like enroll. Tests 589 → 591
+      (full retro flow: drip reply exits → reply step added → dry-run
+      no-mutation → catch-up → branch-matched send from historical reply
+      text → completed → second run queues 0; revoked-consent skip +
+      no-reply-step response). DEPLOYED to production 2026-07-21 with the
+      main reply-steps deploy flow (web + desktop).
 - [ ] Stripe live activation + entitlement flip (after 12–14, so real
       limits land everywhere in one pass)
 - [ ] Outreach module build (dev-mode) — go-live gated on Meta App

@@ -18,6 +18,7 @@ import {
   activateSmsCampaign,
   addSmsSuppression,
   archiveSmsCampaign,
+  catchUpSmsReplies,
   composeSms,
   createSmsAccount,
   createSmsCampaign,
@@ -1981,6 +1982,10 @@ function AudienceTab({
   onToast: (msg: string, tone?: "ok" | "error" | "info") => void;
 }) {
   const [rows, setRows] = useState<SmsEnrollment[] | null>(null);
+  const [catchUp, setCatchUp] = useState<{ queued: number } | null>(null);
+  const [catchUpConfirm, setCatchUpConfirm] = useState(false);
+  const [catchUpBusy, setCatchUpBusy] = useState(false);
+  const hasReplyStep = campaign.steps.some((s) => s.trigger === "reply");
 
   // Re-fetch whenever the campaign's enrolled count changes (not just on
   // mount/campaign switch) — otherwise a fresh enroll leaves this table
@@ -1989,6 +1994,35 @@ function AudienceTab({
     listSmsEnrollments(campaign.id).then(setRows).catch(() => {});
   }, [campaign.id, campaign.enrolled]);
   useEffect(refresh, [refresh]);
+
+  // Leads who replied before this campaign had a reply step are terminal
+  // (exited "replied" / completed) — surface them so the admin can queue the
+  // reply step for them. Dry-run only; nothing sends without the confirm.
+  useEffect(() => {
+    if (!hasReplyStep) {
+      setCatchUp(null);
+      return;
+    }
+    catchUpSmsReplies(campaign.id, true).then(setCatchUp).catch(() => {});
+  }, [campaign.id, campaign.enrolled, hasReplyStep]);
+
+  const runCatchUp = async () => {
+    setCatchUpBusy(true);
+    try {
+      const r = await catchUpSmsReplies(campaign.id, false);
+      onToast(
+        `Queued the reply step for ${r.queued} past ${r.queued === 1 ? "replier" : "repliers"}`,
+        "ok",
+      );
+      setCatchUpConfirm(false);
+      setCatchUp(null);
+      refresh();
+    } catch (e) {
+      onToast(e instanceof Error ? e.message : "Catch-up failed", "error");
+    } finally {
+      setCatchUpBusy(false);
+    }
+  };
 
   const unenroll = (e: SmsEnrollment) => {
     unenrollSms(campaign.id, e.id)
@@ -2073,6 +2107,38 @@ function AudienceTab({
           Enroll contacts
         </Button>
       </div>
+      {catchUp !== null && catchUp.queued > 0 && (
+        <Alert
+          tone="info"
+          title={`${int(catchUp.queued)} ${catchUp.queued === 1 ? "lead" : "leads"} replied before this campaign had reply handling`}
+        >
+          Their replies ended the sequence without an answer. Queue the reply
+          step for them now — each response is matched to what that lead
+          actually said (branches apply), consent and STOP are re-checked per
+          lead, and sends stay inside the campaign&apos;s send window.
+          <div className="sms-catchup-actions">
+            {catchUpConfirm ? (
+              <>
+                <Button variant="primary" size="sm" busy={catchUpBusy} onClick={runCatchUp}>
+                  Queue {int(catchUp.queued)} {catchUp.queued === 1 ? "response" : "responses"}
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  disabled={catchUpBusy}
+                  onClick={() => setCatchUpConfirm(false)}
+                >
+                  Cancel
+                </Button>
+              </>
+            ) : (
+              <Button variant="ghost" size="sm" onClick={() => setCatchUpConfirm(true)}>
+                Respond to them…
+              </Button>
+            )}
+          </div>
+        </Alert>
+      )}
       <DataTable
         columns={columns}
         rows={rows ?? []}
