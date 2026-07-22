@@ -287,6 +287,331 @@ def test_csv_import_bad_row_isolated_not_500(api, cc_org, monkeypatch):
         db.close()
 
 
+def _import(api, org, rows, mapping, **extra):
+    body = {"client_id": org["client"], "mapping": mapping, "rows": rows, **extra}
+    r = api.post("/api/crm/contacts/import", json=body, headers=org["headers"])
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+def test_csv_import_normalizes_phone_and_state(api):
+    org = _signup(api, "Import Norm", "owner@importnorm.com")
+    out = _import(
+        api,
+        org,
+        [{"First": "Pat", "Phone": "(480) 555-0100", "St": "California"}],
+        {"First": "first_name", "Phone": "phone", "St": "state"},
+    )
+    assert out["created"] == 1
+    db = SessionLocal()
+    try:
+        c = db.query(Contact).filter(Contact.first_name == "Pat").one()
+        assert c.phone == "+14805550100"  # E.164
+        assert c.state == "CA"  # full name -> 2-letter
+    finally:
+        db.close()
+
+
+def test_csv_import_create_or_update_fills_blanks_never_overwrites(api):
+    org = _signup(api, "Upsert Email", "owner@upsertemail.com")
+    _import(
+        api,
+        org,
+        [{"Email": "dup@x.com", "First": "Original", "City": "Mesa"}],
+        {"Email": "email", "First": "first_name", "City": "city"},
+    )
+    out = _import(
+        api,
+        org,
+        [{"Email": "DUP@x.com", "First": "Changed", "City": "Tempe", "State": "AZ"}],
+        {"Email": "email", "First": "first_name", "City": "city", "State": "state"},
+        mode="create_or_update",
+    )
+    assert out["created"] == 0
+    assert out["updated"] == 1
+    db = SessionLocal()
+    try:
+        c = db.query(Contact).filter(Contact.email == "dup@x.com").one()
+        assert c.first_name == "Original"  # existing value never overwritten
+        assert c.city == "Mesa"  # existing value never overwritten
+        assert c.state == "AZ"  # blank filled
+    finally:
+        db.close()
+
+
+def test_csv_import_phone_match_when_email_absent(api):
+    org = _signup(api, "Upsert Phone", "owner@upsertphone.com")
+    _import(
+        api,
+        org,
+        [{"First": "Ivy", "Phone": "480-555-0199"}],
+        {"First": "first_name", "Phone": "phone"},
+    )
+    out = _import(
+        api,
+        org,
+        [{"Phone": "(480) 555-0199", "City": "Gilbert"}],
+        {"Phone": "phone", "City": "city"},
+        mode="create_or_update",
+    )
+    assert out["updated"] == 1 and out["created"] == 0
+    db = SessionLocal()
+    try:
+        c = db.query(Contact).filter(Contact.first_name == "Ivy").one()
+        assert c.city == "Gilbert"
+    finally:
+        db.close()
+
+
+def test_csv_import_update_mode_skips_unmatched(api):
+    org = _signup(api, "Update Skip", "owner@updateskip.com")
+    out = _import(
+        api,
+        org,
+        [{"Email": "nobody@x.com", "First": "Ghost"}],
+        {"Email": "email", "First": "first_name"},
+        mode="update",
+    )
+    assert out["created"] == 0 and out["updated"] == 0
+    assert out["skipped"] == 1
+    assert out["failed"] == []
+    db = SessionLocal()
+    try:
+        assert db.query(Contact).filter(Contact.email == "nobody@x.com").count() == 0
+    finally:
+        db.close()
+
+
+def test_csv_import_in_file_duplicate_collapses(api):
+    org = _signup(api, "Dup Collapse", "owner@dupcollapse.com")
+    out = _import(
+        api,
+        org,
+        [
+            {"Email": "same@x.com", "First": "First", "City": "Mesa"},
+            {"Email": "same@x.com", "First": "Second", "State": "AZ"},
+        ],
+        {"Email": "email", "First": "first_name", "City": "city", "State": "state"},
+        mode="create_or_update",
+    )
+    assert out["created"] == 1
+    assert out["updated"] == 1  # second row updates the first
+    db = SessionLocal()
+    try:
+        rows = db.query(Contact).filter(Contact.email == "same@x.com").all()
+        assert len(rows) == 1
+        assert rows[0].first_name == "First"  # never overwritten
+        assert rows[0].city == "Mesa"
+        assert rows[0].state == "AZ"  # blank filled by row 2
+    finally:
+        db.close()
+
+
+def test_csv_import_unchanged_counted(api):
+    org = _signup(api, "Unchanged Count", "owner@unchangedcount.com")
+    _import(
+        api,
+        org,
+        [{"Email": "fixed@x.com", "First": "Set", "City": "Mesa"}],
+        {"Email": "email", "First": "first_name", "City": "city"},
+    )
+    out = _import(
+        api,
+        org,
+        [{"Email": "fixed@x.com", "First": "Other", "City": "Tempe"}],
+        {"Email": "email", "First": "first_name", "City": "city"},
+        mode="create_or_update",
+    )
+    assert out["created"] == 0
+    assert out["updated"] == 0
+    assert out["unchanged"] == 1  # matched, nothing to fill
+
+
+def test_csv_import_website_to_company_domain(api):
+    org = _signup(api, "Website Domain", "owner@websitedomain.com")
+    _import(
+        api,
+        org,
+        [{"Email": "w1@x.com", "Org": "Acme Co", "Site": "https://www.acme.com/contact"}],
+        {"Email": "email", "Org": "company", "Site": "website"},
+    )
+    db = SessionLocal()
+    try:
+        co = db.query(Company).filter(Company.name == "Acme Co").one()
+        assert co.domain == "acme.com"  # scheme/www/path stripped
+        cid = co.id
+    finally:
+        db.close()
+    # A later row's website does not overwrite an already-set domain.
+    _import(
+        api,
+        org,
+        [{"Email": "w2@x.com", "Org": "Acme Co", "Site": "other.com"}],
+        {"Email": "email", "Org": "company", "Site": "website"},
+    )
+    db = SessionLocal()
+    try:
+        co = db.get(Company, cid)
+        assert co.domain == "acme.com"  # unchanged
+    finally:
+        db.close()
+
+
+def test_csv_import_notes_create_internal_activity(api):
+    org = _signup(api, "Notes Activity", "owner@notesactivity.com")
+    _import(
+        api,
+        org,
+        [{"Email": "note@x.com", "Memo": "Met at the trade show"}],
+        {"Email": "email", "Memo": "notes"},
+    )
+    db = SessionLocal()
+    try:
+        c = db.query(Contact).filter(Contact.email == "note@x.com").one()
+        act = db.query(Activity).filter(Activity.contact_id == c.id).one()
+        assert act.type == "note"
+        assert act.body == "Met at the trade show"
+        assert act.is_internal is True
+    finally:
+        db.close()
+
+
+def test_csv_import_over_cap_error_names_column(api):
+    org = _signup(api, "Cap Error", "owner@caperror.com")
+    out = _import(
+        api,
+        org,
+        [{"Email": "z@x.com", "Billing City": "x" * 200}],
+        {"Email": "email", "Billing City": "city"},
+    )
+    assert out["created"] == 0
+    assert len(out["failed"]) == 1
+    assert out["failed"][0]["row"] == 0
+    assert out["failed"][0]["error"] == "'Billing City' is too long (max 120 characters)"
+
+
+def test_csv_import_new_field_cap_soft_skips(api, monkeypatch):
+    from fastapi import HTTPException
+
+    from app.api import crm as crm_api
+
+    def _at_cap(db, org):
+        raise HTTPException(402, "Your plan allows 0 active custom fields.")
+
+    monkeypatch.setattr(
+        crm_api.entitlements, "enforce_can_add_custom_field", _at_cap
+    )
+    org = _signup(api, "Cap Soft", "owner@capsoft.com")
+    out = _import(
+        api,
+        org,
+        [{"Email": "cap@x.com", "First": "Al", "Extra": "value"}],
+        {"Email": "email", "First": "first_name", "Extra": "new"},
+        new_fields=[{"column": "Extra", "label": "Extra", "field_type": "text"}],
+    )
+    assert out["created"] == 1  # import proceeds
+    assert out["created_fields"] == []
+    assert out["skipped_fields"] == [
+        {"column": "Extra", "reason": "Your plan allows 0 active custom fields."}
+    ]
+    db = SessionLocal()
+    try:
+        c = db.query(Contact).filter(Contact.email == "cap@x.com").one()
+        assert not (c.custom_fields or {})  # the dropped column stored nothing
+    finally:
+        db.close()
+
+
+def test_csv_import_new_field_reused_not_duplicated(api):
+    # Re-importing a file whose column maps to "new" must reuse the field the
+    # first import created (matched by normalized label), never mint
+    # lead_score_2. Guards against a stale client re-sending "new".
+    from app.models.crm import CustomFieldDefinition
+
+    org = _signup(api, "Reuse Field", "owner@reusefield.com")
+    new_fields = [{"column": "Lead Score", "label": "Lead Score", "field_type": "number"}]
+    first = _import(
+        api,
+        org,
+        [{"Email": "rf1@x.com", "Lead Score": "87"}],
+        {"Email": "email", "Lead Score": "new"},
+        new_fields=new_fields,
+    )
+    assert len(first["created_fields"]) == 1
+    key = first["created_fields"][0]["key"]
+
+    # Same "new" mapping again (as a stale client would send it).
+    second = _import(
+        api,
+        org,
+        [{"Email": "rf2@x.com", "Lead Score": "64"}],
+        {"Email": "email", "Lead Score": "new"},
+        new_fields=new_fields,
+    )
+    assert second["created_fields"] == []  # reused, not recreated
+
+    db = SessionLocal()
+    try:
+        defs = (
+            db.query(CustomFieldDefinition)
+            .filter(
+                CustomFieldDefinition.organization_id == org["org"],
+                CustomFieldDefinition.label == "Lead Score",
+            )
+            .all()
+        )
+        assert len(defs) == 1  # exactly one definition, not two
+        c2 = db.query(Contact).filter(Contact.email == "rf2@x.com").one()
+        assert c2.custom_fields == {key: 64}  # only the reused key, no _2
+    finally:
+        db.close()
+
+
+def test_csv_import_writes_audit_entry(api):
+    org = _signup(api, "Import Audit", "owner@importaudit.com")
+    _import(
+        api,
+        org,
+        [{"Email": "audited@x.com", "First": "Aud"}],
+        {"Email": "email", "First": "first_name"},
+        file_name="leads-q3.csv",
+    )
+    db = SessionLocal()
+    try:
+        audit = db.query(AuditLogEntry).filter(
+            AuditLogEntry.organization_id == org["org"],
+            AuditLogEntry.action == "contacts.imported",
+        ).one()
+        assert audit.entity_type == "contact"
+        assert audit.entity_name == "leads-q3.csv"
+        summary = {r["field"]: r["after"] for r in audit.diff}
+        assert summary["created"] == 1
+        assert summary["file"] == "leads-q3.csv"
+    finally:
+        db.close()
+
+
+def test_csv_import_default_mode_plain_inserts(api):
+    org = _signup(api, "Default Insert", "owner@defaultinsert.com")
+    out = _import(
+        api,
+        org,
+        [
+            {"Email": "same2@x.com", "First": "One"},
+            {"Email": "same2@x.com", "First": "Two"},
+        ],
+        {"Email": "email", "First": "first_name"},
+    )
+    # Back-compat: create mode always inserts, no dedupe, even in-file.
+    assert out["created"] == 2
+    assert out["imported"] == 2
+    db = SessionLocal()
+    try:
+        assert db.query(Contact).filter(Contact.email == "same2@x.com").count() == 2
+    finally:
+        db.close()
+
+
 def test_delete_contact_cascades_and_audits(api, cc_org):
     created = _create_contact(api, cc_org, first_name="Gone", last_name="Soon")
     cid = created["id"]

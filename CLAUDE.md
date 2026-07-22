@@ -2428,6 +2428,65 @@ live activation + the entitlement flip, the Outreach module build
       DEPLOYED to production 2026-07-21 (web: backend+frontend rebuilt, no
       migration; desktop unaffected — tab bar is narrow-viewport-only and
       schedulers/nginx don't ship in the DMG).
+- [x] CRM import overhaul — full automap + dedupe/upsert + normalization
+      (2026-07-21, two-Opus-agent build against a pinned contract, then live-
+      verified + one real bug caught and fixed). Backend (api/crm.py import_
+      contacts, schemas.py CsvImportIn, no migration — source_detail/custom_
+      fields JSON already exist): (1) DEDUPE/UPSERT — new `mode` param
+      (create | update | create_or_update; API default "create" for back-
+      compat, frontend SENDS create_or_update). Per-request client-scoped
+      prefetch of lower(email)→contact and normalize_phone→contact maps; row
+      match order email→phone→mobile; fill-blanks update (system field set
+      only when existing empty, company only when unlinked, custom keys with
+      an existing value dropped, extra emails merged into candidate_emails,
+      sms opt-in never downgraded, notes always appended). Inserts register
+      into the maps so an in-file duplicate row collapses onto the first.
+      Response is now a superset: {imported(=created+updated), created,
+      updated, unchanged, skipped, failed, created_fields, skipped_fields,
+      verification_queued}. (2) NORMALIZATION at ingest — phone/mobile_phone
+      → E.164 via sms_consent.normalize_phone (≥7 digits, else stripped raw,
+      never lose data); state full-name → 2-letter (50 states + DC dict);
+      length pre-check against the Postgres caps BEFORE the DB, error names
+      the CSV COLUMN not the target (the SQLite-passes/Postgres-500s trap).
+      (3) NEW TARGETS — `website` → Company.domain (urlparse host, strip
+      scheme/path/www, fill-blanks) and `notes` → internal Activity(note).
+      (4) validate_and_merge now enforce_required=False on import (a bulk
+      backfill must not be blocked by form-required fields). (5) New-field
+      cap is a SOFT-SKIP (skipped_fields) instead of a mid-import 402 abort.
+      (6) RE-IMPORT IDEMPOTENCY (the caught bug): inline "new field" creation
+      now REUSES an existing active def whose normalized label matches (via
+      _norm_field_label, alnum-lowercase) instead of minting lead_score_2 on
+      every pass — a stale client re-sending a column as "new" no longer
+      duplicates the field. (7) Provenance: created contacts get source_detail
+      {"import_file": file_name}; ONE AuditLogEntry per run (action=
+      "contacts.imported", diff encoded as conforming DiffRowOut rows — a
+      dict diff 500s the audit-log serializer, which is typed List[DiffRowOut]).
+      Frontend (crm_custom.tsx CsvImportDialog): full automap by default —
+      HEADER_SYNONYMS expanded (dedicated mobile_phone target split out of
+      phone; new website/notes/sms_opt_in targets; billing/shipping/mailing
+      city/state/zip; account/firm/brand, etc.), dot-path last-segment
+      fallback (address.city → city), unmatched columns now default to "new"
+      custom field (inferType-seeded) instead of "skip" (all-empty/at-ceiling
+      still skip); parseJson recursively flattens nested objects to dot-paths
+      (depth 3, scalar arrays comma-joined); import-mode Segmented + SMS-opt-in
+      attestation checkbox + editable new-field labels + 3-row preview;
+      BATCHED submit (500-row chunks, later batches remap to created custom
+      keys, failed[].row offset to original); result panel with the full
+      count line + created/skipped-fields + a client-side "Download failed
+      rows" CSV. THE CAUGHT BUG (live, not by tests): re-importing a file that
+      created fields re-mapped those columns to "new" and duplicated the defs,
+      because the dialog trusted a stale activeDefs prop; fixed BOTH ends — the
+      backend reuse guard above (durable) + the dialog now fetches fresh active
+      defs on open (api /api/crm/custom-fields, falls back to the prop). Tests
+      568 → 581 (test_crm_contacts.py +13 incl. the reuse-idempotency test).
+      tsc + vite build clean; grep gate clean. Verified live on alt2: messy
+      CSV (full-name split, UPPER email, multi-address cell → candidate_emails,
+      (480)/dashed/bare phones → E.164, Arizona→AZ, website→domain, opt-in,
+      notes→activity, in-file dup collapsed) AND nested JSON (address.city,
+      company.website, mobile, scalar-array tags→custom) both automapped and
+      upserted correctly; re-import showed Created 0 · Unchanged N with the
+      three columns mapped to custom:<key> and zero new defs. DEPLOYED to
+      production 2026-07-21 (backend+frontend rebuilt, no migration).
 - [ ] Stripe live activation + entitlement flip (after 12–14, so real
       limits land everywhere in one pass)
 - [ ] Outreach module build (dev-mode) — go-live gated on Meta App

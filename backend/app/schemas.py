@@ -1,5 +1,5 @@
 import datetime as dt
-from typing import Annotated, Any, Dict, List, Optional
+from typing import Annotated, Any, Dict, List, Literal, Optional
 
 from pydantic import (
     AfterValidator,
@@ -1028,6 +1028,14 @@ class CsvImportIn(BaseModel):
     mapping: Dict[str, str]
     rows: List[Dict[str, Any]]
     new_fields: Optional[List[CsvNewField]] = None
+    # Insert-only ("create", the back-compat default), fill-blanks-only update of
+    # matched contacts ("update"), or upsert ("create_or_update", what the
+    # frontend sends). Matching is by email then phone/mobile, scoped to the
+    # client. See api/crm.import_contacts.
+    mode: Literal["create", "update", "create_or_update"] = "create"
+    # Provenance only — stamped on created contacts' source_detail + the run's
+    # audit entry.
+    file_name: Optional[str] = Field(default=None, max_length=300)
     # Phase 12: queue email verification for the imported rows (background,
     # quota-checked in the pipeline).
     verify: bool = False
@@ -1622,6 +1630,24 @@ class SmsCampaignPatch(BaseModel):
         return _valid_campaign_timezone(v)
 
 
+class SmsStepBranchIn(BaseModel):
+    """One response branch on a reply-triggered step: if the lead's reply
+    matches any keyword (whole-word, case-insensitive), `body` is sent instead
+    of the step's default body."""
+
+    label: str = Field(min_length=1, max_length=40)
+    keywords: List[str] = Field(default_factory=list, max_length=20)
+    body: str = Field(min_length=1, max_length=1600)
+
+    @field_validator("keywords")
+    @classmethod
+    def _clean_keywords(cls, v):
+        cleaned = [k.strip() for k in v if k and k.strip()]
+        if any(len(k) > 60 for k in cleaned):
+            raise ValueError("keywords must be 60 characters or fewer")
+        return cleaned
+
+
 class SmsStepIn(BaseModel):
     # id present = update that existing step in place; absent = create.
     # Steps whose ids are missing from the payload are deleted (upsert-in-
@@ -1630,8 +1656,35 @@ class SmsStepIn(BaseModel):
     id: Optional[str] = None
     position: int = Field(ge=1)
     wait_days: int = Field(default=0, ge=0, le=365)
+    # Finer delay ADDED to wait_days (total = days + minutes); for a reply
+    # step it's the delay after the lead's reply. Cap = 14 days in minutes.
+    wait_minutes: int = Field(default=0, ge=0, le=20160)
+    # "schedule" = classic drip; "reply" = fires only after the lead replies
+    # (the webhook schedules it), with optional response `branches`.
+    trigger: str = Field(default="schedule", pattern="^(schedule|reply)$")
     body: str = Field(min_length=1, max_length=1600)
+    branches: Optional[List[SmsStepBranchIn]] = Field(default=None, max_length=10)
+    ai_branching: bool = False
     ai_instructions: Optional[str] = Field(default=None, max_length=5000)
+
+    @model_validator(mode="after")
+    def _branch_rules(self):
+        if self.trigger != "reply":
+            if self.branches:
+                raise ValueError(
+                    "branches are only valid on a reply-triggered step"
+                )
+            if self.ai_branching:
+                raise ValueError(
+                    "ai_branching is only valid on a reply-triggered step"
+                )
+        if self.branches:
+            labels = [b.label.strip().casefold() for b in self.branches]
+            if len(labels) != len(set(labels)):
+                raise ValueError("branch labels must be unique")
+        if self.ai_branching and not self.branches:
+            raise ValueError("ai_branching needs at least one branch")
+        return self
 
 
 class SmsStepsIn(BaseModel):
@@ -1658,6 +1711,9 @@ class SmsEnrollIn(BaseModel):
 class SmsPreviewIn(BaseModel):
     contact_id: str
     position: int = Field(ge=1)
+    # For a reply-triggered step: a sample of what the lead might text back,
+    # so the preview shows which response branch would fire.
+    sample_reply: Optional[str] = Field(default=None, max_length=1600)
 
 
 class SmsComposeIn(BaseModel):

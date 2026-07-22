@@ -24,7 +24,7 @@ import {
 } from "./api";
 import type { Column } from "./components/DataTable";
 import { Dialog } from "./components/Dialog";
-import { Alert, Badge, Button, Field } from "./components/ui";
+import { Alert, Badge, Button, Field, Segmented } from "./components/ui";
 import { useToast } from "./components/Toast";
 import { ChevronDown, ChevronUp, Eye, Pencil, Plus, Trash2, X } from "./components/icons";
 
@@ -1202,42 +1202,116 @@ const SYSTEM_TARGETS: { value: string; label: string }[] = [
   { value: "full_name", label: "Full name" },
   { value: "email", label: "Email" },
   { value: "phone", label: "Phone" },
+  { value: "mobile_phone", label: "Mobile phone" },
   { value: "job_title", label: "Position / title" },
   { value: "city", label: "City" },
   { value: "state", label: "State" },
   { value: "zip", label: "Zip code" },
   { value: "company", label: "Business name" },
+  { value: "website", label: "Website" },
+  { value: "notes", label: "Note (adds activity)" },
+  { value: "sms_opt_in", label: "SMS opt-in (consent)" },
 ];
 
 /** Header → system target synonym table (first match wins, most specific
  * first). Headers are normalized to a-z0-9 only before lookup, so "First Name",
  * "first_name", "FIRST-NAME" all collapse to "firstname". */
 const HEADER_SYNONYMS: { target: string; keys: string[] }[] = [
-  { target: "first_name", keys: ["firstname", "first", "fname", "givenname", "forename"] },
+  {
+    target: "first_name",
+    keys: ["firstname", "first", "fname", "givenname", "forename"],
+  },
   { target: "last_name", keys: ["lastname", "last", "lname", "surname", "familyname"] },
-  { target: "full_name", keys: ["name", "fullname", "contactname", "contact", "leadname"] },
-  { target: "email", keys: ["email", "emailaddress", "mail", "workemail"] },
+  {
+    target: "full_name",
+    keys: [
+      "name",
+      "fullname",
+      "contactname",
+      "contact",
+      "leadname",
+      "customername",
+      "clientname",
+    ],
+  },
+  {
+    target: "email",
+    keys: [
+      "email",
+      "emailaddress",
+      "mail",
+      "workemail",
+      "businessemail",
+      "primaryemail",
+      "email1",
+    ],
+  },
+  {
+    target: "mobile_phone",
+    keys: ["mobile", "cell", "cellphone", "mobilenumber", "mobilephone", "cellnumber"],
+  },
   {
     target: "phone",
     keys: [
       "phone",
       "phonenumber",
-      "mobile",
-      "cell",
-      "cellphone",
       "telephone",
       "tel",
-      "mobilenumber",
+      "workphone",
+      "officephone",
       "contactnumber",
+      "primaryphone",
+      "directline",
+      "directphone",
+      "phone1",
     ],
   },
   {
-    target: "job_title",
-    keys: ["jobtitle", "title", "position", "role", "jobrole", "designation"],
+    target: "sms_opt_in",
+    keys: ["smsoptin", "smsopt", "optin", "optedin", "smsconsent", "textoptin", "consent"],
   },
-  { target: "city", keys: ["city", "town", "locality"] },
-  { target: "state", keys: ["state", "province", "region", "stateprovince"] },
-  { target: "zip", keys: ["zip", "zipcode", "postalcode", "postcode"] },
+  {
+    target: "job_title",
+    keys: [
+      "jobtitle",
+      "title",
+      "position",
+      "role",
+      "jobrole",
+      "designation",
+      "occupation",
+      "jobposition",
+    ],
+  },
+  {
+    target: "city",
+    keys: ["city", "town", "locality", "billingcity", "shippingcity", "mailingcity"],
+  },
+  {
+    target: "state",
+    keys: [
+      "state",
+      "province",
+      "region",
+      "stateprovince",
+      "billingstate",
+      "shippingstate",
+      "mailingstate",
+    ],
+  },
+  {
+    target: "zip",
+    keys: [
+      "zip",
+      "zipcode",
+      "postalcode",
+      "postcode",
+      "billingzip",
+      "shippingzip",
+      "mailingzip",
+      "postal",
+    ],
+  },
   {
     target: "company",
     keys: [
@@ -1249,7 +1323,18 @@ const HEADER_SYNONYMS: { target: string; keys: string[] }[] = [
       "organisation",
       "employer",
       "accountname",
+      "account",
+      "firm",
+      "brand",
     ],
+  },
+  {
+    target: "website",
+    keys: ["website", "url", "domain", "companywebsite", "site", "web", "homepage"],
+  },
+  {
+    target: "notes",
+    keys: ["notes", "note", "comments", "comment", "message", "remarks", "description"],
   },
 ];
 
@@ -1311,6 +1396,36 @@ function jsonCell(v: unknown): string {
 
 const ROW_ARRAY_KEYS = ["contacts", "leads", "rows", "data", "records"];
 
+/** Flatten one row object into dot-path string cells. Nested plain objects
+ * recurse up to `depth` levels ("address":{"city":…} → "address.city"); arrays
+ * of scalars join with ", "; anything deeper (or an array of objects) falls back
+ * to jsonCell (JSON.stringify). Writes into `out` and appends first-seen keys. */
+function flattenRow(
+  rec: Record<string, unknown>,
+  out: Record<string, string>,
+  push: (key: string) => void,
+  prefix = "",
+  depth = 3,
+) {
+  for (const [k, v] of Object.entries(rec)) {
+    const key = prefix ? `${prefix}.${k}` : k;
+    if (
+      depth > 1 &&
+      v &&
+      typeof v === "object" &&
+      !Array.isArray(v)
+    ) {
+      flattenRow(v as Record<string, unknown>, out, push, key, depth - 1);
+    } else if (Array.isArray(v) && v.every((x) => x === null || typeof x !== "object")) {
+      push(key);
+      out[key] = v.map((x) => jsonCell(x)).filter((s) => s !== "").join(", ");
+    } else {
+      push(key);
+      out[key] = jsonCell(v);
+    }
+  }
+}
+
 /** Parse a JSON contacts export into the same {headers, rows} shape parseCsv
  * produces. Accepts either a top-level array of flat objects, or an object
  * whose first array-valued key (preferring the conventional names above, else
@@ -1332,17 +1447,16 @@ function parseJson(text: string): { headers: string[]; rows: Record<string, stri
   const headers: string[] = [];
   const seen = new Set<string>();
   const rows: Record<string, string>[] = [];
+  const push = (key: string) => {
+    if (!seen.has(key)) {
+      seen.add(key);
+      headers.push(key);
+    }
+  };
   for (const item of arr) {
     if (!item || typeof item !== "object" || Array.isArray(item)) continue;
-    const rec = item as Record<string, unknown>;
     const out: Record<string, string> = {};
-    for (const [k, v] of Object.entries(rec)) {
-      if (!seen.has(k)) {
-        seen.add(k);
-        headers.push(k);
-      }
-      out[k] = jsonCell(v);
-    }
+    flattenRow(item as Record<string, unknown>, out, push);
     rows.push(out);
   }
   return { headers, rows };
@@ -1355,6 +1469,35 @@ function inferType(values: string[]): CustomFieldType {
   if (nonEmpty.every((v) => /^(true|false|yes|no)$/i.test(v))) return "boolean";
   if (nonEmpty.every((v) => /^\d{4}-\d{2}-\d{2}/.test(v))) return "date";
   return "text";
+}
+
+type ImportMode = "create" | "update" | "create_or_update";
+
+const IMPORT_MODE_OPTIONS: { value: ImportMode; label: string }[] = [
+  { value: "create_or_update", label: "Add & update" },
+  { value: "create", label: "Only add new" },
+  { value: "update", label: "Only update" },
+];
+
+/** Hard ceiling on active custom-field definitions (mirrors the backend cap). */
+const CUSTOM_FIELD_CEILING = 100;
+
+interface CreatedFieldOut {
+  column: string;
+  key: string;
+  label: string;
+}
+
+interface ImportResult {
+  imported: number;
+  created: number;
+  updated: number;
+  unchanged: number;
+  skipped: number;
+  failed: { row: number; error: string }[];
+  created_fields: CreatedFieldOut[];
+  skipped_fields: { column: string; reason: string }[];
+  verification_queued: boolean;
 }
 
 export function CsvImportDialog({
@@ -1373,14 +1516,34 @@ export function CsvImportDialog({
   const [parsed, setParsed] = useState<{ headers: string[]; rows: Record<string, string>[] } | null>(
     null
   );
+  const [fileName, setFileName] = useState<string | null>(null);
   const [mapping, setMapping] = useState<Record<string, MappingTarget>>({});
   const [newTypes, setNewTypes] = useState<Record<string, CustomFieldType>>({});
+  const [newLabels, setNewLabels] = useState<Record<string, string>>({});
+  const [mode, setMode] = useState<ImportMode>("create_or_update");
+  const [smsOptInAll, setSmsOptInAll] = useState(false);
   const [busy, setBusy] = useState(false);
   const [verify, setVerify] = useState(true);
-  const [result, setResult] = useState<{ imported: number; failed: { row: number; error: string }[] } | null>(
-    null
-  );
+  const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
+  const [result, setResult] = useState<ImportResult | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  // Automap must match against the CURRENT field list, not a parent prop that
+  // may be stale — e.g. importing a file that creates fields, then importing
+  // again before the parent's def list refetches. Without this, those columns
+  // re-map to "new" and (absent the backend's reuse guard) would duplicate the
+  // fields. Fetch fresh on open; fall back to the prop if the fetch fails.
+  const [fetchedDefs, setFetchedDefs] = useState<CustomFieldDef[] | null>(null);
+  useEffect(() => {
+    let alive = true;
+    api<CustomFieldDef[]>("/api/crm/custom-fields")
+      .then((d) => alive && setFetchedDefs(d))
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, []);
+  const activeDefs = (fetchedDefs ?? defs).filter((d) => !d.archived_at);
 
   const load = (text: string, isJson: boolean) => {
     const p = isJson ? parseJson(text) : parseCsv(text);
@@ -1392,24 +1555,46 @@ export function CsvImportDialog({
       );
       return;
     }
-    // Auto-map headers via the normalized synonym table. Each system target is
-    // assigned at most once — the earliest (most specific) matching column wins.
+    // Auto-map every column by default. Order of precedence per header:
+    //  1. system synonym on the full normalized header
+    //  2. active custom-field label match on the full header
+    //  3. system synonym / custom-field label on the last dot-path segment
+    //     (e.g. "address.city" from flattened JSON → city)
+    //  4. otherwise create a new custom field (seeded type + header label),
+    //     unless the column is entirely empty or the custom-field ceiling is hit
+    // Each system target is assigned at most once — the earliest column wins.
     const guess: Record<string, MappingTarget> = {};
+    const seedTypes: Record<string, CustomFieldType> = {};
+    const seedLabels: Record<string, string> = {};
     const usedTargets = new Set<string>();
+    let pendingNew = 0;
+    const matchSynonym = (norm: string) =>
+      HEADER_SYNONYMS.find((s) => !usedTargets.has(s.target) && s.keys.includes(norm));
+    const matchCustom = (norm: string) =>
+      activeDefs.find((d) => normalizeHeader(d.label) === norm);
     for (const h of p.headers) {
       const norm = normalizeHeader(h);
-      const hit = HEADER_SYNONYMS.find(
-        (s) => !usedTargets.has(s.target) && s.keys.includes(norm)
-      );
+      const seg = h.includes(".") ? normalizeHeader(h.split(".").pop() ?? "") : norm;
+      const hit = matchSynonym(norm) ?? (seg !== norm ? matchSynonym(seg) : undefined);
       if (hit) {
         guess[h] = hit.target;
         usedTargets.add(hit.target);
-      } else {
-        const match = defs.find(
-          (d) => normalizeHeader(d.label) === norm && !d.archived_at
-        );
-        guess[h] = match ? `custom:${match.key}` : "skip";
+        continue;
       }
+      const custom = matchCustom(norm) ?? (seg !== norm ? matchCustom(seg) : undefined);
+      if (custom) {
+        guess[h] = `custom:${custom.key}`;
+        continue;
+      }
+      const allEmpty = p.rows.every((r) => !r[h]);
+      if (allEmpty || activeDefs.length + pendingNew >= CUSTOM_FIELD_CEILING) {
+        guess[h] = "skip";
+        continue;
+      }
+      guess[h] = "new";
+      seedTypes[h] = inferType(p.rows.map((r) => r[h]));
+      seedLabels[h] = h;
+      pendingNew += 1;
     }
     // Only keep a full_name mapping when neither first_name nor last_name was
     // detected on any column (the backend splits full_name into both).
@@ -1418,12 +1603,15 @@ export function CsvImportDialog({
         if (guess[h] === "full_name") guess[h] = "skip";
     }
     setMapping(guess);
+    setNewTypes(seedTypes);
+    setNewLabels(seedLabels);
     setParsed(p);
     setError(null);
     setResult(null);
   };
 
   const onFile = (f: File) => {
+    setFileName(f.name);
     const reader = new FileReader();
     reader.onload = () => {
       const text = String(reader.result ?? "");
@@ -1445,45 +1633,121 @@ export function CsvImportDialog({
     reader.readAsText(f);
   };
 
-  const submit = () => {
+  const BATCH_SIZE = 500;
+
+  const submit = async () => {
     if (!parsed) return;
+    const rows = parsed.rows;
     const new_fields = parsed.headers
       .filter((h) => mapping[h] === "new")
       .map((h) => ({
         column: h,
-        label: h,
+        label: (newLabels[h] ?? h).trim() || h,
         field_type: newTypes[h] ?? "text",
       }));
     setBusy(true);
     setError(null);
-    api<{ imported: number; failed: { row: number; error: string }[]; created_fields: unknown[] }>(
-      "/api/crm/contacts/import",
-      {
-        method: "POST",
-        body: JSON.stringify({
-          client_id: clientId,
-          mapping,
-          rows: parsed.rows,
-          new_fields,
-          verify,
-        }),
+    setResult(null);
+
+    const agg: ImportResult = {
+      imported: 0,
+      created: 0,
+      updated: 0,
+      unchanged: 0,
+      skipped: 0,
+      failed: [],
+      created_fields: [],
+      skipped_fields: [],
+      verification_queued: false,
+    };
+    // Batch 1 carries new_fields; later batches reuse the returned custom-field
+    // keys by rewriting each new-field column to its "custom:<key>" mapping.
+    let currentMapping: Record<string, MappingTarget> = { ...mapping };
+
+    try {
+      for (let start = 0; start < rows.length; start += BATCH_SIZE) {
+        const isFirst = start === 0;
+        const chunk = rows.slice(start, start + BATCH_SIZE);
+        setProgress({ done: start, total: rows.length });
+        const r = await api<ImportResult>("/api/crm/contacts/import", {
+          method: "POST",
+          body: JSON.stringify({
+            client_id: clientId,
+            mode,
+            file_name: fileName,
+            mapping: currentMapping,
+            rows: chunk,
+            new_fields: isFirst ? new_fields : [],
+            verify,
+            sms_opt_in_all: smsOptInAll,
+          }),
+        });
+        agg.imported += r.imported ?? 0;
+        agg.created += r.created ?? 0;
+        agg.updated += r.updated ?? 0;
+        agg.unchanged += r.unchanged ?? 0;
+        agg.skipped += r.skipped ?? 0;
+        // Offset row indices so they reference original (pre-batch) row numbers.
+        for (const f of r.failed ?? []) agg.failed.push({ row: f.row + start, error: f.error });
+        for (const sf of r.skipped_fields ?? []) agg.skipped_fields.push(sf);
+        agg.verification_queued = agg.verification_queued || Boolean(r.verification_queued);
+        for (const cf of r.created_fields ?? []) {
+          if (!agg.created_fields.some((c) => c.key === cf.key)) agg.created_fields.push(cf);
+        }
+        if (isFirst && r.created_fields?.length) {
+          currentMapping = { ...currentMapping };
+          for (const cf of r.created_fields) currentMapping[cf.column] = `custom:${cf.key}`;
+        }
       }
-    )
-      .then((r) => {
-        setResult(r);
-        onDone();
-        toast(
-          verify && r.imported > 0
-            ? `Imported ${r.imported} contact(s) — verifying emails in the background`
-            : `Imported ${r.imported} contact(s)`,
-          "ok"
-        );
-      })
-      .catch((e) => setError((e as Error).message))
-      .finally(() => setBusy(false));
+      setProgress({ done: rows.length, total: rows.length });
+      setResult(agg);
+      onDone();
+      const done = agg.created + agg.updated;
+      toast(
+        verify && agg.verification_queued
+          ? `Imported ${done} contact(s) — verifying emails in the background`
+          : `Imported ${done} contact(s)`,
+        "ok"
+      );
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+      setProgress(null);
+    }
   };
 
-  const activeDefs = defs.filter((d) => !d.archived_at);
+  const targetLabel = (h: string, t: MappingTarget): string => {
+    if (t === "new") return (newLabels[h] ?? h).trim() || h;
+    if (t.startsWith("custom:")) {
+      const key = t.slice(7);
+      return activeDefs.find((d) => d.key === key)?.label ?? key;
+    }
+    return SYSTEM_TARGETS.find((s) => s.value === t)?.label ?? t;
+  };
+
+  const mappedHeaders = parsed
+    ? parsed.headers.filter((h) => mapping[h] && mapping[h] !== "skip")
+    : [];
+
+  const downloadFailed = () => {
+    if (!result || !parsed) return;
+    const headers = parsed.headers;
+    const esc = (v: string) => (/[",\n\r]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v);
+    const lines = [[...headers, "error"].map(esc).join(",")];
+    for (const f of result.failed) {
+      const row = parsed.rows[f.row];
+      if (!row) continue;
+      lines.push([...headers.map((h) => esc(row[h] ?? "")), esc(f.error)].join(","));
+    }
+    const blob = new Blob([lines.join("\r\n")], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "failed-rows.csv";
+    a.click();
+    URL.revokeObjectURL(url);
+  };
 
   return (
     <Dialog open onClose={onClose} title="Import contacts from CSV or JSON" size="lg">
@@ -1511,8 +1775,17 @@ export function CsvImportDialog({
 
       {parsed && !result && (
         <>
+          <div className="crm-form-actions" style={{ marginBottom: "0.5rem" }}>
+            <Segmented<ImportMode>
+              options={IMPORT_MODE_OPTIONS}
+              value={mode}
+              onChange={setMode}
+              ariaLabel="Import mode"
+            />
+          </div>
           <p className="crm-muted">
-            {parsed.rows.length} row(s). Map each column:
+            {parsed.rows.length} row(s). Matches by email or phone; existing values
+            are never overwritten. Map each column:
           </p>
           <div className="crm-csv-map">
             {parsed.headers.map((h) => {
@@ -1527,11 +1800,14 @@ export function CsvImportDialog({
                     value={mapping[h] ?? "skip"}
                     onChange={(e) => {
                       setMapping({ ...mapping, [h]: e.target.value });
-                      if (e.target.value === "new" && !newTypes[h])
-                        setNewTypes({
-                          ...newTypes,
-                          [h]: inferType(parsed.rows.map((r) => r[h])),
-                        });
+                      if (e.target.value === "new") {
+                        if (!newTypes[h])
+                          setNewTypes({
+                            ...newTypes,
+                            [h]: inferType(parsed.rows.map((r) => r[h])),
+                          });
+                        if (!newLabels[h]) setNewLabels({ ...newLabels, [h]: h });
+                      }
                     }}
                   >
                     <optgroup label="Contact fields">
@@ -1555,26 +1831,62 @@ export function CsvImportDialog({
                     </optgroup>
                   </select>
                   {mapping[h] === "new" && (
-                    <select
-                      aria-label={`Type for new field ${h}`}
-                      value={newTypes[h] ?? "text"}
-                      onChange={(e) =>
-                        setNewTypes({ ...newTypes, [h]: e.target.value as CustomFieldType })
-                      }
-                    >
-                      {Object.entries(FIELD_TYPE_LABELS)
-                        .filter(([v]) => !hasOptions(v as CustomFieldType))
-                        .map(([v, l]) => (
-                          <option key={v} value={v}>
-                            {l}
-                          </option>
-                        ))}
-                    </select>
+                    <>
+                      <input
+                        aria-label={`Label for new field ${h}`}
+                        placeholder="Field label"
+                        value={newLabels[h] ?? h}
+                        onChange={(e) =>
+                          setNewLabels({ ...newLabels, [h]: e.target.value })
+                        }
+                      />
+                      <select
+                        aria-label={`Type for new field ${h}`}
+                        value={newTypes[h] ?? "text"}
+                        onChange={(e) =>
+                          setNewTypes({ ...newTypes, [h]: e.target.value as CustomFieldType })
+                        }
+                      >
+                        {Object.entries(FIELD_TYPE_LABELS)
+                          .filter(([v]) => !hasOptions(v as CustomFieldType))
+                          .map(([v, l]) => (
+                            <option key={v} value={v}>
+                              {l}
+                            </option>
+                          ))}
+                      </select>
+                    </>
                   )}
                 </div>
               );
             })}
           </div>
+
+          {mappedHeaders.length > 0 && (
+            <div style={{ overflowX: "auto", marginTop: "0.5rem" }}>
+              <table className="crm-csv-preview">
+                <thead>
+                  <tr>
+                    {mappedHeaders.map((h) => (
+                      <th key={h} className="crm-muted">
+                        {targetLabel(h, mapping[h])}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {parsed.rows.slice(0, 3).map((r, i) => (
+                    <tr key={i}>
+                      {mappedHeaders.map((h) => (
+                        <td key={h}>{r[h]}</td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
           {error && (
             <span className="crm-form-error" role="alert">
               {error}
@@ -1583,16 +1895,37 @@ export function CsvImportDialog({
           <label className="crm-check">
             <input
               type="checkbox"
+              checked={smsOptInAll}
+              onChange={(e) => setSmsOptInAll(e.target.checked)}
+            />
+            <span>
+              These contacts opted in to SMS marketing (e.g. on our website forms)
+            </span>
+          </label>
+          <label className="crm-check">
+            <input
+              type="checkbox"
               checked={verify}
               onChange={(e) => setVerify(e.target.checked)}
             />
             <span>Verify email addresses after import (uses your monthly quota)</span>
           </label>
+          {busy && progress && (
+            <p className="crm-muted" aria-live="polite">
+              Importing… {progress.done.toLocaleString()} of{" "}
+              {progress.total.toLocaleString()} rows
+            </p>
+          )}
           <div className="crm-form-actions" style={{ marginTop: "0.75rem" }}>
             <Button variant="primary" size="sm" busy={busy} onClick={submit}>
               Import {parsed.rows.length} row(s)
             </Button>
-            <Button variant="ghost" size="sm" onClick={() => setParsed(null)}>
+            <Button
+              variant="ghost"
+              size="sm"
+              disabled={busy}
+              onClick={() => setParsed(null)}
+            >
               Choose another file
             </Button>
           </div>
@@ -1602,9 +1935,30 @@ export function CsvImportDialog({
       {result && (
         <div className="crm-csv-result">
           <Alert tone={result.failed.length ? "warn" : "ok"}>
-            Imported <strong>{result.imported}</strong> contact(s).
-            {result.failed.length > 0 && ` ${result.failed.length} row(s) skipped.`}
+            Created <strong>{result.created}</strong> · Updated{" "}
+            <strong>{result.updated}</strong> · Unchanged{" "}
+            <strong>{result.unchanged}</strong> · Skipped{" "}
+            <strong>{result.skipped}</strong> · Failed{" "}
+            <strong>{result.failed.length}</strong>
           </Alert>
+          {result.verification_queued && (
+            <p className="crm-muted">Email verification is running in the background.</p>
+          )}
+          {result.created_fields.length > 0 && (
+            <p className="crm-muted">
+              Created {result.created_fields.length} custom field(s):{" "}
+              {result.created_fields.map((f) => f.label).join(", ")}
+            </p>
+          )}
+          {result.skipped_fields.length > 0 && (
+            <ul className="crm-csv-errors">
+              {result.skipped_fields.map((sf) => (
+                <li key={sf.column}>
+                  Column “{sf.column}” not created: {sf.reason}
+                </li>
+              ))}
+            </ul>
+          )}
           {result.failed.length > 0 && (
             <ul className="crm-csv-errors">
               {result.failed.slice(0, 50).map((f) => (
@@ -1618,6 +1972,11 @@ export function CsvImportDialog({
             <Button variant="primary" size="sm" onClick={onClose}>
               Done
             </Button>
+            {result.failed.length > 0 && (
+              <Button variant="ghost" size="sm" onClick={downloadFailed}>
+                Download failed rows
+              </Button>
+            )}
           </div>
         </div>
       )}

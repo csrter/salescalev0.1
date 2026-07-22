@@ -21,6 +21,7 @@ import json
 import logging
 import re
 from typing import Dict, List, Optional
+from urllib.parse import urlparse
 
 from fastapi import (
     APIRouter,
@@ -680,6 +681,8 @@ _CSV_SYSTEM_TARGETS = {
     "company",
     "full_name",
     "sms_opt_in",
+    "website",  # -> Company.domain (needs a company column on the same row)
+    "notes",  # -> an internal Activity(note), not a Contact field
 }
 
 # Cell values that count as an opt-in when a column maps to sms_opt_in.
@@ -688,7 +691,74 @@ _CSV_TRUTHY = {"1", "true", "yes", "y", "x", "opted in", "opt-in", "opt in"}
 # a city isn't one.
 _CSV_IDENTITY_TARGETS = ("first_name", "last_name", "email", "phone")
 
+# Postgres column caps checked BEFORE the DB (SQLite ignores them, so an
+# over-cap cell only 500s on prod). Errors name the source CSV column.
+_CSV_LENGTH_CAPS = {
+    "first_name": 150,
+    "last_name": 150,
+    "job_title": 150,
+    "phone": 50,
+    "mobile_phone": 50,
+    "city": 120,
+    "state": 64,
+    "zip": 20,
+    "email": 320,
+}
+
+# Full US state / DC name -> 2-letter code (keys lowercased at lookup).
+_US_STATES = {
+    "alabama": "AL", "alaska": "AK", "arizona": "AZ", "arkansas": "AR",
+    "california": "CA", "colorado": "CO", "connecticut": "CT", "delaware": "DE",
+    "district of columbia": "DC", "florida": "FL", "georgia": "GA", "hawaii": "HI",
+    "idaho": "ID", "illinois": "IL", "indiana": "IN", "iowa": "IA",
+    "kansas": "KS", "kentucky": "KY", "louisiana": "LA", "maine": "ME",
+    "maryland": "MD", "massachusetts": "MA", "michigan": "MI", "minnesota": "MN",
+    "mississippi": "MS", "missouri": "MO", "montana": "MT", "nebraska": "NE",
+    "nevada": "NV", "new hampshire": "NH", "new jersey": "NJ", "new mexico": "NM",
+    "new york": "NY", "north carolina": "NC", "north dakota": "ND", "ohio": "OH",
+    "oklahoma": "OK", "oregon": "OR", "pennsylvania": "PA", "rhode island": "RI",
+    "south carolina": "SC", "south dakota": "SD", "tennessee": "TN", "texas": "TX",
+    "utah": "UT", "vermont": "VT", "virginia": "VA", "washington": "WA",
+    "west virginia": "WV", "wisconsin": "WI", "wyoming": "WY",
+}
+
 _EMAIL_ADDR_RE = re.compile(r"[^@\s,;<>]+@[^@\s,;<>]+\.[^@\s,;<>]+")
+
+
+def _normalize_phone_cell(v: str) -> str:
+    """Store the E.164 form when the cell is a real number (>=7 digits and
+    normalize_phone resolves it), else the stripped raw — never lose data."""
+    digits = sum(ch.isdigit() for ch in v)
+    norm = sms_consent.normalize_phone(v)
+    if norm and digits >= 7:
+        return norm
+    return v.strip()
+
+
+def _norm_field_label(label: str) -> str:
+    """Alnum-lowercase key for matching a would-be new field against an
+    existing definition's label (mirrors the frontend's header normalization),
+    so re-importing a file doesn't recreate the same custom field."""
+    return re.sub(r"[^a-z0-9]", "", (label or "").lower())
+
+
+def _normalize_state_cell(v: str) -> str:
+    s = v.strip()
+    if len(s) == 2:
+        return s.upper()
+    return _US_STATES.get(s.lower(), s)
+
+
+def _parse_website_host(v: str) -> Optional[str]:
+    """A website cell -> a bare host (no scheme/path/www) for Company.domain."""
+    s = (v or "").strip()
+    if not s:
+        return None
+    parsed = urlparse(s if "//" in s else f"//{s}")
+    host = (parsed.netloc or parsed.path).split("/")[0].strip().lower()
+    if host.startswith("www."):
+        host = host[4:]
+    return host or None
 
 
 def _split_email_cell(cell: Optional[str]):
@@ -699,6 +769,62 @@ def _split_email_cell(cell: Optional[str]):
     stored as one un-sendable comma-joined string (which SMTP 501s)."""
     found = [m.group(0).lower() for m in _EMAIL_ADDR_RE.finditer(cell or "")]
     return (found[0] if found else None), found
+
+
+# Contact fields a matched-row update may fill (email/company handled apart).
+_CSV_FILL_FIELDS = (
+    "first_name", "last_name", "phone", "mobile_phone",
+    "job_title", "city", "state", "zip",
+)
+
+
+def _apply_fill_blanks(
+    db: Session,
+    org_id: str,
+    contact: Contact,
+    identity: Dict[str, Optional[str]],
+    primary_email: Optional[str],
+    email_candidates: List[str],
+    custom: Dict[str, object],
+    company_name: Optional[str],
+    resolve_company,
+) -> bool:
+    """Fill-blanks update of a matched contact: a system field is set only when
+    the existing value is empty; company only when unlinked; custom fields drop
+    keys already set; extra emails merge into candidate_emails. Returns whether
+    any field was filled (drives the created/updated/unchanged tally)."""
+    changed = False
+    for field in _CSV_FILL_FIELDS:
+        newv = identity.get(field)
+        if newv and not getattr(contact, field):
+            setattr(contact, field, newv)
+            changed = True
+    if primary_email and not contact.email:
+        contact.email = primary_email
+        changed = True
+    if len(email_candidates) > 1:
+        existing = list(contact.candidate_emails or [])
+        have = {x.get("email") for x in existing}
+        for e in email_candidates:
+            if e not in have:
+                existing.append({"email": e, "source": "csv_import"})
+                have.add(e)
+                changed = True
+        contact.candidate_emails = existing
+    if company_name and contact.company_id is None:
+        cid = resolve_company(company_name)
+        if cid:
+            contact.company_id = cid
+            changed = True
+    if custom:
+        existing_cf = contact.custom_fields or {}
+        to_apply = {k: v for k, v in custom.items() if not existing_cf.get(k)}
+        if to_apply:
+            custom_fields_svc.validate_and_merge(
+                db, org_id, contact, to_apply, enforce_required=False
+            )
+            changed = True
+    return changed
 
 
 @router.post("/contacts/import")
@@ -721,10 +847,33 @@ def import_contacts(
     org = db.get(Organization, scope.organization_id)
 
     # 1) Create inline-defined fields first, so their columns can map to them.
+    # Hitting the custom-field cap soft-skips that column (recorded in
+    # skipped_fields) instead of aborting the whole import with a 402.
+    #
+    # Re-import idempotency: if an ACTIVE definition already carries the same
+    # (normalized) label, reuse it instead of minting a suffixed duplicate.
+    # A stale client that re-sends a column as "new" — e.g. importing the same
+    # file twice before the field list refetches — must not spawn
+    # lead_score_2/lead_score_3… on every pass.
     created_fields: List[dict] = []
+    skipped_fields: List[dict] = []
     column_to_new_key: Dict[str, str] = {}
+    _existing_by_label = {
+        _norm_field_label(d.label): d
+        for d in custom_fields_svc.list_definitions(
+            db, org.id, "contact", include_archived=False
+        )
+    }
     for nf in body.new_fields or []:
-        entitlements.enforce_can_add_custom_field(db, org)
+        existing = _existing_by_label.get(_norm_field_label(nf.label))
+        if existing is not None:
+            column_to_new_key[nf.column] = existing.key
+            continue
+        try:
+            entitlements.enforce_can_add_custom_field(db, org)
+        except HTTPException as exc:
+            skipped_fields.append({"column": nf.column, "reason": str(exc.detail)})
+            continue
         try:
             options = custom_fields_svc.normalize_options(
                 nf.field_type,
@@ -750,6 +899,7 @@ def import_contacts(
         db.add(definition)
         db.flush()  # so generate_key sees it for the next new field
         column_to_new_key[nf.column] = key
+        _existing_by_label[_norm_field_label(nf.label)] = definition
         created_fields.append({"column": nf.column, "key": key, "label": nf.label})
 
     # 2) Resolve each mapped column to a concrete target.
@@ -765,13 +915,87 @@ def import_contacts(
 
     resolved = {col: _resolve(col, tgt) for col, tgt in body.mapping.items()}
 
-    imported = 0
+    # 3) Prefetch this client's existing contacts ONCE for dedupe/upsert. Match
+    # order per row is email, then phone, then mobile — first writer into each
+    # map wins (a duplicate existing contact never shadows the first).
+    email_map: Dict[str, Contact] = {}
+    phone_map: Dict[str, Contact] = {}
+
+    def _index(contact: Contact) -> None:
+        if contact.email:
+            email_map.setdefault(contact.email.lower(), contact)
+        for p in (contact.phone, contact.mobile_phone):
+            np = sms_consent.normalize_phone(p)
+            if np:
+                phone_map.setdefault(np, contact)
+
+    if body.mode != "create":
+        for c in db.execute(
+            select(Contact).where(Contact.client_id == client.id)
+        ).scalars():
+            _index(c)
+
+    def _match(primary_email, phone_val, mobile_val) -> Optional[Contact]:
+        if primary_email:
+            m = email_map.get(primary_email.lower())
+            if m:
+                return m
+        for v in (phone_val, mobile_val):
+            np = sms_consent.normalize_phone(v)
+            if np:
+                m = phone_map.get(np)
+                if m:
+                    return m
+        return None
+
+    created = 0
+    updated = 0
+    unchanged = 0
+    skipped = 0
     failed: List[dict] = []
     created_contacts: List[Contact] = []
     company_cache: Dict[str, Optional[str]] = {}
+
+    def _resolve_company(company_name: str) -> Optional[str]:
+        cache_key = company_name.lower()
+        cid = company_cache.get(cache_key)
+        if cid is None:
+            cid = crm_svc.get_or_create_company(
+                db, client.organization_id, client.id, company_name
+            )
+            if cid:
+                company_cache[cache_key] = cid
+        return cid
+
+    def _apply_website(company_id: str, website_val: str) -> None:
+        # Fill-blanks: only stamp Company.domain when it's empty; a row with a
+        # website but no company has nowhere to attach it, so it's ignored.
+        host = _parse_website_host(website_val)
+        if not host:
+            return
+        company = db.get(Company, company_id)
+        if company is not None and not company.domain:
+            company.domain = host[:300]
+
+    def _add_note(contact: Contact, note: str) -> None:
+        db.add(
+            Activity(
+                organization_id=client.organization_id,
+                client_id=client.id,
+                contact_id=contact.id,
+                type="note",
+                body=note,
+                is_internal=True,
+                occurred_at=dt.datetime.now(dt.timezone.utc),
+            )
+        )
+
     for idx, row in enumerate(body.rows):
         identity: Dict[str, Optional[str]] = {}
+        identity_col: Dict[str, str] = {}  # system field -> source column (errors)
         custom: Dict[str, object] = {}
+        website_val: Optional[str] = None
+        note_val: Optional[str] = None
         for column, target in resolved.items():
             if target is None:
                 continue
@@ -780,73 +1004,145 @@ def import_contacts(
             if raw is None or (isinstance(raw, str) and raw.strip() == ""):
                 continue
             if kind == "system":
-                identity[name] = str(raw).strip()
+                if name == "website":
+                    website_val = str(raw).strip()
+                elif name == "notes":
+                    note_val = str(raw).strip()
+                else:
+                    identity[name] = str(raw).strip()
+                    identity_col[name] = column
             else:
                 custom[name] = raw
+        full_col = identity_col.pop("full_name", None)
         full_name = identity.pop("full_name", None)
         if full_name:
             parts = full_name.split(None, 1)
-            identity.setdefault("first_name", parts[0])
-            if len(parts) > 1:
-                identity.setdefault("last_name", parts[1])
+            if "first_name" not in identity:
+                identity["first_name"] = parts[0]
+                identity_col["first_name"] = full_col
+            if len(parts) > 1 and "last_name" not in identity:
+                identity["last_name"] = parts[1]
+                identity_col["last_name"] = full_col
         company_name = identity.pop("company", None)
+        identity_col.pop("company", None)
         opt_in_cell = identity.pop("sms_opt_in", None)
+        identity_col.pop("sms_opt_in", None)
         row_opted_in = body.sms_opt_in_all or (
             opt_in_cell is not None and opt_in_cell.strip().lower() in _CSV_TRUTHY
         )
+        # Normalize phone/mobile to E.164 and expand state names -> 2-letter.
+        for pf in ("phone", "mobile_phone"):
+            if identity.get(pf) is not None:
+                identity[pf] = _normalize_phone_cell(identity[pf])
+        if identity.get("state") is not None:
+            identity["state"] = _normalize_state_cell(identity["state"])
         if not any(identity.get(k) for k in _CSV_IDENTITY_TARGETS):
             failed.append(
                 {"row": idx, "error": "no identity field (name/email/phone) mapped"}
             )
             continue
+        primary_email, email_candidates = _split_email_cell(identity.get("email"))
+
+        # Length pre-check BEFORE the DB — a per-row failure naming the CSV
+        # COLUMN, so the user knows which column to trim.
+        cap_error = None
+        for name, cap in _CSV_LENGTH_CAPS.items():
+            val = primary_email if name == "email" else identity.get(name)
+            if val is not None and len(val) > cap:
+                col = identity_col.get(name, name)
+                cap_error = f"'{col}' is too long (max {cap} characters)"
+                break
+        if cap_error:
+            failed.append({"row": idx, "error": cap_error})
+            continue
+
+        match = _match(primary_email, identity.get("phone"), identity.get("mobile_phone"))
+        if body.mode == "update" and match is None:
+            skipped += 1
+            continue
 
         # Everything that touches the DB for this row runs inside a SAVEPOINT.
-        # A single bad row — a value longer than a Postgres column cap (e.g. a
-        # 30-char string mapped to zip/String(20)), an integrity violation,
-        # any driver error — then rolls back only that row and lands in
-        # `failed`, instead of aborting the whole import transaction (which
-        # surfaced to the user as a bare "unexpected error"). SQLite ignores
-        # String length caps, so this class only ever reproduced on prod.
-        primary_email, email_candidates = _split_email_cell(identity.get("email"))
+        # A single bad row — a value longer than a Postgres column cap, an
+        # integrity violation, any driver error — then rolls back only that row
+        # and lands in `failed`, instead of aborting the whole import.
         try:
             with db.begin_nested():
-                contact = Contact(
-                    organization_id=client.organization_id,
-                    client_id=client.id,
-                    first_name=identity.get("first_name"),
-                    last_name=identity.get("last_name"),
-                    email=primary_email,
-                    phone=identity.get("phone"),
-                    mobile_phone=identity.get("mobile_phone"),
-                    job_title=identity.get("job_title"),
-                    city=identity.get("city"),
-                    state=identity.get("state"),
-                    zip=identity.get("zip"),
-                    source="csv_import",
-                )
-                # Keep alternate addresses (a multi-address cell) as candidates
-                # so nothing is lost, without making `email` un-sendable.
-                if len(email_candidates) > 1:
-                    contact.candidate_emails = [
-                        {"email": e, "source": "csv_import"} for e in email_candidates
-                    ]
-                if row_opted_in:
-                    sms_consent.record_opt_in(contact, "csv_import:website_attested")
-                else:
-                    sms_consent.apply_org_default(org, contact)
-                if company_name:
-                    cache_key = company_name.lower()
-                    company_id = company_cache.get(cache_key)
-                    if company_id is None:
-                        company_id = crm_svc.get_or_create_company(
-                            db, client.organization_id, client.id, company_name
+                if match is None:
+                    contact = Contact(
+                        organization_id=client.organization_id,
+                        client_id=client.id,
+                        first_name=identity.get("first_name"),
+                        last_name=identity.get("last_name"),
+                        email=primary_email,
+                        phone=identity.get("phone"),
+                        mobile_phone=identity.get("mobile_phone"),
+                        job_title=identity.get("job_title"),
+                        city=identity.get("city"),
+                        state=identity.get("state"),
+                        zip=identity.get("zip"),
+                        source="csv_import",
+                        source_detail=(
+                            {"import_file": body.file_name} if body.file_name else None
+                        ),
+                    )
+                    # Alternate addresses (a multi-address cell) kept as
+                    # candidates so nothing is lost, without an un-sendable email.
+                    if len(email_candidates) > 1:
+                        contact.candidate_emails = [
+                            {"email": e, "source": "csv_import"}
+                            for e in email_candidates
+                        ]
+                    if row_opted_in:
+                        sms_consent.record_opt_in(
+                            contact, "csv_import:website_attested"
                         )
-                    contact.company_id = company_id
-                custom_fields_svc.validate_and_merge(
-                    db, scope.organization_id, contact, custom, enforce_required=True
-                )
-                db.add(contact)
-                db.flush()
+                    else:
+                        sms_consent.apply_org_default(org, contact)
+                    if company_name:
+                        contact.company_id = _resolve_company(company_name)
+                    custom_fields_svc.validate_and_merge(
+                        db, scope.organization_id, contact, custom,
+                        enforce_required=False,
+                    )
+                    db.add(contact)
+                    db.flush()
+                    if company_name and contact.company_id and website_val:
+                        _apply_website(contact.company_id, website_val)
+                    if note_val:
+                        _add_note(contact, note_val)
+                    created += 1
+                    created_contacts.append(contact)
+                    # In-file duplicate rows now UPDATE this contact instead of
+                    # double-inserting — except in create mode, which always
+                    # inserts (back-compat: no dedupe at all).
+                    if body.mode != "create":
+                        _index(contact)
+                else:
+                    contact = match
+                    changed = _apply_fill_blanks(
+                        db,
+                        scope.organization_id,
+                        contact,
+                        identity,
+                        primary_email,
+                        email_candidates,
+                        custom,
+                        company_name,
+                        _resolve_company,
+                    )
+                    if row_opted_in:
+                        sms_consent.record_opt_in(
+                            contact, "csv_import:website_attested"
+                        )
+                    if company_name and contact.company_id and website_val:
+                        _apply_website(contact.company_id, website_val)
+                    if note_val:
+                        _add_note(contact, note_val)  # a log, always appended
+                    db.flush()
+                    if changed:
+                        updated += 1
+                    else:
+                        unchanged += 1
         except custom_fields_svc.CustomFieldError as e:
             failed.append({"row": idx, "error": str(e)})
             continue
@@ -856,13 +1152,30 @@ def import_contacts(
                 {"row": idx, "error": f"could not import this row ({type(e).__name__})"}
             )
             continue
-        # Row committed to the savepoint: any company it created persists, so
-        # its id is safe to cache for reuse by later rows.
-        if company_name and contact.company_id:
-            company_cache[company_name.lower()] = contact.company_id
-        created_contacts.append(contact)
-        imported += 1
 
+    # One audit entry per import run (guardrail 8), same pattern as bulk-delete.
+    db.add(
+        AuditLogEntry(
+            organization_id=client.organization_id,
+            client_id=client.id,
+            user_id=user.id,
+            user_email=user.email,
+            user_name=user.full_name,
+            platform="crm",
+            entity_type="contact",
+            entity_name=body.file_name,
+            action="contacts.imported",
+            # AuditEntryOut serializes diff as [{field, before, after}] rows
+            # (DiffRowOut), so the run summary rides in that shape.
+            diff=[
+                {"field": "created", "after": created},
+                {"field": "updated", "after": updated},
+                {"field": "failed", "after": len(failed)},
+                {"field": "file", "after": body.file_name},
+            ],
+            status=AUDIT_SUCCESS,
+        )
+    )
     db.commit()
     # Phase 12 bulk action: verify the imported addresses after the response.
     # Quota-checked inside the pipeline — an over-quota import still imports,
@@ -874,9 +1187,14 @@ def import_contacts(
             [c.id for c in created_contacts],
         )
     return {
-        "imported": imported,
+        "imported": created + updated,
+        "created": created,
+        "updated": updated,
+        "unchanged": unchanged,
+        "skipped": skipped,
         "failed": failed,
         "created_fields": created_fields,
+        "skipped_fields": skipped_fields,
         "verification_queued": bool(body.verify and created_contacts),
     }
 
