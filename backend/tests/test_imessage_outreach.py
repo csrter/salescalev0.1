@@ -692,3 +692,67 @@ def test_sendblue_imessage_alias_bad_token_403(im_org, api, bb_creds_ok):
         json={"from_number": "+14805559013", "content": "x", "message_handle": "sb-in-2"},
     )
     assert resp.status_code == 403
+
+
+def test_bluebubbles_sms_handles_failure_retries_as_imessage(monkeypatch):
+    """The availability lookup can flap (observed live after an account
+    re-registration: iMessage-capable numbers resolve unavailable). A
+    mislabeled recipient goes down the SMS path, which without Text Message
+    Forwarding fails 'Failed to find all handles' — the transport must retry
+    ONCE as iMessage and rescue the send."""
+    calls = []
+
+    def _fake_post(url, params=None, json=None, timeout=None):
+        if url.endswith("/message/text"):
+            return _FakeResp(
+                500,
+                {"status": 500, "message": "Message Send Error",
+                 "error": {"message": "Chat does not exist!"}},
+            )
+        if url.endswith("/chat/new"):
+            calls.append(json["service"])
+            if json["service"] == "SMS":
+                return _FakeResp(
+                    500,
+                    {"status": 500, "message": "Message Send Error",
+                     "error": {"message": "Failed to find all handles for specified service!"}},
+                )
+            return _FakeResp(
+                200, {"status": 200, "data": {"messages": [{"guid": "RESCUED_guid"}]}}
+            )
+        raise AssertionError(url)
+
+    monkeypatch.setattr(gateway.httpx, "get", _avail_get(False))  # flapping lookup says SMS
+    monkeypatch.setattr(gateway.httpx, "post", _fake_post)
+    monkeypatch.setattr(gateway, "decrypt_secret", lambda s: "pw")
+    guid, code, detail = gateway._bluebubbles_send(_bb_account(), "+14805559998", "hi")
+    assert guid == "RESCUED_guid" and code is None
+    assert calls == ["SMS", "iMessage"]
+
+
+def test_bluebubbles_true_sms_failure_still_surfaces(monkeypatch):
+    """A genuinely unreachable green-bubble number (no forwarding, not on
+    iMessage) fails BOTH legs — the original SMS-path error must surface,
+    not be masked by the iMessage retry."""
+
+    def _fake_post(url, params=None, json=None, timeout=None):
+        if url.endswith("/message/text"):
+            return _FakeResp(
+                500,
+                {"status": 500, "message": "Message Send Error",
+                 "error": {"message": "Chat does not exist!"}},
+            )
+        if url.endswith("/chat/new"):
+            return _FakeResp(
+                500,
+                {"status": 500, "message": "Message Send Error",
+                 "error": {"message": "Failed to find all handles for specified service!"}},
+            )
+        raise AssertionError(url)
+
+    monkeypatch.setattr(gateway.httpx, "get", _avail_get(False))
+    monkeypatch.setattr(gateway.httpx, "post", _fake_post)
+    monkeypatch.setattr(gateway, "decrypt_secret", lambda s: "pw")
+    guid, code, detail = gateway._bluebubbles_send(_bb_account(), "+14805559997", "hi")
+    assert code is not None
+    assert "find all handles" in (detail or "").lower()

@@ -443,12 +443,29 @@ def _bluebubbles_send(
         d = payload.get("data") or {}
         return d.get("guid") or data["tempGuid"], None, None
     if _bb_chat_missing(resp, payload):
-        return _bluebubbles_create_chat_send(base, pw, to_number, body, service)
-    return (
-        "",
-        str(payload.get("status") or resp.status_code),
-        _bb_error_message(payload) or f"BlueBubbles HTTP {resp.status_code}",
-    )
+        result = _bluebubbles_create_chat_send(base, pw, to_number, body, service)
+    else:
+        result = (
+            "",
+            str(payload.get("status") or resp.status_code),
+            _bb_error_message(payload) or f"BlueBubbles HTTP {resp.status_code}",
+        )
+    # The iMessage-availability lookup can flap (observed live right after an
+    # account re-registration: numbers that deliver blue-bubble fine resolve
+    # as unavailable). A mislabeled recipient then goes down the SMS-service
+    # path, which needs Text Message Forwarding — and without it fails with
+    # "Failed to find all handles". Before accepting that failure, retry ONCE
+    # as iMessage: it rescues every iMessage-capable recipient, and a true
+    # green-bubble number just fails the same way it already had.
+    if (
+        service == "SMS"
+        and result[1] is not None
+        and "find all handles" in (result[2] or "").lower()
+    ):
+        retry = _bluebubbles_create_chat_send(base, pw, to_number, body, "iMessage")
+        if retry[1] is None:
+            return retry
+    return result
 
 
 def _bluebubbles_create_chat_send(
