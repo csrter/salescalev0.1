@@ -37,6 +37,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -146,6 +147,17 @@ class SmsAccount(Base):
     # randomized range rather than a floor scaled by a fixed jitter factor.
     # Null falls back to the older floor*1.0-1.8x jitter behavior.
     max_send_spacing_seconds: Mapped[Optional[int]] = mapped_column(Integer)
+    # BlueBubbles only: force every send to the green-bubble SMS service and
+    # skip the iMessage availability probe. Needed on hosts where iMessage
+    # sending doesn't work but Text Message Forwarding does — notably AWS EC2
+    # Macs, where SIP can't be disabled (no Private API) AND Apple blocks
+    # iMessage sends from the datacenter environment. There, an iMessage send
+    # returns a guid (fake success) but silently never delivers, so we must
+    # route through SMS (which reaches iMessage users as a green bubble too).
+    # Default false = probe-and-prefer-iMessage, the original behavior.
+    bluebubbles_force_sms: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=text("false"), nullable=False
+    )
     created_at: Mapped[dt.datetime] = created_at_column()
 
 

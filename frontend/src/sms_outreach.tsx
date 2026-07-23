@@ -3089,6 +3089,9 @@ function AccountDialog({
     existing?.messaging_service_sid ?? "",
   );
   const [relayUrl, setRelayUrl] = useState(existing?.relay_url ?? "");
+  const [forceSms, setForceSms] = useState(
+    existing?.bluebubbles_force_sms ?? false,
+  );
   const [minSendSpacing, setMinSendSpacing] = useState(
     existing?.min_send_spacing_seconds != null
       ? String(existing.min_send_spacing_seconds)
@@ -3156,6 +3159,7 @@ function AccountDialog({
       messaging_service_sid:
         isBluebubbles || isSendblue ? null : messagingServiceSid.trim() || null,
       relay_url: isBluebubbles ? relayUrl.trim() : null,
+      bluebubbles_force_sms: isBluebubbles ? forceSms : false,
       min_send_spacing_seconds:
         isBluebubbles && minSendSpacing.trim() ? Number(minSendSpacing) : null,
       max_send_spacing_seconds:
@@ -3332,6 +3336,25 @@ function AccountDialog({
                 placeholder="45"
               />
             </Field>
+          </div>
+        )}
+
+        {isBluebubbles && (
+          <div className="sms-fieldset">
+            <Switch
+              checked={forceSms}
+              onChange={setForceSms}
+              label="Send as SMS only (no iMessage)"
+            />
+            <p className="sms-hint">
+              Turn this on for a host that can't send iMessage — notably an AWS
+              EC2 Mac, where the Private API is unavailable and Apple blocks
+              datacenter iMessage, so an iMessage send is accepted but silently
+              never delivers. With this on, every message goes out as
+              green-bubble SMS through the Mac's Text Message Forwarding (which
+              still reaches iMessage users). Leave off for a normal Mac that
+              sends iMessage.
+            </p>
           </div>
         )}
 

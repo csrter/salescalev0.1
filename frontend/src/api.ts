@@ -2056,6 +2056,8 @@ export interface SmsAccount {
   min_send_spacing_seconds: number | null;
   /** Upper bound of the pacing range — with min, a uniform-random gap in [min, max] is used. */
   max_send_spacing_seconds: number | null;
+  /** BlueBubbles only: pin sends to green-bubble SMS (skip iMessage) — for EC2 Macs where iMessage silently drops. */
+  bluebubbles_force_sms: boolean;
   status: SmsAccountStatus;
   error_detail: string | null;
   daily_send_cap: number;
@@ -2077,6 +2079,7 @@ export interface SmsAccountBody {
   relay_url?: string | null;
   min_send_spacing_seconds?: number | null;
   max_send_spacing_seconds?: number | null;
+  bluebubbles_force_sms?: boolean;
   daily_send_cap?: number;
 }
 

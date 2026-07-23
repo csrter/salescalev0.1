@@ -445,7 +445,15 @@ def _bluebubbles_send(
     if not base:
         return "", "config", "No relay URL configured"
     pw = decrypt_secret(account.auth_token_encrypted or "")
-    service = _bluebubbles_resolve_service(base, pw, to_number)
+    # Some hosts can't send iMessage at all (EC2 Macs: no Private API + Apple
+    # blocks datacenter iMessage), where an iMessage send returns a guid but
+    # silently never delivers. force_sms pins every send to green-bubble SMS
+    # (delivered via the Mac's Text Message Forwarding), skipping the iMessage
+    # availability probe — which needs the Private API anyway.
+    if getattr(account, "bluebubbles_force_sms", False):
+        service = "SMS"
+    else:
+        service = _bluebubbles_resolve_service(base, pw, to_number)
     method = _bluebubbles_method(base, pw)
     data = {
         "chatGuid": f"{service};-;{to_number}",
@@ -485,6 +493,7 @@ def _bluebubbles_send(
     # green-bubble number just fails the same way it already had.
     if (
         service == "SMS"
+        and not getattr(account, "bluebubbles_force_sms", False)
         and result[1] is not None
         and "find all handles" in (result[2] or "").lower()
     ):

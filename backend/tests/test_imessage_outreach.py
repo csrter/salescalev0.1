@@ -252,6 +252,67 @@ def test_bluebubbles_first_message_creates_chat_when_missing(monkeypatch):
     assert any(u.endswith("/chat/new") for u, _ in calls)
 
 
+def test_bluebubbles_force_sms_pins_service_and_skips_availability(monkeypatch):
+    """An account with bluebubbles_force_sms sends via service SMS on the
+    FIRST attempt with NO availability probe (that probe needs a Private API
+    the host doesn't have) — for EC2 Macs where iMessage silently drops."""
+    seen = {}
+
+    def _no_get(url, params=None, timeout=None):
+        # server/info probe is fine; an availability probe would be a bug.
+        if "availability" in url:
+            raise AssertionError("force_sms must not probe iMessage availability")
+        return _FakeResp(200, {"status": 200, "data": {"private_api": False}})
+
+    def _fake_post(url, params=None, json=None, timeout=None):
+        assert url.endswith("/message/text")
+        seen["guid"] = json["chatGuid"]
+        seen["method"] = json["method"]
+        return _FakeResp(200, {"status": 200, "data": {"guid": "SMS_direct"}})
+
+    acct = _bb_account()
+    acct.bluebubbles_force_sms = True
+    monkeypatch.setattr(gateway.httpx, "get", _no_get)
+    monkeypatch.setattr(gateway.httpx, "post", _fake_post)
+    monkeypatch.setattr(gateway, "decrypt_secret", lambda s: "pw")
+    guid, code, detail = gateway._bluebubbles_send(acct, "+14805559999", "hi")
+    assert guid == "SMS_direct" and code is None
+    assert seen["guid"] == "SMS;-;+14805559999"
+    assert seen["method"] == "apple-script"  # no private_api -> apple-script
+
+
+def test_bluebubbles_force_sms_does_not_retry_as_imessage(monkeypatch):
+    """A force_sms 'find all handles' failure must NOT retry as iMessage (that
+    retry rescues a flapping availability lookup — irrelevant when SMS is
+    forced and iMessage can't send at all)."""
+    calls = []
+
+    def _fake_post(url, params=None, json=None, timeout=None):
+        calls.append(json.get("service") or json.get("chatGuid"))
+        if url.endswith("/message/text"):
+            return _FakeResp(
+                500, {"status": 500, "error": {"message": "Chat does not exist!"}}
+            )
+        return _FakeResp(
+            500, {"status": 500, "error": {"message": "Failed to find all handles"}}
+        )
+
+    acct = _bb_account()
+    acct.bluebubbles_force_sms = True
+    monkeypatch.setattr(
+        gateway.httpx, "get",
+        lambda url, params=None, timeout=None: _FakeResp(
+            200, {"status": 200, "data": {"private_api": False}}
+        ),
+    )
+    monkeypatch.setattr(gateway.httpx, "post", _fake_post)
+    monkeypatch.setattr(gateway, "decrypt_secret", lambda s: "pw")
+    guid, code, detail = gateway._bluebubbles_send(acct, "+14805559999", "hi")
+    assert guid == "" and code == "500"
+    # message/text (SMS guid) + one chat/new (SMS) only — never an iMessage retry.
+    assert "iMessage" not in calls
+
+
 def test_bluebubbles_non_imessage_number_routes_as_sms(monkeypatch):
     """A number not registered on iMessage is sent via service SMS (green
     bubble through the Mac's Text Message Forwarding), not iMessage."""
