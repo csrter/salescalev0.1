@@ -196,10 +196,22 @@ def _bb_account():
     )
 
 
-def _avail_get(available):
-    """Fake the handle/availability GET the send now does to resolve service."""
+def _avail_get(available, private_api=True):
+    """Fake the GETs the send does before posting: the handle/availability
+    service lookup and the server/info capability probe (send method)."""
 
     def _get(url, params=None, timeout=None):
+        if "server/info" in url:
+            return _FakeResp(
+                200,
+                {
+                    "status": 200,
+                    "data": {
+                        "private_api": private_api,
+                        "helper_connected": private_api,
+                    },
+                },
+            )
         assert "availability" in url
         return _FakeResp(200, {"status": 200, "data": {"available": available}})
 
@@ -286,6 +298,56 @@ def test_bluebubbles_send_surfaces_specific_error_not_generic(monkeypatch):
     monkeypatch.setattr(gateway, "decrypt_secret", lambda s: "pw")
     guid, code, detail = gateway._bluebubbles_send(_bb_account(), "+14805559999", "hi")
     assert guid == "" and code == "500" and detail == "Some other reason"
+
+
+def test_bluebubbles_send_downgrades_method_without_private_api(monkeypatch):
+    """A host whose server/info reports private_api false (e.g. a SIP-locked
+    EC2 Mac, where SIP can never be disabled) must send with method
+    apple-script on BOTH message/text and the chat/new fallback — a
+    hardcoded private-api would fail every send there."""
+    methods = []
+
+    def _fake_post(url, params=None, json=None, timeout=None):
+        methods.append((url.rsplit("/api/v1/", 1)[-1], json["method"]))
+        if url.endswith("/message/text"):
+            return _FakeResp(
+                500,
+                {"status": 500, "message": "Message Send Error",
+                 "error": {"message": "Chat does not exist!"}},
+            )
+        return _FakeResp(200, {"status": 200, "data": {"messages": [{"guid": "AS_guid"}]}})
+
+    monkeypatch.setattr(gateway.httpx, "get", _avail_get(True, private_api=False))
+    monkeypatch.setattr(gateway.httpx, "post", _fake_post)
+    monkeypatch.setattr(gateway, "decrypt_secret", lambda s: "pw")
+    guid, code, detail = gateway._bluebubbles_send(_bb_account(), "+14805559999", "hi")
+    assert guid == "AS_guid" and code is None
+    assert methods == [("message/text", "apple-script"), ("chat/new", "apple-script")]
+
+
+def test_bluebubbles_method_defaults_to_private_api_when_probe_fails(monkeypatch):
+    """A transient failure of the server/info probe must NOT downgrade the
+    proven private-api path (the MacBook relay) — fail open to the
+    historical default."""
+
+    def _get(url, params=None, timeout=None):
+        if "server/info" in url:
+            raise gateway.httpx.ConnectError("boom")
+        assert "availability" in url
+        return _FakeResp(200, {"status": 200, "data": {"available": True}})
+
+    seen = {}
+
+    def _fake_post(url, params=None, json=None, timeout=None):
+        seen["method"] = json["method"]
+        return _FakeResp(200, {"status": 200, "data": {"guid": "OK_guid"}})
+
+    monkeypatch.setattr(gateway.httpx, "get", _get)
+    monkeypatch.setattr(gateway.httpx, "post", _fake_post)
+    monkeypatch.setattr(gateway, "decrypt_secret", lambda s: "pw")
+    guid, code, detail = gateway._bluebubbles_send(_bb_account(), "+14805559999", "hi")
+    assert guid == "OK_guid" and code is None
+    assert seen["method"] == "private-api"
 
 
 def test_verify_credentials_dispatches_bluebubbles(monkeypatch):

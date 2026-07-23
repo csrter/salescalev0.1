@@ -55,6 +55,31 @@ from the Mac to Salescale's public API — the Mac already has a normal
 outbound path to the internet for that, no relay or tunnel needed. See
 "Inbound webhooks" near the end for why, and for the optional exception.
 
+## Live deployments (what production actually runs)
+
+Production reuses the existing Traefik VPS (`2.25.75.95`) — NOT a dedicated
+relay VPS and NOT Caddy. Both relays are Traefik **file-provider** routes in
+`/docker/traefik/dynamic/` on that host (option 1 of "Reusing the existing
+VPS" below); the `Caddyfile` here is reference-only for the dedicated-VPS
+topology. Two relays exist, one per BlueBubbles Mac:
+
+| Hostname | Tunnel port | Mac | Tunnel user | Tunnel job |
+|---|---|---|---|---|
+| `imessage-relay.salescale.lol` | `127.0.0.1:12345` | Carter's MacBook (SIP off, Private API on) | `deploy@` | LaunchAgent `com.salescale.bluebubbles-tunnel` |
+| `imsg.atlasreach.io` | `127.0.0.1:8443` | AWS EC2 Mac `i-0f2a35cae939b4f66` (us-east-2, mac2-m2pro.metal, IP not elastic) | `imsgtunnel@` | LaunchDaemon `/Library/LaunchDaemons/com.salescale.imsgtunnel.plist` (needs explicit `HOME` env — LaunchDaemons don't inherit it) |
+
+EC2 Mac caveats: **SIP cannot be disabled on EC2 Mac instances** (no
+Recovery Mode), so BlueBubbles' Private API is structurally unavailable
+there — `services/sms_send._bluebubbles_method` probes
+`/api/v1/server/info` per send and downgrades to `method: apple-script`
+automatically. The `imsgtunnel` key is restricted to
+`no-agent-forwarding,no-X11-forwarding,no-pty,permitlisten="127.0.0.1:8443"`
+(the plist requests an explicit `-R 127.0.0.1:8443` bind, so `permitlisten`
+matches `127.0.0.1`, not `localhost`). `GatewayPorts` on the VPS is the
+default `no`. Neither relay is IP-allowlisted (see the same-VPS firewall
+note below — on the shared box the ufw rule is inert); BlueBubbles'
+`?password=` auth is the gate.
+
 ## Files in this directory
 
 | File | Runs on | Purpose |

@@ -2706,6 +2706,49 @@ live activation + the entitlement flip, the Outreach module build
       the BlueBubbles Mac are device-side — if they persist, check the Mac
       (Messages signed in, storage, forwarding) or consider Sendblue for
       ops alerts.
+- [x] Second iMessage relay — AWS EC2 Mac + capability-aware send method
+      (2026-07-23): reconciled the prior night's ad-hoc claude.ai session
+      (handoff doc) that stood up BlueBubbles on an EC2 Mac
+      (i-0f2a35cae939b4f66, us-east-2, mac2-m2pro.metal, 18.118.200.183 —
+      NOT elastic; SSH ec2-user@ w/ ~/Desktop/imsg.pem) and, en route, took
+      prod down by installing standalone Caddy on the shared Traefik VPS
+      (resolved that night; Caddy verified stopped+disabled this session).
+      The handoff's "migrate to the repo's port 12345" was WRONG — 12345 is
+      the live MacBook relay; the EC2 Mac kept its own port 8443 and got its
+      own route: /docker/traefik/dynamic/imsg-relay.yml, Host
+      imsg.atlasreach.io → 127.0.0.1:8443 (mirrors the existing file-
+      provider pattern; cert auto-issued; DNS was already pointed;
+      imessage-relay.atlasreach.io per the old Caddyfile points at
+      WordPress.com — unusable). Verified end-to-end: https ping → 401
+      "Missing server password" through Traefik → tunnel → EC2 BlueBubbles.
+      Hardened the ad-hoc leftovers: imsgtunnel authorized_keys was a FULL-
+      SHELL key → now no-agent-forwarding,no-X11-forwarding,no-pty,
+      permitlisten="127.0.0.1:8443" (plist requests an explicit 127.0.0.1
+      bind, so permitlisten matches that string, not "localhost"; backup
+      kept beside it); sshd GatewayPorts clientspecified (their edit)
+      reverted to no (sshd -t validated, reloaded; both tunnels + fresh
+      logins verified after). ADAPTER FIX (the real blocker found): SIP can
+      never be disabled on EC2 Macs → no BlueBubbles Private API, but
+      _bluebubbles_send hardcoded method "private-api" → every send would
+      fail. New _bluebubbles_method probes /api/v1/server/info per send
+      (private_api/helper_connected false → "apple-script", probe failure →
+      private-api, preserving the MacBook path) and threads through
+      message/text + chat/new. Tests 602 (2 new; _avail_get fake now also
+      serves server/info). Docs: README "Live deployments" table (both
+      relays), docker-compose.prod.yml header warns it's NOT what prod runs
+      (docker-compose.traefik.yml is — the handoff's standing question).
+      REMAINING user-side: connect the account in SMS → Accounts (relay URL
+      https://imsg.atlasreach.io + the BlueBubbles server password set in
+      its wizard + the Mac's iMessage handle), point the BlueBubbles webhook
+      at /api/webhooks/imessage/bluebubbles/<account_id>?secret=<token>, and
+      a live send test. OPEN QUESTIONS flagged: (1) the EC2 Mac is signed in
+      with "Carter's personal number" — if that's the same iMessage account
+      as the MacBook relay, two BlueBubbles servers will double-webhook
+      every inbound; (2) apple-script sends to EXISTING chats should work,
+      but chat/new (first cold touch) without Private API is historically
+      limited on modern macOS — needs the live test before pointing
+      campaigns at it; (3) no Text Message Forwarding on the EC2 Mac → green-
+      bubble SMS recipients unreachable from it.
 - [ ] Stripe live activation + entitlement flip (after 12–14, so real
       limits land everywhere in one pass)
 - [ ] Outreach module build (dev-mode) — go-live gated on Meta App

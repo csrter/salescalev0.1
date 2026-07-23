@@ -407,6 +407,29 @@ def _bluebubbles_resolve_service(base: str, pw: str, to_number: str) -> str:
     return "iMessage"
 
 
+def _bluebubbles_method(base: str, pw: str) -> str:
+    """'private-api' when the host Mac's Private API helper is usable, else
+    'apple-script'. EC2 Mac instances can never disable SIP (no Recovery
+    Mode), so the Private API is structurally unavailable there and a
+    hardcoded private-api method would fail every send; BlueBubbles can
+    still send via its AppleScript method on such hosts. Probed per send
+    from /api/v1/server/info; any probe failure keeps the historical
+    default (private-api) rather than downgrading the proven path on a
+    transient blip."""
+    try:
+        resp = httpx.get(
+            f"{base}/api/v1/server/info", params={"password": pw}, timeout=10
+        )
+    except httpx.HTTPError:
+        return "private-api"
+    if resp.status_code // 100 != 2:
+        return "private-api"
+    d = _bb_json(resp).get("data") or {}
+    if d.get("private_api") is False or d.get("helper_connected") is False:
+        return "apple-script"
+    return "private-api"
+
+
 def _bluebubbles_send(
     account: SmsAccount, to_number: str, body: str
 ) -> Tuple[str, Optional[str], Optional[str]]:
@@ -423,11 +446,12 @@ def _bluebubbles_send(
         return "", "config", "No relay URL configured"
     pw = decrypt_secret(account.auth_token_encrypted or "")
     service = _bluebubbles_resolve_service(base, pw, to_number)
+    method = _bluebubbles_method(base, pw)
     data = {
         "chatGuid": f"{service};-;{to_number}",
         "tempGuid": str(uuid.uuid4()),
         "message": body,
-        "method": "private-api",
+        "method": method,
     }
     try:
         resp = httpx.post(
@@ -443,7 +467,9 @@ def _bluebubbles_send(
         d = payload.get("data") or {}
         return d.get("guid") or data["tempGuid"], None, None
     if _bb_chat_missing(resp, payload):
-        result = _bluebubbles_create_chat_send(base, pw, to_number, body, service)
+        result = _bluebubbles_create_chat_send(
+            base, pw, to_number, body, service, method
+        )
     else:
         result = (
             "",
@@ -462,14 +488,21 @@ def _bluebubbles_send(
         and result[1] is not None
         and "find all handles" in (result[2] or "").lower()
     ):
-        retry = _bluebubbles_create_chat_send(base, pw, to_number, body, "iMessage")
+        retry = _bluebubbles_create_chat_send(
+            base, pw, to_number, body, "iMessage", method
+        )
         if retry[1] is None:
             return retry
     return result
 
 
 def _bluebubbles_create_chat_send(
-    base: str, pw: str, to_number: str, body: str, service: str = "iMessage"
+    base: str,
+    pw: str,
+    to_number: str,
+    body: str,
+    service: str = "iMessage",
+    method: str = "private-api",
 ) -> Tuple[str, Optional[str], Optional[str]]:
     """POST {relay}/api/v1/chat/new — creates the conversation and sends the
     first message on the resolved service. An iMessage attempt to a non-iMessage
@@ -479,7 +512,7 @@ def _bluebubbles_create_chat_send(
     data = {
         "addresses": [to_number],
         "message": body,
-        "method": "private-api",
+        "method": method,
         "service": service,
     }
     try:

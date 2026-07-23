@@ -1,3 +1,11 @@
+# NOT what Salescale production runs. The live VPS (2.25.75.95) hosts
+# multiple sites behind a SHARED Traefik that owns ports 80/443 — production
+# uses docker-compose.traefik.yml (labels-based routing). This file is the
+# self-contained single-tenant variant, where its bundled Caddy is the ONLY
+# thing on 80/443. Never start this stack (or any standalone Caddy/nginx) on
+# the shared Traefik box: it fights Traefik for 80/443 and takes every site
+# down (happened live 2026-07-23 — check `docker ps | grep traefik` first).
+#
 # Production stack for a single VPS: backend + frontend + Caddy (TLS
 # termination, automatic Let's Encrypt certs, HTTP->HTTPS redirect).
 #
