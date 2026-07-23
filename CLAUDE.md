@@ -2749,6 +2749,44 @@ live activation + the entitlement flip, the Outreach module build
       limited on modern macOS — needs the live test before pointing
       campaigns at it; (3) no Text Message Forwarding on the EC2 Mac → green-
       bubble SMS recipients unreachable from it.
+      RESOLVED live same session (config + one feature): stood the EC2 relay
+      up end-to-end and MIGRATED the prod BlueBubbles account
+      (5f499095…, +16232967782) onto it — but discovered iMessage SENDING
+      is dead on the EC2 Mac and, worse, returns FAKE SUCCESS. Proven with
+      zero mocks: an iMessage send (even to a known Apple ID
+      salescale@icloud.com) returns a message guid + no API error, but the
+      Messages row lands error=22 / is_sent=0 and NEVER delivers — the
+      backend can't see the async failure (no Private API = fire-and-forget
+      AppleScript, unlike Private API's synchronous confirm). Cause is
+      structural: EC2 Macs can't disable SIP (no Recovery Mode → no
+      csrutil), so no Private API; AND Apple blocks iMessage sends from the
+      datacenter environment (0/N sends ever succeeded). Green-bubble SMS
+      via the Mac's Text Message Forwarding DOES deliver (error=0/is_sent=1,
+      live-verified to a real phone). So iMessage-on-EC2 is not just blocked
+      but dangerous (silent drops). FIX (feature, deployed 69dd975): new
+      per-account SmsAccount.bluebubbles_force_sms (migration b4e9d2f7a1c8,
+      additive false server_default) pins every send to service=SMS and
+      skips the Private-API-dependent availability probe + the SMS→iMessage
+      retry; wired through model, sms_send._bluebubbles_send, schema/API,
+      the connect-dialog Switch ("Send as SMS only (no iMessage)"), api.ts,
+      tests (604, +2). Set TRUE on the prod account; a real send through the
+      production path DELIVERED as SMS. Inbound webhook (STOP) reachable
+      (200). NOT re-armed: all parked SMS enrollments belong to paused/
+      archived campaigns (CPA 31, CPA OUTREACH 28, hvac outreach archived
+      94) — reactivating is the user's call and re-arms them automatically.
+      Setup hardened same session: BlueBubbles auto-start LaunchAgent
+      (com.bluebubbles.server, KeepAlive — a reboot had left it dead at the
+      login screen); webhook row installed in the EC2 BlueBubbles config.
+      Open question (2) above is ANSWERED — chat/new works via apple-script
+      for SMS; iMessage is the unusable path, not chat/new. For true
+      blue-bubble iMessage the MacBook relay or Sendblue remains the route;
+      the MacBook account was migrated OFF (relay now imsg.atlasreach.io).
+      OPEN: the EC2 Mac's iMessage identity is carterbruns@gmail.com (the
+      user's PERSONAL Apple ID) with +16232967782 as its active number —
+      fine for green-bubble SMS, but a dedicated Apple ID would be cleaner
+      if iMessage is ever revisited. USER-SIDE recommended: set the EC2 Mac
+      to auto-login (a reboot otherwise strands it at the login screen,
+      killing the sender until someone screen-shares in).
 - [ ] Stripe live activation + entitlement flip (after 12–14, so real
       limits land everywhere in one pass)
 - [ ] Outreach module build (dev-mode) — go-live gated on Meta App
