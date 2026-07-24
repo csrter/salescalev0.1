@@ -1633,7 +1633,10 @@ export function CsvImportDialog({
     reader.readAsText(f);
   };
 
-  const BATCH_SIZE = 500;
+  // Wide rows (every column populated + custom fields) made a 500-row batch
+  // exceed the API's request-body cap; 200 keeps a fully-populated batch
+  // comfortably under it while still importing a few thousand rows quickly.
+  const BATCH_SIZE = 200;
 
   const submit = async () => {
     if (!parsed) return;

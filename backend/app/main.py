@@ -123,6 +123,31 @@ async def _catch_unhandled_exceptions(request, call_next):
         )
 
 
+# Reject oversized bodies up-front (defense-in-depth vs. huge-payload DoS on the
+# public capture endpoints + any JSON-dict field). Sized to comfortably fit a
+# full CSV-import batch of wide rows (the frontend batches 200 at a time, and a
+# 200-row batch with every column populated lands well under this) — at 512KB a
+# legitimate 500-row import 413'd, which is what surfaced this.
+_MAX_BODY_BYTES = 2 * 1024 * 1024
+
+
+# Registered HERE, BEFORE app.add_middleware(CORSMiddleware, ...) below, for the
+# same reason spelled out in _catch_unhandled above: middleware added later is
+# OUTERMOST in Starlette, so a 413 built by a middleware registered after CORS
+# never flows back through CORSMiddleware and reaches the browser with no
+# Access-Control-Allow-Origin — reported as an opaque "NetworkError when
+# attempting to fetch resource" rather than this response's actual message.
+# Confirmed live on a 600-row CSV import.
+@app.middleware("http")
+async def _limit_body_size(request, call_next):
+    from fastapi.responses import JSONResponse
+
+    cl = request.headers.get("content-length")
+    if cl and cl.isdigit() and int(cl) > _MAX_BODY_BYTES:
+        return JSONResponse({"detail": "Request body too large"}, status_code=413)
+    return await call_next(request)
+
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"] if _settings.desktop_mode else _settings.frontend_origins(),
@@ -132,20 +157,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-# Reject oversized bodies up-front (defense-in-depth vs. huge-payload DoS on the
-# public capture endpoints + any JSON-dict field). Generous for this API.
-_MAX_BODY_BYTES = 512 * 1024
-
-
-@app.middleware("http")
-async def _limit_body_size(request, call_next):
-    from fastapi.responses import JSONResponse
-
-    cl = request.headers.get("content-length")
-    if cl and cl.isdigit() and int(cl) > _MAX_BODY_BYTES:
-        return JSONResponse({"detail": "Request body too large"}, status_code=413)
-    return await call_next(request)
 
 # Routers left OPEN so a 2FA-gated user can still authenticate, enroll, and
 # manage their session/policy: auth, social_auth, mfa, orgs, admin (super-admin

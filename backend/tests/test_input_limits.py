@@ -3,8 +3,13 @@
 
 def test_oversized_body_is_rejected_413(api):
     # The body-size middleware runs before routing/validation, so a huge body is
-    # rejected regardless of the target route.
-    big = b'{"client_id":"x","session_key":"y","junk":"' + b"A" * 600_000 + b'"}'
+    # rejected regardless of the target route. Sized off the constant rather
+    # than a literal — the cap was raised from 512KB to fit a full CSV-import
+    # batch, and a hardcoded payload silently stops testing the boundary.
+    from app.main import _MAX_BODY_BYTES
+
+    junk = b"A" * (_MAX_BODY_BYTES + 1024)
+    big = b'{"client_id":"x","session_key":"y","junk":"' + junk + b'"}'
     r = api.post(
         "/api/track/landing", content=big, headers={"Content-Type": "application/json"}
     )
