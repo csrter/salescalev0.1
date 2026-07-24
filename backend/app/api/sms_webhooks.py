@@ -196,8 +196,9 @@ def _process_inbound(
             row.step_id = linkage["step_id"]
         # Forward a genuine lead reply to the operator's phone (best-effort).
         # STOP is handled above and not forwarded (the lead opted out — there's
-        # nothing to reply to).
-        if contacts:
+        # nothing to reply to); an automated out-of-office auto-responder isn't
+        # a real reply either, so it's not forwarded (no operator ping for bots).
+        if contacts and not sms_campaigns.is_auto_reply(body):
             lead_relay.forward_to_operator(db, account, contacts[0], body)
 
 

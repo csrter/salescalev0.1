@@ -2813,6 +2813,92 @@ def test_reply_branch_keyword_word_boundaries():
     assert sms_campaigns.match_branch_keywords(step, "") is None
 
 
+def test_is_auto_reply_detects_out_of_office_but_not_real_replies():
+    """The auto-responder detector classifies unattended out-of-office texts but
+    never a short genuine reply (STRONG phrase alone, or 2+ MEDIUM phrases)."""
+    climate_pro = (
+        "Hello, Thank you for reaching out to us. You have reached us outside of "
+        "normal Office hours. If this is a service emergency, please give us a "
+        "call at 480-600-0362. We have a technician who is on call after hours. "
+        "Climate Pro LLC"
+    )
+    assert sms_campaigns.is_auto_reply(climate_pro) is True
+    assert sms_campaigns.is_auto_reply("We are currently closed, back during business hours") is True
+    assert sms_campaigns.is_auto_reply("This is an automated response — do not reply") is True
+    # genuine replies must NOT be misclassified
+    assert sms_campaigns.is_auto_reply("Yes, interested!") is False
+    assert sms_campaigns.is_auto_reply("how much?") is False
+    assert sms_campaigns.is_auto_reply("call me") is False
+    # a single ambiguous MEDIUM phrase (an interested question) is not enough
+    assert sms_campaigns.is_auto_reply("do you work after hours?") is False
+    assert sms_campaigns.is_auto_reply("") is False
+
+
+def test_auto_reply_leaves_lead_awaiting_and_sends_nothing(
+    sc_org, api, twilio_creds_ok, captured_sends
+):
+    """A lead parked AWAITING a reply that answers with an automated
+    out-of-office message stays awaiting (no send, no advance, no exit) so the
+    sequence waits for a real human; a subsequent genuine reply then routes
+    normally."""
+    acct = _mk_account(sc_org, api, from_number="+14805550790")
+    camp = _mk_campaign(sc_org, api, acct["id"], **_ALWAYS)
+    contact = _mk_contact(sc_org, api, mobile_phone="4805557190", first="Cam")
+    _set_steps(
+        sc_org,
+        api,
+        camp["id"],
+        [
+            {"position": 1, "body": "First touch"},
+            {
+                "position": 2,
+                "trigger": "reply",
+                "body": "Thanks {{first_name}}!",
+                "branches": [
+                    {"label": "Yes", "keywords": ["yes"], "body": "Great, {{first_name}}!"}
+                ],
+            },
+        ],
+    )
+    assert _activate(sc_org, api, camp["id"]).status_code == 200
+    _enroll(sc_org, api, camp["id"], [contact])
+    _tick()  # sends step 1, parks awaiting the reply
+    assert len(captured_sends) == 1
+    e = _get_enrollment(camp["id"], contact)
+    awaiting_before = e.awaiting_reply_since
+    assert awaiting_before is not None and e.current_position == 2
+
+    # An automated out-of-office reply must NOT advance/exit/send.
+    r = _inbound_reply(
+        api,
+        acct,
+        "+14805557190",
+        "Thank you for reaching out. We are outside of normal office hours; a "
+        "technician is on call after hours.",
+        sid="SM_auto_1",
+    )
+    assert r.status_code == 200, r.text
+    e = _get_enrollment(camp["id"], contact)
+    assert e.status == "active"
+    assert e.awaiting_reply_since == awaiting_before  # still awaiting, untouched
+    assert e.next_run_at is None
+    assert e.last_reply_body is None  # the bot text was NOT recorded as the reply
+    _tick()
+    assert len(captured_sends) == 1  # nothing pitched at the bot
+
+    # A real human reply afterwards routes normally.
+    r = _inbound_reply(api, acct, "+14805557190", "yes", sid="SM_auto_2")
+    assert r.status_code == 200
+    e = _get_enrollment(camp["id"], contact)
+    assert e.awaiting_reply_since is None
+    assert e.last_reply_body == "yes"
+    assert e.next_run_at is not None
+    _force_due(e.id)
+    _tick()
+    assert len(captured_sends) == 2
+    assert "Great, Cam!" in captured_sends[-1]["body"]
+
+
 def test_ai_branching_classifies_when_keywords_miss(
     sc_org, api, twilio_creds_ok, captured_sends, monkeypatch
 ):

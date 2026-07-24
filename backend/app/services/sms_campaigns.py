@@ -693,6 +693,68 @@ def _end(enrollment: SmsEnrollment, status: str, reason: Optional[str] = None) -
 # --- inbound reply routing ----------------------------------------------------
 
 
+# --- Automated out-of-office / auto-responder detection ---
+#
+# Businesses reply to outreach with an unattended auto-responder ("Thank you
+# for reaching out. You've reached us outside of normal office hours. For a
+# service emergency call ... a technician is on call after hours."). That is
+# NOT a human answer, so the sequence must not treat it as one — no branch
+# fires, no step advances, the lead keeps waiting for a real person.
+#
+# STRONG phrases are distinctive enough to classify on their own; MEDIUM
+# phrases are individually ambiguous (an interested lead might ask "do you
+# work after hours?"), so two or more are required. Keeps a genuine one-liner
+# ("yes", "how much?", "call me") from ever being mistaken for an auto-reply.
+_AUTOREPLY_STRONG = (
+    "out of office",
+    "out-of-office",
+    "outside of normal",
+    "outside our normal",
+    "outside of our normal",
+    "outside of office hours",
+    "outside our office",
+    "outside of business hours",
+    "reached us outside",
+    "automated response",
+    "automated message",
+    "automatic reply",
+    "auto-reply",
+    "auto reply",
+    "this is an automated",
+    "normal business hours",
+    "regular business hours",
+    "normal office hours",
+    "do not reply",
+    "unmonitored",
+)
+_AUTOREPLY_MEDIUM = (
+    "after hours",
+    "after-hours",
+    "on call",
+    "on-call",
+    "service emergency",
+    "currently closed",
+    "we are closed",
+    "we're closed",
+    "office hours",
+    "business hours",
+    "get back to you",
+    "reaching out to us",
+)
+
+
+def is_auto_reply(text: str) -> bool:
+    """True when a reply reads like an automated out-of-office / auto-responder
+    rather than a human answer. Any STRONG phrase classifies; MEDIUM phrases
+    need two, so a short genuine reply is never misread."""
+    t = (text or "").lower()
+    if not t:
+        return False
+    if any(p in t for p in _AUTOREPLY_STRONG):
+        return True
+    return sum(1 for p in _AUTOREPLY_MEDIUM if p in t) >= 2
+
+
 def handle_reply(
     db: Session,
     contact: Contact,
@@ -740,13 +802,22 @@ def handle_reply(
             "enrollment_id": prompted.enrollment_id,
             "step_id": prompted.step_id,
         }
-        # Record the reply on that enrollment even when it's no longer active
-        # (tracking only — a completed/exited enrollment is never resurrected).
-        if prompted.enrollment_id is not None:
-            attributed = db.get(SmsEnrollment, prompted.enrollment_id)
-            if attributed is not None and attributed.status != SMS_ENROLL_ACTIVE:
-                attributed.replied_at = attributed.replied_at or now
-                attributed.last_reply_at = now
+
+    # Auto-reply guard: an automated out-of-office / auto-responder text is not
+    # a human answer. Make NO enrollment changes — a lead awaiting a reply keeps
+    # awaiting, a lead mid-drip keeps dripping — so the sequence waits for a REAL
+    # person to respond and nothing is pitched at a bot. The inbound row is still
+    # recorded + attributed by the caller; we only decline to act on it here.
+    if is_auto_reply(reply_body):
+        return linkage
+
+    # Record the reply on the attributed enrollment even when it's no longer
+    # active (tracking only — a completed/exited enrollment is never resurrected).
+    if prompted is not None and prompted.enrollment_id is not None:
+        attributed = db.get(SmsEnrollment, prompted.enrollment_id)
+        if attributed is not None and attributed.status != SMS_ENROLL_ACTIVE:
+            attributed.replied_at = attributed.replied_at or now
+            attributed.last_reply_at = now
 
     enrollments = (
         db.execute(
