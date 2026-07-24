@@ -485,13 +485,19 @@ def enroll_contacts(
     campaign: SmsCampaign,
     contact_ids: List[str],
     enrolled_by: Optional[str] = None,
+    source: Optional[str] = None,
+    source_detail: Optional[str] = None,
 ) -> dict:
     """Enroll a set of CRM contacts into a campaign. Every contact is routed
     through the SAME shared gate every SMS-send feature uses
     (sms_consent.sendable) so TCPA/isolation behaviour is identical wherever
     a send is attempted. Returns {enrolled, skipped: [{contact_id, reason}]}.
     Reasons: not_found | duplicate | no_number | no_consent | suppressed |
-    already (already enrolled in this campaign)."""
+    already (already enrolled in this campaign).
+
+    source/source_detail record HOW the contact entered ("manual" | "list" |
+    "client" | "auto_new_lead" + list name / lead capture source) — the
+    audience-attribution trail surfaced in the campaign's Audience tab."""
     org_id = campaign.organization_id
     seen: set = set()
     resolved: List[Contact] = []
@@ -532,6 +538,8 @@ def enroll_contacts(
                 current_position=1,
                 next_run_at=now,
                 enrolled_by=enrolled_by,
+                source=source,
+                source_detail=(source_detail or None) and source_detail[:120],
             )
         )
         enrolled += 1

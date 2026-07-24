@@ -2787,6 +2787,46 @@ live activation + the entitlement flip, the Outreach module build
       if iMessage is ever revisited. USER-SIDE recommended: set the EC2 Mac
       to auto-login (a reboot otherwise strands it at the login screen,
       killing the sender until someone screen-shares in).
+- [x] Import-into-list + SMS enrollment source tracking (2026-07-24): the
+      list → import → campaign flow is now one motion. (1) CSV/JSON import
+      gains a target list: CsvImportIn.list_id / new_list_name (create-or-
+      reuse by exact name per client, so batched requests and re-imports
+      converge on ONE list — mirrors the custom-field reuse guard); every
+      touched row (created AND matched, unchanged included — being in the
+      file is the membership signal) joins the list idempotently after the
+      row loop; cross-client list_id → 400; response + audit diff carry
+      {list: {id, name, added}}. Import dialog (crm_custom.tsx) gained an
+      "Add imported leads to a list" select (No list / existing / + New
+      list…) with the same batch convergence (batch 1 creates by name,
+      later batches send the returned id), a result line pointing at the
+      campaign audience picker, and a name-required guard. (2) TRACKING:
+      SmsEnrollment.source + source_detail (migration f4b7e2a9c815,
+      additive nullable; plain strings, NO FK — attribution must survive
+      list rename/delete): enroll endpoint stamps "list"+list name /
+      "client"+client name / "manual"; lead_autoenroll stamps
+      "auto_new_lead"+the contact's own capture source; serialized on
+      /enrollments and shown as a sortable "Source" column in the campaign
+      Audience tab ("List · Spring Cohort", "Auto · landing_page_webhook";
+      pre-tracking rows render "—"). Tests 604 → 614 suite-wide (import-
+      into-list + re-import idempotency + cross-client 400 + source-
+      attribution assertions in test_crm_lists.py). tsc + vite build clean.
+      Verified live end-to-end on alt2: real CSV upload → new list "SMS
+      Spring Cohort" (Created 3 · Added 3), list appeared in the SMS enroll
+      dialog's Audience select as "SMS Spring Cohort (3)", "Enroll list
+      (3)" → receipt, Audience tab showed all 3 as "List · SMS Spring
+      Cohort" / active; zero console errors. NOTE (pre-existing, not this
+      change): running the {test_sms_outreach, test_crm_contacts,
+      test_imessage_outreach} subset together flakes 2 phone-match CSV
+      tests — full-suite and per-file runs are green, reproduced on the
+      untouched tree. DEPLOYED to production 2026-07-24 (14697f0), web +
+      desktop: git archive → VPS, backend/frontend rebuilt/recreated,
+      migration f4b7e2a9c815 applied to the live Supabase DB (alembic
+      current = f4b7e2a9c815 head), /api/health ok, SMS routes auth-gated,
+      app 200; desktop PyInstaller backend + DMG rebuilt (155MB, binary
+      hash-matched, assets in asar), installed to /Applications,
+      launch-verified (own backend bound :8000, health 200, boot alembic
+      no-op'd). Follow-up candidate: the email module's enrollments don't
+      carry source attribution yet — same two-column pattern applies.
 - [ ] Stripe live activation + entitlement flip (after 12–14, so real
       limits land everywhere in one pass)
 - [ ] Outreach module build (dev-mode) — go-live gated on Meta App

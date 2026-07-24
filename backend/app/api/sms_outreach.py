@@ -918,6 +918,7 @@ def enroll_campaign(
                 )
             ).scalars()
         )
+        source, source_detail = "list", contact_list.name
     elif body.client_id:
         client = _client_or_404(db, scope, body.client_id)
         contact_ids = [
@@ -929,8 +930,10 @@ def enroll_campaign(
                 )
             ).all()
         ]
+        source, source_detail = "client", client.name
     elif body.contact_ids:
         contact_ids = body.contact_ids
+        source, source_detail = "manual", None
     else:
         raise HTTPException(422, "Provide contact_ids, client_id, or list_id")
     # >500 members enroll in slices through the same function, merged into
@@ -938,7 +941,12 @@ def enroll_campaign(
     result = {"enrolled": 0, "skipped": []}
     for i in range(0, len(contact_ids), 500):
         chunk = sms_campaigns.enroll_contacts(
-            db, campaign, contact_ids[i : i + 500], enrolled_by=user.id
+            db,
+            campaign,
+            contact_ids[i : i + 500],
+            enrolled_by=user.id,
+            source=source,
+            source_detail=source_detail,
         )
         result["enrolled"] += chunk["enrolled"]
         result["skipped"].extend(chunk["skipped"])
@@ -1036,6 +1044,8 @@ def list_enrollments(
             "awaiting_reply": e.awaiting_reply_since is not None,
             "last_reply_at": e.last_reply_at.isoformat() if e.last_reply_at else None,
             "last_reply_body": e.last_reply_body,
+            "source": e.source,
+            "source_detail": e.source_detail,
             "created_at": e.created_at.isoformat(),
             "contact": _contact_stub(contacts.get(e.contact_id)),
         }

@@ -123,6 +123,26 @@ const contactLabel = (c: {
   c.phone ||
   "Unnamed contact";
 
+/** Human label for how an enrollment entered the campaign (Audience tab
+ * "Source" column). Pre-tracking rows have no source and render "—". */
+const enrollmentSourceLabel = (e: {
+  source: string | null;
+  source_detail: string | null;
+}): string => {
+  switch (e.source) {
+    case "list":
+      return e.source_detail ? `List · ${e.source_detail}` : "List";
+    case "client":
+      return e.source_detail ? `All leads · ${e.source_detail}` : "All client leads";
+    case "auto_new_lead":
+      return e.source_detail ? `Auto · ${e.source_detail}` : "Auto (new lead)";
+    case "manual":
+      return "Manual";
+    default:
+      return "—";
+  }
+};
+
 /** Opt-out red line — a rate at or above this reads as danger, mirroring the
  * email module's bounce red line. */
 const OPT_OUT_RED_LINE = 0.05;
@@ -2104,6 +2124,12 @@ function AudienceTab({
       sortValue: (e) => contactLabel(e.contact),
     },
     { key: "company", header: "Company", render: (e) => e.contact.company_name || "—" },
+    {
+      key: "source",
+      header: "Source",
+      render: (e) => enrollmentSourceLabel(e),
+      sortValue: (e) => enrollmentSourceLabel(e),
+    },
     {
       key: "status",
       header: "Status",

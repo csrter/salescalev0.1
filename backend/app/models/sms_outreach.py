@@ -300,6 +300,12 @@ class SmsEnrollment(Base):
     last_reply_at: Mapped[Optional[dt.datetime]] = mapped_column(DateTime(timezone=True))
     last_reply_body: Mapped[Optional[str]] = mapped_column(Text)
     enrolled_by: Mapped[Optional[str]] = mapped_column(String(36))
+    # How the contact entered the campaign — "manual" | "list" | "client" |
+    # "auto_new_lead" — with a human-readable detail (list name at enroll time,
+    # or the lead's own capture source for auto-enrolls). Plain strings by
+    # design: attribution must survive list rename/delete.
+    source: Mapped[Optional[str]] = mapped_column(String(30))
+    source_detail: Mapped[Optional[str]] = mapped_column(String(120))
     ended_at: Mapped[Optional[dt.datetime]] = mapped_column(DateTime(timezone=True))
     # Cache: step_id -> generated snippet text (mirrors EmailEnrollment.ai_snippets)
     # so re-processing an enrollment never re-bills the AI provider.

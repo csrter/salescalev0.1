@@ -52,7 +52,15 @@ def auto_enroll_new_lead(db: Session, client: Client, contact: Contact) -> None:
             .all()
         )
         for campaign in campaigns:
-            result = sms_campaigns.enroll_contacts(db, campaign, [contact.id])
+            result = sms_campaigns.enroll_contacts(
+                db,
+                campaign,
+                [contact.id],
+                source="auto_new_lead",
+                # The lead's own capture source (landing_page_webhook, meta
+                # lead form, …) — the attribution the Audience tab shows.
+                source_detail=contact.source,
+            )
             if result["enrolled"]:
                 log.info(
                     "auto-enrolled lead %s into sms campaign %s (client %s)",

@@ -2194,6 +2194,10 @@ export interface SmsEnrollment {
   awaiting_reply: boolean;
   last_reply_at: string | null;
   last_reply_body: string | null;
+  /** How the contact entered: "manual" | "list" | "client" | "auto_new_lead". */
+  source: string | null;
+  /** List name at enroll time, or the lead's capture source for auto-enrolls. */
+  source_detail: string | null;
   created_at: string;
 }
 

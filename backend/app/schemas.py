@@ -1044,6 +1044,13 @@ class CsvImportIn(BaseModel):
     # consent record (source="csv_import:website_attested"). A per-column
     # "sms_opt_in" mapping (truthy values) handles mixed files instead.
     sms_opt_in_all: bool = False
+    # Add every imported row's contact (created AND matched) to a contact
+    # list, ready to select as an outreach-campaign audience. Either an
+    # existing list (must belong to the same client) or a name to create —
+    # new_list_name reuses an existing list with that exact name, so batched
+    # requests and re-imports converge on one list instead of duplicating.
+    list_id: Optional[str] = None
+    new_list_name: Optional[str] = Field(default=None, max_length=100)
 
 
 class VerifyContactsIn(BaseModel):

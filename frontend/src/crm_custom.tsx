@@ -18,8 +18,10 @@ import {
   getSession,
   createResearchField,
   deleteResearchField,
+  listContactLists,
   listResearchFields,
   updateResearchField,
+  type ContactList,
   type ResearchFieldDef,
 } from "./api";
 import type { Column } from "./components/DataTable";
@@ -1498,6 +1500,7 @@ interface ImportResult {
   created_fields: CreatedFieldOut[];
   skipped_fields: { column: string; reason: string }[];
   verification_queued: boolean;
+  list: { id: string; name: string; added: number } | null;
 }
 
 export function CsvImportDialog({
@@ -1527,6 +1530,19 @@ export function CsvImportDialog({
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
   const [result, setResult] = useState<ImportResult | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Import-into-list: an existing list id, "__new__" (+ name), or "none".
+  const [lists, setLists] = useState<ContactList[]>([]);
+  const [listChoice, setListChoice] = useState<string>("none");
+  const [newListName, setNewListName] = useState("");
+  useEffect(() => {
+    let alive = true;
+    listContactLists(clientId)
+      .then((l) => alive && setLists(l))
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [clientId]);
 
   // Automap must match against the CURRENT field list, not a parent prop that
   // may be stale — e.g. importing a file that creates fields, then importing
@@ -1660,6 +1676,10 @@ export function CsvImportDialog({
 
   const submit = async () => {
     if (!parsed) return;
+    if (listChoice === "__new__" && !newListName.trim()) {
+      setError("Name the new list first (or choose “No list”).");
+      return;
+    }
     const rows = parsed.rows;
     const new_fields = parsed.headers
       .filter((h) => mapping[h] === "new")
@@ -1682,10 +1702,16 @@ export function CsvImportDialog({
       created_fields: [],
       skipped_fields: [],
       verification_queued: false,
+      list: null,
     };
     // Batch 1 carries new_fields; later batches reuse the returned custom-field
     // keys by rewriting each new-field column to its "custom:<key>" mapping.
     let currentMapping: Record<string, MappingTarget> = { ...mapping };
+    // Same convergence for the target list: batch 1 may create it by name;
+    // later batches address it by the id the server returned.
+    let listId: string | null =
+      listChoice !== "none" && listChoice !== "__new__" ? listChoice : null;
+    let sendNewListName = listChoice === "__new__" ? newListName.trim() : null;
 
     try {
       let start = 0;
@@ -1705,6 +1731,8 @@ export function CsvImportDialog({
             new_fields: isFirst ? new_fields : [],
             verify,
             sms_opt_in_all: smsOptInAll,
+            list_id: listId,
+            new_list_name: listId ? null : sendNewListName,
           }),
         });
         agg.imported += r.imported ?? 0;
@@ -1722,6 +1750,13 @@ export function CsvImportDialog({
         if (isFirst && r.created_fields?.length) {
           currentMapping = { ...currentMapping };
           for (const cf of r.created_fields) currentMapping[cf.column] = `custom:${cf.key}`;
+        }
+        if (r.list) {
+          listId = r.list.id;
+          sendNewListName = null;
+          agg.list = agg.list
+            ? { ...r.list, added: agg.list.added + r.list.added }
+            : r.list;
         }
         start = end;
       }
@@ -1936,6 +1971,39 @@ export function CsvImportDialog({
             />
             <span>Verify email addresses after import (uses your monthly quota)</span>
           </label>
+          <div className="crm-form-actions" style={{ marginTop: "0.5rem", alignItems: "center", flexWrap: "wrap" }}>
+            <label className="crm-muted" htmlFor="csv-import-list">
+              Add imported leads to a list
+            </label>
+            <select
+              id="csv-import-list"
+              value={listChoice}
+              onChange={(e) => setListChoice(e.target.value)}
+            >
+              <option value="none">No list</option>
+              {lists.map((l) => (
+                <option key={l.id} value={l.id}>
+                  {l.name}
+                </option>
+              ))}
+              <option value="__new__">+ New list…</option>
+            </select>
+            {listChoice === "__new__" && (
+              <input
+                aria-label="New list name"
+                placeholder="List name"
+                maxLength={100}
+                value={newListName}
+                onChange={(e) => setNewListName(e.target.value)}
+              />
+            )}
+            {listChoice !== "none" && (
+              <span className="crm-muted">
+                Select this list as the audience when enrolling an SMS or email
+                campaign.
+              </span>
+            )}
+          </div>
           {busy && progress && (
             <p className="crm-muted" aria-live="polite">
               Importing… {progress.done.toLocaleString()} of{" "}
@@ -1969,6 +2037,13 @@ export function CsvImportDialog({
           </Alert>
           {result.verification_queued && (
             <p className="crm-muted">Email verification is running in the background.</p>
+          )}
+          {result.list && (
+            <p className="crm-muted">
+              Added <strong>{result.list.added}</strong> lead(s) to list{" "}
+              <strong>“{result.list.name}”</strong> — pick it as the audience when
+              enrolling an SMS or email campaign.
+            </p>
           )}
           {result.created_fields.length > 0 && (
             <p className="crm-muted">

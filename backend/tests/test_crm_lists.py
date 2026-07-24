@@ -359,6 +359,107 @@ def test_enroll_by_list_sms(lc_org, api, monkeypatch):
     assert r.status_code == 200, r.text
     assert r.json()["enrolled"] == 2
 
+    # Source attribution: list-enrolled rows carry the list's name; a manual
+    # contact_ids enroll on the same campaign stamps "manual".
+    c3 = _mk_contact(
+        lc_org, api, first="Texted3", mobile_phone="4805557103", sms_opt_in=True
+    )
+    r = api.post(
+        f"/api/sms/campaigns/{camp['id']}/enroll",
+        json={"contact_ids": [c3]},
+        headers=lc_org["headers"],
+    )
+    assert r.json()["enrolled"] == 1
+    rows = api.get(
+        f"/api/sms/campaigns/{camp['id']}/enrollments", headers=lc_org["headers"]
+    ).json()
+    by_contact = {e["contact_id"]: e for e in rows}
+    assert by_contact[c1]["source"] == "list"
+    assert by_contact[c1]["source_detail"] == "SMS Enroll List"
+    assert by_contact[c2]["source"] == "list"
+    assert by_contact[c3]["source"] == "manual"
+    assert by_contact[c3]["source_detail"] is None
+
+
+# --- CSV import into a list ---------------------------------------------------
+
+
+def _import_rows(lc_org, api, rows, **extra):
+    payload = {
+        "client_id": lc_org["client"],
+        "mapping": {"Name": "full_name", "Phone": "phone", "Email": "email"},
+        "rows": rows,
+        "mode": "create_or_update",
+    }
+    payload.update(extra)
+    r = api.post("/api/crm/contacts/import", json=payload, headers=lc_org["headers"])
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+def test_csv_import_into_new_list_and_reimport_idempotent(lc_org, api):
+    rows = [
+        {"Name": "Imp One", "Phone": "4805558201", "Email": "imp1@listsimport.com"},
+        {"Name": "Imp Two", "Phone": "4805558202", "Email": "imp2@listsimport.com"},
+    ]
+    out = _import_rows(lc_org, api, rows, new_list_name="Imported Cohort")
+    assert out["created"] == 2
+    assert out["list"] is not None
+    assert out["list"]["name"] == "Imported Cohort"
+    assert out["list"]["added"] == 2
+
+    lists = api.get(
+        f"/api/crm/lists?client_id={lc_org['client']}", headers=lc_org["headers"]
+    ).json()
+    cohort = [l for l in lists if l["name"] == "Imported Cohort"]
+    assert len(cohort) == 1
+    assert cohort[0]["member_count"] == 2
+
+    # Re-import the same file into the same (by-name) list: contacts match
+    # instead of duplicating, membership doesn't double, no second list.
+    out2 = _import_rows(lc_org, api, rows, new_list_name="Imported Cohort")
+    assert out2["created"] == 0
+    assert out2["unchanged"] == 2
+    assert out2["list"]["id"] == out["list"]["id"]
+    assert out2["list"]["added"] == 0
+    lists = api.get(
+        f"/api/crm/lists?client_id={lc_org['client']}", headers=lc_org["headers"]
+    ).json()
+    cohort = [l for l in lists if l["name"] == "Imported Cohort"]
+    assert len(cohort) == 1
+    assert cohort[0]["member_count"] == 2
+
+    # Importing by list_id (the batched-request path) also adds only new rows.
+    rows3 = rows + [
+        {"Name": "Imp Three", "Phone": "4805558203", "Email": "imp3@listsimport.com"}
+    ]
+    out3 = _import_rows(lc_org, api, rows3, list_id=out["list"]["id"])
+    assert out3["created"] == 1
+    assert out3["list"]["added"] == 1
+
+
+def test_csv_import_list_from_other_client_400(lc_org, api):
+    other_client = api.post(
+        "/api/clients", json={"name": "Lists Other Client"}, headers=lc_org["headers"]
+    ).json()["id"]
+    other_list = api.post(
+        "/api/crm/lists",
+        json={"client_id": other_client, "name": "Wrong Client List"},
+        headers=lc_org["headers"],
+    ).json()
+    r = api.post(
+        "/api/crm/contacts/import",
+        json={
+            "client_id": lc_org["client"],
+            "mapping": {"Name": "full_name"},
+            "rows": [{"Name": "Cross Client"}],
+            "list_id": other_list["id"],
+        },
+        headers=lc_org["headers"],
+    )
+    assert r.status_code == 400
+    assert "different client" in r.json()["detail"]
+
 
 # --- org-default SMS opt-in ----------------------------------------------------
 

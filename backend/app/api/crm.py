@@ -846,6 +846,30 @@ def import_contacts(
     client = _client_for(db, scope, body.client_id)
     org = db.get(Organization, scope.organization_id)
 
+    # 0) Resolve the target list (import-into-list): an explicit list must
+    # belong to this client; a new_list_name reuses an existing same-named
+    # list (batched requests / re-imports converge on one list) or creates it.
+    target_list: Optional[ContactList] = None
+    if body.new_list_name and body.new_list_name.strip():
+        list_name = body.new_list_name.strip()
+        target_list = db.execute(
+            select(ContactList).where(
+                ContactList.client_id == client.id, ContactList.name == list_name
+            )
+        ).scalar_one_or_none()
+        if target_list is None:
+            target_list = ContactList(
+                organization_id=client.organization_id,
+                client_id=client.id,
+                name=list_name,
+            )
+            db.add(target_list)
+            db.flush()
+    elif body.list_id:
+        target_list = scope.get_or_404(db, ContactList, body.list_id)
+        if target_list.client_id != client.id:
+            raise HTTPException(400, "That list belongs to a different client")
+
     # 1) Create inline-defined fields first, so their columns can map to them.
     # Hitting the custom-field cap soft-skips that column (recorded in
     # skipped_fields) instead of aborting the whole import with a 402.
@@ -954,6 +978,7 @@ def import_contacts(
     skipped = 0
     failed: List[dict] = []
     created_contacts: List[Contact] = []
+    touched_ids: List[str] = []  # created + matched rows -> list membership
     company_cache: Dict[str, Optional[str]] = {}
 
     def _resolve_company(company_name: str) -> Optional[str]:
@@ -1143,6 +1168,10 @@ def import_contacts(
                         updated += 1
                     else:
                         unchanged += 1
+            # Row committed to its savepoint — it belongs in the target list
+            # (matched-but-unchanged rows included: being in the file is the
+            # membership signal, not whether any field changed).
+            touched_ids.append(contact.id)
         except custom_fields_svc.CustomFieldError as e:
             failed.append({"row": idx, "error": str(e)})
             continue
@@ -1152,6 +1181,31 @@ def import_contacts(
                 {"row": idx, "error": f"could not import this row ({type(e).__name__})"}
             )
             continue
+
+    # 4) List membership for every touched row — idempotent (existing members
+    # skipped), so re-importing a file into the same list never duplicates.
+    added_to_list = 0
+    if target_list is not None and touched_ids:
+        unique_ids = list(dict.fromkeys(touched_ids))
+        existing_members = set(
+            db.execute(
+                select(ContactListMember.contact_id).where(
+                    ContactListMember.list_id == target_list.id,
+                    ContactListMember.contact_id.in_(unique_ids),
+                )
+            ).scalars()
+        )
+        for cid in unique_ids:
+            if cid in existing_members:
+                continue
+            db.add(
+                ContactListMember(
+                    organization_id=client.organization_id,
+                    list_id=target_list.id,
+                    contact_id=cid,
+                )
+            )
+            added_to_list += 1
 
     # One audit entry per import run (guardrail 8), same pattern as bulk-delete.
     db.add(
@@ -1172,6 +1226,10 @@ def import_contacts(
                 {"field": "updated", "after": updated},
                 {"field": "failed", "after": len(failed)},
                 {"field": "file", "after": body.file_name},
+                {
+                    "field": "list",
+                    "after": target_list.name if target_list else None,
+                },
             ],
             status=AUDIT_SUCCESS,
         )
@@ -1196,6 +1254,15 @@ def import_contacts(
         "created_fields": created_fields,
         "skipped_fields": skipped_fields,
         "verification_queued": bool(body.verify and created_contacts),
+        "list": (
+            {
+                "id": target_list.id,
+                "name": target_list.name,
+                "added": added_to_list,
+            }
+            if target_list
+            else None
+        ),
     }
 
 
