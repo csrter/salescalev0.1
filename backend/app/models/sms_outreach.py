@@ -355,6 +355,12 @@ class SmsMessage(Base):
     # (sendblue/bluebubbles) reporting "SMS" here is the green-bubble
     # downgrade signal channel_health watches for.
     service: Mapped[Optional[str]] = mapped_column(String(20))
+    # Inbound only: this reply is an automated out-of-office / auto-responder,
+    # not a human answer. Set at ingest so campaign stats can exclude it from
+    # real reply engagement (see services/sms_campaigns.is_auto_reply).
+    is_auto_reply: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False, server_default=text("false")
+    )
     created_at: Mapped[dt.datetime] = created_at_column()
 
 

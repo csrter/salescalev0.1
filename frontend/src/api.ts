@@ -2099,9 +2099,14 @@ export interface SmsCampaign {
   delivered: number;
   /** iMessage/Sendblue read receipts — the SMS equivalent of "opened". */
   read: number;
-  /** Total inbound messages linked to this campaign (a lead texting back
-   * three times counts three here, once in reply_rate's numerator). */
+  /** Real human inbound replies (a lead texting back three times counts three
+   * here). Excludes automated out-of-office auto-responders. */
   replies: number;
+  /** Inbound automated out-of-office / auto-responder texts (not real replies). */
+  auto_replies: number;
+  failed: number;
+  /** Failed sends grouped by reason, most common first — send diagnostics. */
+  failure_reasons: SmsFailureReason[];
   delivery_rate: number | null;
   read_rate: number | null;
   reply_rate: number | null;
@@ -2226,6 +2231,11 @@ export interface SmsSuppression {
   created_at: string;
 }
 
+export interface SmsFailureReason {
+  reason: string;
+  count: number;
+}
+
 export interface SmsRateBlock {
   sent: number;
   delivered: number;
@@ -2233,6 +2243,9 @@ export interface SmsRateBlock {
   failed: number;
   replied: number;
   replies: number;
+  /** Inbound automated out-of-office / auto-responder texts — excluded from
+   * `replies` so engagement reflects real humans; surfaced on its own. */
+  auto_replies: number;
   opted_out: number;
   awaiting_reply: number;
   delivery_rate: number | null;
@@ -2258,6 +2271,9 @@ export interface SmsAnalytics {
     name: string;
     sent: number;
     replies: number;
+    auto_replies: number;
+    failed: number;
+    failure_reasons: SmsFailureReason[];
     delivery_rate: number | null;
     read_rate: number | null;
     reply_rate: number | null;

@@ -362,6 +362,13 @@ function DashboardPanel({
       render: (c) => pct(c.reply_rate),
       sortValue: (c) => c.reply_rate ?? -1,
     },
+    {
+      key: "failed",
+      header: "Failed",
+      align: "right",
+      render: (c) => int(c.failed),
+      sortValue: (c) => c.failed,
+    },
   ];
 
   const chartLabels = data?.by_day.map((d) => d.date) ?? [];
@@ -430,6 +437,8 @@ function DashboardPanel({
               <Kpi label="Read rate (iMessage)" value={pct(t.read_rate)} />
               <Kpi label="Replies" value={int(t.replies)} />
               <Kpi label="Reply rate" value={pct(t.reply_rate)} />
+              <Kpi label="Auto-replies" value={int(t.auto_replies)} />
+              <Kpi label="Failed" value={int(t.failed)} />
               <Kpi label="Opt-out rate" value={pct(t.opt_out_rate)} />
             </>
           )}
@@ -859,6 +868,13 @@ function CampaignsPanel({ accounts }: { accounts: SmsAccount[] }) {
       sortValue: (c) => c.reply_rate ?? -1,
     },
     {
+      key: "failed",
+      header: "Failed",
+      align: "right",
+      render: (c) => int(c.failed),
+      sortValue: (c) => c.failed,
+    },
+    {
       key: "optout",
       header: "Opt-out",
       align: "right",
@@ -1188,7 +1204,21 @@ function CampaignEditor({
           )}
 
           {tab === "config" && (
-            <ConfigForm detail={detail} accounts={accounts} onPatch={patchConfig} />
+            <>
+              {detail.failed > 0 && detail.failure_reasons.length > 0 && (
+                <Alert tone="warn" title={`${int(detail.failed)} sends failed`}>
+                  <ul className="sms-failure-reasons">
+                    {detail.failure_reasons.map((f) => (
+                      <li key={f.reason}>
+                        <span className="sms-fr-count">{int(f.count)}</span>{" "}
+                        {f.reason}
+                      </li>
+                    ))}
+                  </ul>
+                </Alert>
+              )}
+              <ConfigForm detail={detail} accounts={accounts} onPatch={patchConfig} />
+            </>
           )}
 
           {tab === "steps" && (

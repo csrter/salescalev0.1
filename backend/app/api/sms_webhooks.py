@@ -167,6 +167,11 @@ def _process_inbound(
         status=SMS_MSG_RECEIVED,
         provider_sid=provider_sid,
         service=service,
+        # Flag automated out-of-office replies at ingest so campaign stats can
+        # separate real human engagement from auto-responder noise. STOP is a
+        # keyword opt-out, never an auto-reply.
+        is_auto_reply=(not forced_stop and lowered not in STOP_KEYWORDS)
+        and sms_campaigns.is_auto_reply(body),
     )
     db.add(row)
 

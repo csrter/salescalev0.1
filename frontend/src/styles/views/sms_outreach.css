@@ -107,6 +107,26 @@
   margin-bottom: var(--space-4);
 }
 
+.sms-failure-reasons {
+  margin: var(--space-1) 0 0;
+  padding-left: 0;
+  list-style: none;
+  font-size: var(--text-sm);
+}
+
+.sms-failure-reasons li {
+  padding: 2px 0;
+}
+
+.sms-failure-reasons .sms-fr-count {
+  display: inline-block;
+  min-width: 2ch;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  text-align: right;
+}
+
 .sms-section {
   counter-increment: sms-sec;
   margin-top: var(--space-6);

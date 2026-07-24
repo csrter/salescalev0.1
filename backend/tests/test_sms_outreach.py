@@ -2834,6 +2834,73 @@ def test_is_auto_reply_detects_out_of_office_but_not_real_replies():
     assert sms_campaigns.is_auto_reply("") is False
 
 
+def test_auto_reply_excluded_from_reply_stats_and_counted_separately(
+    sc_org, api, twilio_creds_ok, captured_sends
+):
+    """Campaign stats separate real human replies from auto-responders: an
+    out-of-office reply increments auto_replies (not replies), a human reply
+    increments replies."""
+    acct = _mk_account(sc_org, api, from_number="+14805550791")
+    camp = _mk_campaign(sc_org, api, acct["id"], **_ALWAYS)
+    c1 = _mk_contact(sc_org, api, mobile_phone="4805557191", first="Al")
+    c2 = _mk_contact(sc_org, api, mobile_phone="4805557192", first="Bo")
+    _set_steps(sc_org, api, camp["id"], [{"position": 1, "body": "First touch"}])
+    assert _activate(sc_org, api, camp["id"]).status_code == 200
+    _enroll(sc_org, api, camp["id"], [c1, c2])
+    _tick()
+
+    _inbound_reply(
+        api, acct, "+14805557191",
+        "Thanks for reaching out — we are out of office; call for a service emergency.",
+        sid="SM_stat_auto",
+    )
+    _inbound_reply(api, acct, "+14805557192", "yes very interested", sid="SM_stat_human")
+
+    detail = api.get(
+        f"/api/sms/campaigns/{camp['id']}", headers=sc_org["headers"]
+    ).json()
+    assert detail["replies"] == 1  # only the human
+    assert detail["auto_replies"] == 1  # the out-of-office bot
+
+
+def test_failure_reasons_breakdown(sc_org, api):
+    """Send tracking surfaces WHY sends failed: failed outbound grouped by
+    error reason, most common first."""
+    from app.db import SessionLocal
+    from app.models.sms_outreach import SmsMessage
+
+    acct = _mk_account(sc_org, api, from_number="+14805550792")
+    camp = _mk_campaign(sc_org, api, acct["id"], **_ALWAYS)
+    db = SessionLocal()
+    try:
+        for detail, n in [("Invalid number", 3), ("Carrier rejected", 1)]:
+            for _ in range(n):
+                db.add(
+                    SmsMessage(
+                        organization_id=sc_org["org"],
+                        account_id=acct["id"],
+                        campaign_id=camp["id"],
+                        direction="out",
+                        kind="campaign",
+                        to_number="+14805550000",
+                        body="x",
+                        status="failed",
+                        error_detail=detail,
+                    )
+                )
+        db.commit()
+    finally:
+        db.close()
+
+    detail = api.get(
+        f"/api/sms/campaigns/{camp['id']}", headers=sc_org["headers"]
+    ).json()
+    assert detail["failed"] == 4
+    reasons = detail["failure_reasons"]
+    assert reasons[0] == {"reason": "Invalid number", "count": 3}
+    assert {"reason": "Carrier rejected", "count": 1} in reasons
+
+
 def test_auto_reply_leaves_lead_awaiting_and_sends_nothing(
     sc_org, api, twilio_creds_ok, captured_sends
 ):

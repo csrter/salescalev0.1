@@ -474,12 +474,14 @@ def _campaign_stats(db: Session, campaign: SmsCampaign) -> dict:
     delivered = _count(db, base.where(SmsMessage.status.in_(_DELIVERED_STATUSES)))
     read = _count(db, base.where(SmsMessage.status == SMS_MSG_READ))
     failed = _count(db, base.where(SmsMessage.status == SMS_MSG_FAILED))
-    replies = _count(
-        db,
-        select(func.count(SmsMessage.id)).where(
-            SmsMessage.campaign_id == cid, SmsMessage.direction == SMS_DIR_IN
-        ),
+    # Reply counting excludes automated out-of-office auto-responders so the
+    # numbers reflect REAL human engagement; auto_replies is surfaced on its own.
+    in_base = select(func.count(SmsMessage.id)).where(
+        SmsMessage.campaign_id == cid, SmsMessage.direction == SMS_DIR_IN
     )
+    replies = _count(db, in_base.where(SmsMessage.is_auto_reply.is_(False)))
+    auto_replies = _count(db, in_base.where(SmsMessage.is_auto_reply.is_(True)))
+    failure_reasons = _failure_reasons(db, cid)
 
     enr = select(func.count(SmsEnrollment.id)).where(SmsEnrollment.campaign_id == cid)
     enrolled = _count(db, enr)
@@ -507,14 +509,40 @@ def _campaign_stats(db: Session, campaign: SmsCampaign) -> dict:
         "delivered": delivered,
         "read": read,
         "failed": failed,
+        "failure_reasons": failure_reasons,
         "replied": replied,
         "replies": replies,
+        "auto_replies": auto_replies,
         "opted_out": opted_out,
         "delivery_rate": _rate(delivered, sent),
         "read_rate": _rate(read, delivered),
         "reply_rate": _rate(replied, sent),
         "opt_out_rate": _rate(opted_out, sent),
     }
+
+
+def _failure_reasons(db: Session, campaign_id: str) -> list:
+    """Send-tracking diagnostics: failed outbound grouped by reason, most
+    common first. Reason is the human error_detail when present, else the
+    provider error_code, else 'Unknown'. Lets an operator see WHY sends failed
+    (bad number vs carrier reject vs auth) instead of only a failure count."""
+    label = func.coalesce(
+        func.nullif(SmsMessage.error_detail, ""),
+        func.nullif(SmsMessage.error_code, ""),
+        "Unknown",
+    )
+    rows = db.execute(
+        select(label.label("reason"), func.count(SmsMessage.id).label("n"))
+        .where(
+            SmsMessage.campaign_id == campaign_id,
+            SmsMessage.direction == SMS_DIR_OUT,
+            SmsMessage.status == SMS_MSG_FAILED,
+        )
+        .group_by(label)
+        .order_by(func.count(SmsMessage.id).desc())
+        .limit(8)
+    ).all()
+    return [{"reason": r.reason, "count": r.n} for r in rows]
 
 
 def _step_stats(db: Session, campaign_id: str) -> dict:
@@ -532,17 +560,20 @@ def _step_stats(db: Session, campaign_id: str) -> dict:
 
     rows = db.execute(
         select(SmsMessage.step_id, SmsMessage.direction, SmsMessage.status,
-               func.count(SmsMessage.id))
+               SmsMessage.is_auto_reply, func.count(SmsMessage.id))
         .where(
             SmsMessage.campaign_id == campaign_id,
             SmsMessage.step_id.is_not(None),
         )
-        .group_by(SmsMessage.step_id, SmsMessage.direction, SmsMessage.status)
+        .group_by(SmsMessage.step_id, SmsMessage.direction, SmsMessage.status,
+                  SmsMessage.is_auto_reply)
     ).all()
-    for step_id, direction, status, n in rows:
+    for step_id, direction, status, is_auto, n in rows:
         b = _bucket(step_id)
         if direction == SMS_DIR_IN:
-            b["replies"] += n
+            # Auto-responders don't count as real replies in the per-step funnel.
+            if not is_auto:
+                b["replies"] += n
             continue
         if status in _SENT_STATUSES:
             b["sent"] += n
@@ -1284,7 +1315,8 @@ def analytics(
         k: 0
         for k in (
             "sent", "delivered", "read", "failed", "replied", "replies",
-            "opted_out", "enrolled", "active_enrollments", "awaiting_reply",
+            "auto_replies", "opted_out", "enrolled", "active_enrollments",
+            "awaiting_reply",
         )
     }
     by_campaign = []
