@@ -1321,6 +1321,31 @@ export const searchLeads = (
     }),
   });
 
+/** Start an Apify Google Maps scraper run (BYO token; async — poll below). */
+export const startApifySearch = (
+  query: string,
+  location?: string,
+  maxResults = 60
+) =>
+  api<{ search_id: string; run_id: string; status: string }>(
+    "/api/lead-finder/apify-search",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        query,
+        location: location || null,
+        max_results: maxResults,
+      }),
+    }
+  );
+
+export const pollApifySearch = (searchId: string, runId: string) =>
+  api<{
+    search_id: string;
+    status: string;
+    results: LeadFinderPlace[] | null;
+  }>(`/api/lead-finder/apify-search/${searchId}/${runId}`);
+
 export const importLeads = (
   searchId: string,
   clientId: string,

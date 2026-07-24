@@ -95,6 +95,10 @@ KEY_PROVIDERS: dict[str, str] = {
     # People-data / firmographics profile provider (owner contact + revenue).
     # BYO only, like Hunter — people-data ToS prohibit a shared operator key.
     "apollo": "",
+    # Apify (Google Maps scraper as an alternate Lead Finder source). BYO
+    # only, like Hunter/Apollo — the scrape runs on the org's own Apify
+    # account; Salescale never operates a shared scraping key.
+    "apify": "",
     # AI providers (grounded insights + cold-email personalization). The active
     # one is chosen operator-side (settings.ai_provider); these let an org bring
     # its own key for whichever provider is active, resolved BYO-first with the

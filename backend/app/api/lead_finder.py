@@ -28,7 +28,7 @@ from ..models.integrations import IntegrationCredential
 from ..models.lead_finder import LeadFinderSearch
 from ..ratelimit import enforce_bucket
 from ..security import encrypt_secret
-from ..services import entitlements, integration_creds, places
+from ..services import apify_maps, entitlements, integration_creds, places
 from ..services import lead_finder as lead_finder_svc
 
 router = APIRouter(prefix="/api/lead-finder", tags=["lead-finder"])
@@ -69,7 +69,9 @@ class SearchOut(BaseModel):
 class ImportIn(BaseModel):
     search_id: str
     client_id: str
-    places: List[PlaceOut] = Field(max_length=places.MAX_TOTAL_RESULTS)
+    # Apify searches can return more than the Places 60-result ceiling, so
+    # the import cap follows the larger source's ceiling.
+    places: List[PlaceOut] = Field(max_length=apify_maps.MAX_RESULTS)
 
 
 class ProviderStatusOut(BaseModel):
@@ -168,6 +170,99 @@ def search(
         quota_clamped=pages_allowed < pages_wanted,
         usage=entitlements.lead_finder_usage(db, org),
     )
+
+
+class ApifySearchIn(BaseModel):
+    query: str = Field(min_length=2, max_length=300)
+    location: Optional[str] = Field(default=None, max_length=300)
+    # Ceiling on scraped places — spend on the ORG's Apify account, so this
+    # can go higher than the Places 60 cap without touching our quota math.
+    max_results: int = Field(default=60, ge=1, le=apify_maps.MAX_RESULTS)
+
+
+@router.post("/apify-search")
+def apify_search_start(
+    body: ApifySearchIn,
+    user: User = Depends(require_team),
+    db: Session = Depends(get_db),
+):
+    """Start one Apify Google Maps scraper run on the ORG'S OWN Apify token
+    (BYO only — 503 when none is connected; no operator fallback by design).
+    Async because a run takes minutes: this returns immediately with the run
+    id plus a ledger row id, and the UI polls the GET endpoint below.
+
+    Metering: pages_fetched=0 — an Apify search spends the org's own Apify
+    credits, never the monthly Places quota — but the ledger row still
+    exists as the attribution anchor so /import works unchanged."""
+    org = _org(db, user)
+    token = integration_creds.resolve_key(db, org.id, "apify")
+    # Burst brake only (each run is spend on the org's Apify account).
+    enforce_bucket(f"lead_finder_apify:{org.id}", limit=5, window_seconds=60)
+    query = body.query.strip()
+    location = (body.location or "").strip() or None
+    try:
+        run_id = apify_maps.start_run(query, location, token, body.max_results)
+    except apify_maps.ApifyNotConfigured as e:
+        raise HTTPException(503, str(e))
+    except apify_maps.ApifyError as e:
+        raise HTTPException(502, f"Apify error: {e}")
+    row = LeadFinderSearch(
+        organization_id=org.id,
+        user_id=user.id,
+        query=query,
+        location=location,
+        results_count=0,
+        pages_fetched=0,
+    )
+    db.add(row)
+    db.commit()
+    return {"search_id": row.id, "run_id": run_id, "status": "RUNNING"}
+
+
+@router.get("/apify-search/{search_id}/{run_id}")
+def apify_search_poll(
+    search_id: str,
+    run_id: str,
+    user: User = Depends(require_team),
+    db: Session = Depends(get_db),
+):
+    """One poll of a started scraper run. Non-terminal statuses return
+    {status, results: null}; SUCCEEDED returns results in the same PlaceOut
+    shape as /search (CRM dedupe marking included) and stamps the ledger
+    row's results_count. A failed run surfaces as 502 with Apify's status."""
+    org = _org(db, user)
+    row = db.get(LeadFinderSearch, search_id)
+    if row is None or row.organization_id != org.id:
+        raise HTTPException(404, "Not found")
+    token = integration_creds.resolve_key(db, org.id, "apify")
+    try:
+        status, found = apify_maps.check_run(run_id, token)
+    except apify_maps.ApifyNotConfigured as e:
+        raise HTTPException(503, str(e))
+    except apify_maps.ApifyError as e:
+        raise HTTPException(502, f"Apify error: {e}")
+    if status != "SUCCEEDED":
+        return {"search_id": search_id, "status": status, "results": None}
+    row.results_count = len(found)
+    db.commit()
+    index = lead_finder_svc.OrgCrmIndex(db, org.id)
+    return {
+        "search_id": search_id,
+        "status": "SUCCEEDED",
+        "results": [
+            PlaceOut(
+                place_id=p.place_id,
+                name=p.name,
+                address=p.address,
+                phone=p.phone,
+                website=p.website,
+                rating=p.rating,
+                types=p.types,
+                in_crm=index.matches(p),
+            )
+            for p in found
+        ],
+    }
 
 
 @router.post("/import")

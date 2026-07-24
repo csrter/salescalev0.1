@@ -1225,3 +1225,144 @@ def test_enrichment_job_recorded_and_status_endpoint(lf_org, api):
     assert job["eta_seconds"] is None
     assert job["finished_at"] is not None
     assert job["elapsed_seconds"] >= 0
+
+
+# --- Apify Google Maps scraper (BYO alternate search source) ------------------
+
+
+def test_apify_search_requires_org_token(lf_org, api):
+    """BYO only — no org token means 503 with a pointer at Data providers,
+    never an operator fallback."""
+    r = api.post(
+        "/api/lead-finder/apify-search",
+        json={"query": "hvac contractors", "location": "Mesa AZ"},
+        headers=lf_org["headers"],
+    )
+    assert r.status_code == 503
+    assert "Apify" in r.json()["detail"]
+
+
+def test_apify_search_start_poll_import(lf_org, api, monkeypatch):
+    """Full flow: start (ledger row at zero quota cost) → poll RUNNING →
+    poll SUCCEEDED with mapped results → import through the unchanged
+    /import pipeline (source=lead_finder, idempotent by place id)."""
+    from app.services import apify_maps, entitlements
+
+    api.put(
+        "/api/lead-finder/providers/apify",
+        json={"api_key": "apify_test_token_0001"},
+        headers=lf_org["headers"],
+    )
+
+    started = {}
+
+    def _fake_start(query, location, token, max_results=60):
+        started.update(
+            query=query, location=location, token=token, max_results=max_results
+        )
+        return "run_abc123"
+
+    polls = iter(
+        [
+            ("RUNNING", []),
+            (
+                "SUCCEEDED",
+                [
+                    PlaceResult(
+                        place_id="ChIJapify001",
+                        name="Apify Air Co",
+                        address="1 Scrape St, Mesa, AZ",
+                        phone="(480) 555-0909",
+                        website="https://apifyair.example.com",
+                        rating=4.4,
+                        types=["hvac_contractor"],
+                    )
+                ],
+            ),
+        ]
+    )
+    monkeypatch.setattr(apify_maps, "start_run", _fake_start)
+    monkeypatch.setattr(apify_maps, "check_run", lambda run_id, token: next(polls))
+
+    with SessionLocal() as db:
+        org = db.get(Organization, lf_org["org"])
+        pages_before = entitlements.lead_finder_usage(db, org)["used"]
+
+    r = api.post(
+        "/api/lead-finder/apify-search",
+        json={"query": "hvac contractors", "location": "Mesa AZ", "max_results": 100},
+        headers=lf_org["headers"],
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["run_id"] == "run_abc123"
+    assert started["max_results"] == 100
+    assert started["token"] == "apify_test_token_0001"
+
+    poll_url = f"/api/lead-finder/apify-search/{body['search_id']}/{body['run_id']}"
+    first = api.get(poll_url, headers=lf_org["headers"]).json()
+    assert first["status"] == "RUNNING"
+    assert first["results"] is None
+
+    second = api.get(poll_url, headers=lf_org["headers"]).json()
+    assert second["status"] == "SUCCEEDED"
+    assert len(second["results"]) == 1
+    assert second["results"][0]["place_id"] == "ChIJapify001"
+
+    # Zero Places-quota cost: the ledger row exists but pages_fetched=0.
+    with SessionLocal() as db:
+        org = db.get(Organization, lf_org["org"])
+        assert entitlements.lead_finder_usage(db, org)["used"] == pages_before
+        row = db.get(LeadFinderSearch, body["search_id"])
+        assert row.pages_fetched == 0
+        assert row.results_count == 1
+
+    # The unchanged import pipeline accepts the Apify search's results.
+    imp = api.post(
+        "/api/lead-finder/import",
+        json={
+            "search_id": body["search_id"],
+            "client_id": lf_org["client"],
+            "places": second["results"],
+        },
+        headers=lf_org["headers"],
+    )
+    assert imp.status_code == 200, imp.text
+    assert imp.json()["created"] == 1
+    with SessionLocal() as db:
+        c = (
+            db.query(Contact)
+            .filter(Contact.source_external_id == "ChIJapify001")
+            .one()
+        )
+        assert c.source == "lead_finder"
+        assert c.organization_id == lf_org["org"]
+
+    # Poll on a foreign org's search id 404s (tenant isolation).
+    api.delete("/api/lead-finder/providers/apify", headers=lf_org["headers"])
+
+
+def test_apify_item_mapping_unit():
+    """Actor dataset items map onto the shared PlaceResult shape; a rare
+    item without a placeId gets a stable synthetic id."""
+    from app.services.apify_maps import _to_place
+
+    full = _to_place(
+        {
+            "title": "Desert Scrape HVAC",
+            "placeId": "ChIJx123",
+            "address": "9 W Elm St, Phoenix, AZ",
+            "phone": "+1 480-555-1234",
+            "website": "https://desertscrape.example.com",
+            "totalScore": 4.6,
+            "categories": ["HVAC contractor", "Air conditioning repair"],
+        }
+    )
+    assert full.place_id == "ChIJx123"
+    assert full.name == "Desert Scrape HVAC"
+    assert full.rating == 4.6
+    assert full.types == ["HVAC contractor", "Air conditioning repair"]
+
+    synthetic = _to_place({"title": "No Id Plumbing", "cid": "987654"})
+    assert synthetic.place_id == "apify:987654"
+    assert synthetic.rating is None

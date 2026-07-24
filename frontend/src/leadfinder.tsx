@@ -13,8 +13,10 @@ import {
   getLeadFinderUsage,
   importLeads,
   listLeadProviders,
+  pollApifySearch,
   searchLeads,
   setLeadProviderKey,
+  startApifySearch,
   type LeadFinderPlace,
   type LeadFinderUsage,
   type LeadProviderStatus,
@@ -29,6 +31,7 @@ import {
   Kpi,
   KpiGrid,
   KpiSkeleton,
+  Segmented,
 } from "./components/ui";
 import { Compass, Search } from "./components/icons";
 import "./styles/views/leadfinder.css";
@@ -50,6 +53,12 @@ const DATA_PROVIDERS: { id: string; label: string; blurb: string }[] = [
     label: "Apollo.io",
     blurb:
       "Owner name & direct/mobile line, work email, company description, estimated revenue and headcount. Your own Apollo API key; lookups spend your Apollo credits.",
+  },
+  {
+    id: "apify",
+    label: "Apify (Google Maps scraper)",
+    blurb:
+      "Alternate search source: scrapes Google Maps on your own Apify account (API token from console.apify.com). Runs spend your Apify credits, not your monthly search quota.",
   },
   {
     id: "hunter",
@@ -208,9 +217,16 @@ export function LeadFinderView({ isAdmin = false }: { isAdmin?: boolean }) {
   const [location, setLocation] = useState("");
   const [maxResults, setMaxResults] = useState(20);
   const [minRating, setMinRating] = useState(0); // 0 = any (Places-side)
+  // Search source: the metered Places API, or the org's own Apify scraper
+  // (BYO token; async runs, results take a minute or two).
+  const [source, setSource] = useState<"places" | "apify">("places");
+  const [apifyMax, setApifyMax] = useState(60);
   const [searching, setSearching] = useState(false);
   const [searchErr, setSearchErr] = useState<string | null>(null);
   const [searchNote, setSearchNote] = useState<string | null>(null);
+  // Apify-run progress line (its own state so it never renders under the
+  // quota-clamp "Partial results" alert).
+  const [scrapeNote, setScrapeNote] = useState<string | null>(null);
   const [searchId, setSearchId] = useState<string | null>(null);
   const [results, setResults] = useState<LeadFinderPlace[] | null>(null);
   const [checked, setChecked] = useState<Set<string>>(new Set());
@@ -267,20 +283,59 @@ export function LeadFinderView({ isAdmin = false }: { isAdmin?: boolean }) {
     [filtered]
   );
 
+  const applyResults = (searchIdIn: string, rows: LeadFinderPlace[]) => {
+    setSearchId(searchIdIn);
+    setResults(rows);
+    clearFilters();
+    setChecked(new Set(rows.filter((p) => !p.in_crm).map((p) => p.place_id)));
+  };
+
+  // Apify runs are async on Apify's side — poll every 5s, cap at 10 minutes.
+  const APIFY_POLL_MS = 5000;
+  const APIFY_POLL_MAX = 120;
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+  const runApifySearch = async () => {
+    const r = await startApifySearch(
+      query.trim(),
+      location.trim() || undefined,
+      apifyMax
+    );
+    setScrapeNote(
+      "Scraping Google Maps on your Apify account — this usually takes a minute or two…"
+    );
+    try {
+      for (let i = 0; i < APIFY_POLL_MAX; i++) {
+        await sleep(APIFY_POLL_MS);
+        const p = await pollApifySearch(r.search_id, r.run_id);
+        if (p.status === "SUCCEEDED" && p.results) {
+          applyResults(p.search_id, p.results);
+          return;
+        }
+      }
+      throw new Error(
+        "The Apify run is taking longer than 10 minutes — check it at console.apify.com and try again."
+      );
+    } finally {
+      setScrapeNote(null);
+    }
+  };
+
   const runSearch = async () => {
     if (query.trim().length < 2 || searching) return;
     setSearching(true);
     setSearchErr(null);
     setSearchNote(null);
     try {
+      if (source === "apify") {
+        await runApifySearch();
+        return;
+      }
       const r = await searchLeads(query.trim(), location.trim() || undefined, {
         maxResults,
         minRating: minRating > 0 ? minRating : undefined,
       });
-      setSearchId(r.search_id);
-      setResults(r.results);
-      clearFilters();
-      setChecked(new Set(r.results.filter((p) => !p.in_crm).map((p) => p.place_id)));
+      applyResults(r.search_id, r.results);
       setUsage((u) => (u ? { ...u, searches: r.usage } : u));
       if (r.quota_clamped)
         setSearchNote(
@@ -288,6 +343,7 @@ export function LeadFinderView({ isAdmin = false }: { isAdmin?: boolean }) {
         );
     } catch (e) {
       setSearchErr((e as Error).message);
+      setSearchNote(null);
     } finally {
       setSearching(false);
     }
@@ -437,6 +493,25 @@ export function LeadFinderView({ isAdmin = false }: { isAdmin?: boolean }) {
         </KpiGrid>
       )}
 
+      <div className="lf-source-row">
+        <Segmented<"places" | "apify">
+          options={[
+            { value: "places", label: "Google Places" },
+            { value: "apify", label: "Apify scraper" },
+          ]}
+          value={source}
+          onChange={setSource}
+          ariaLabel="Search source"
+        />
+        {source === "apify" && (
+          <span className="lf-source-hint">
+            Runs on your own Apify account (token under Data providers) —
+            results take a minute or two and don’t use your monthly search
+            quota.
+          </span>
+        )}
+      </div>
+
       <form
         className="lf-search"
         onSubmit={(e) => {
@@ -456,26 +531,42 @@ export function LeadFinderView({ isAdmin = false }: { isAdmin?: boolean }) {
           placeholder="City / area — e.g. Scottsdale AZ"
           aria-label="Location"
         />
-        <select
-          value={maxResults}
-          onChange={(e) => setMaxResults(Number(e.target.value))}
-          aria-label="Results per search"
-          title="Each page of 20 results is one search against your monthly quota"
-        >
-          <option value={20}>20 results · 1 search</option>
-          <option value={40}>40 results · 2 searches</option>
-          <option value={60}>60 results · 3 searches</option>
-        </select>
-        <select
-          value={minRating}
-          onChange={(e) => setMinRating(Number(e.target.value))}
-          aria-label="Minimum Google rating"
-        >
-          <option value={0}>Any rating</option>
-          <option value={3.5}>3.5+ stars</option>
-          <option value={4}>4.0+ stars</option>
-          <option value={4.5}>4.5+ stars</option>
-        </select>
+        {source === "places" ? (
+          <select
+            value={maxResults}
+            onChange={(e) => setMaxResults(Number(e.target.value))}
+            aria-label="Results per search"
+            title="Each page of 20 results is one search against your monthly quota"
+          >
+            <option value={20}>20 results · 1 search</option>
+            <option value={40}>40 results · 2 searches</option>
+            <option value={60}>60 results · 3 searches</option>
+          </select>
+        ) : (
+          <select
+            value={apifyMax}
+            onChange={(e) => setApifyMax(Number(e.target.value))}
+            aria-label="Places to scrape"
+            title="Scraped on your own Apify account — spends Apify credits, not your monthly quota"
+          >
+            <option value={20}>Up to 20 places</option>
+            <option value={60}>Up to 60 places</option>
+            <option value={100}>Up to 100 places</option>
+            <option value={200}>Up to 200 places</option>
+          </select>
+        )}
+        {source === "places" && (
+          <select
+            value={minRating}
+            onChange={(e) => setMinRating(Number(e.target.value))}
+            aria-label="Minimum Google rating"
+          >
+            <option value={0}>Any rating</option>
+            <option value={3.5}>3.5+ stars</option>
+            <option value={4}>4.0+ stars</option>
+            <option value={4.5}>4.5+ stars</option>
+          </select>
+        )}
         <Button type="submit" busy={searching} disabled={query.trim().length < 2}>
           <Search size={16} aria-hidden="true" /> Search
         </Button>
@@ -489,6 +580,11 @@ export function LeadFinderView({ isAdmin = false }: { isAdmin?: boolean }) {
       {searchNote && (
         <Alert tone="warn" title="Partial results">
           {searchNote}
+        </Alert>
+      )}
+      {scrapeNote && (
+        <Alert tone="info" title="Scrape in progress">
+          {scrapeNote}
         </Alert>
       )}
 
@@ -581,9 +677,10 @@ export function LeadFinderView({ isAdmin = false }: { isAdmin?: boolean }) {
           icon={<Compass size={28} aria-hidden="true" />}
           title="Find your next clients"
         >
-          Search a vertical and a location — results come from Google Places,
-          never scraped. Businesses already in your CRM are flagged so you
-          don't import them twice.
+          Search a vertical and a location — results come from the licensed
+          Google Places API, or from the Apify Google Maps scraper running on
+          your own Apify account. Businesses already in your CRM are flagged
+          so you don't import them twice.
         </EmptyState>
       )}
 

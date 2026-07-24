@@ -26,6 +26,19 @@
   margin: var(--space-5) 0 var(--space-4);
 }
 
+.lf-source-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  margin-top: var(--space-5);
+}
+
+.lf-source-hint {
+  font-size: var(--text-sm);
+  color: var(--ink-soft);
+}
+
 @media (max-width: 960px) {
   .lf-search {
     grid-template-columns: 1fr 1fr;

@@ -2827,6 +2827,55 @@ live activation + the entitlement flip, the Outreach module build
       launch-verified (own backend bound :8000, health 200, boot alembic
       no-op'd). Follow-up candidate: the email module's enrollments don't
       carry source attribution yet — same two-column pattern applies.
+- [x] Lead Finder — Apify Google Maps scraper as an alternate search source
+      (2026-07-24): BYO ONLY, mirroring Hunter/Apollo — the org connects its
+      OWN Apify API token ("apify" in integration_creds.KEY_PROVIDERS, no
+      operator fallback; the scrape runs on the org's own Apify account, so
+      Salescale never operates a shared scraping key; guardrail 6 untouched —
+      zero Meta surfaces). services/apify_maps.py drives the canonical
+      compass~crawler-google-places actor ASYNC (runs take minutes, beyond
+      the frontend api() 75s timeout): POST /api/lead-finder/apify-search
+      starts a run + writes the LeadFinderSearch ledger row with
+      pages_fetched=0 — an Apify search costs the org's Apify credits, NEVER
+      the monthly Places quota (usage sums pages, so 0-page rows are free) —
+      and GET /apify-search/{search_id}/{run_id} polls (non-terminal →
+      {status, results:null}; SUCCEEDED → PlaceOut list with CRM dedupe
+      marking + results_count stamped; FAILED/ABORTED/TIMED-OUT → 502; no
+      token → 503 pointing at Data providers). Network failures normalize
+      into ApifyError (the platform-error posture); httpx timeouts bounded;
+      APIFY_BASE_URL/APIFY_GMAPS_ACTOR env-overridable (local stub
+      verification only). The actor returns Google placeIds, so /import is
+      UNCHANGED (same source=lead_finder, idempotent re-import, enrichment
+      pipeline) — its places cap raised 60 → apify_maps.MAX_RESULTS (200)
+      since scrapes can exceed the Places ceiling. Frontend (leadfinder.tsx):
+      "Google Places | Apify scraper" source Segmented (apify mode swaps the
+      quota select for Up-to-20/60/100/200-places + hides min-rating, shows
+      an own-account hint), 5s poll loop w/ 10-min cap + "Scrape in progress"
+      info Alert (own state, never under the quota "Partial results" title),
+      Apify row in the Data providers card, empty-state copy now names both
+      sources. Tests 614 → 617 (no-token 503; start→poll→import flow proving
+      zero quota spend + pages_fetched=0 + unchanged import; _to_place
+      mapping unit incl. synthetic-id fallback). Verified live on alt2
+      against a local Apify API stub (APIFY_BASE_URL via the
+      backend-alt2-apify launch config): key add via the real provider card
+      (first attempt 500'd on the RECURRING alt2 gotcha — the scratchpad
+      alt2-fernet.key had been purged again; regenerated at the launch.json
+      path), no-key search showed the connect-your-token error, stubbed
+      search polled RUNNING→SUCCEEDED, 2 scraped results rendered with
+      filters, quota stayed 3/40, both imported into the CRM ("IN CRM"
+      badges + contacts rows with source_external_id=placeId), zero console
+      errors. DEPLOYED to production 2026-07-24 (fe467fa), web + desktop —
+      code only, no migration (alembic stays f4b7e2a9c815): backend/frontend
+      rebuilt on the VPS, health green, /api/lead-finder/apify-search live +
+      auth-gated, zero boot errors; desktop PyInstaller backend + DMG
+      rebuilt (155MB — app.services.apify_maps verified inside the PYZ, the
+      "Apify scraper" toggle verified inside the bundled leadfinder chunk),
+      installed to /Applications, launch-verified (health 200 + the apify
+      route 401 on the packaged backend), repo-root DMG copy refreshed
+      sha-identical. USER-SIDE to go live: paste the org's Apify API token
+      (console.apify.com → Settings → API tokens) into Lead Finder → Data
+      providers → "Apify (Google Maps scraper)", then flip the search-source
+      toggle to "Apify scraper".
 - [ ] Stripe live activation + entitlement flip (after 12–14, so real
       limits land everywhere in one pass)
 - [ ] Outreach module build (dev-mode) — go-live gated on Meta App
