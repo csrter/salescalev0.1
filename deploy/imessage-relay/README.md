@@ -80,6 +80,24 @@ default `no`. Neither relay is IP-allowlisted (see the same-VPS firewall
 note below — on the shared box the ufw rule is inert); BlueBubbles'
 `?password=` auth is the gate.
 
+## Uptime hardening (EC2 Mac relay)
+
+BlueBubbles drives Messages.app, so it can only run inside a **logged-in GUI
+session** — that is the whole uptime story. Measures in place on the EC2 Mac:
+
+| Measure | What it covers |
+|---|---|
+| `com.bluebubbles.server` LaunchAgent (`gui/501`, `KeepAlive`) | BlueBubbles crash → relaunch. Installed because the app's own `auto_start` was off and a reboot left it dead. |
+| `com.salescale.imsgwatchdog` LaunchDaemon + `imsg-watchdog.sh` (60s) | Two failure modes seen live: (1) local API stops answering → kickstart BlueBubbles; (2) local API fine but the PUBLIC relay is dead (stale tunnel socket on the VPS) → kickstart the tunnel. Verified live by killing BlueBubbles and watching it self-heal. |
+| `com.salescale.imsgtunnel` LaunchDaemon (`KeepAlive`) | autossh reverse tunnel; system domain, so it survives logout. |
+| `pmset -a autorestart 1`, `SleepDisabled 1`, `auto_caffeinate` | Power-failure reboot + never sleeping. |
+
+**The one remaining gap is user-side and requires the account password:
+enable auto-login** (System Settings → Users & Groups → "Automatically log in
+as" → `ec2-user`). Without it a reboot stops at the login screen, no GUI
+session exists, and BlueBubbles never starts — the relay stays down until
+someone screen-shares in. This happened live on 2026-07-23.
+
 ## Files in this directory
 
 | File | Runs on | Purpose |
