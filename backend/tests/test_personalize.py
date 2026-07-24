@@ -313,3 +313,32 @@ def test_gemini_call_disables_thinking_budget(monkeypatch):
     text, _in, _out = ai_provider._gemini(res, "sys", "user", 300)
     assert text == "ok"
     assert captured["config"].thinking_config.thinking_budget == 0
+
+
+# --- {{company}} business-name fallback (SMS) ---
+
+
+def test_company_fallback_from_business_name_when_no_company_linked():
+    """A lead whose business/place name is in first_name with no linked Company
+    and no surname fills {{company}} from that name, proper-cased."""
+    c = _Contact("c1", first_name="desert air hvac")  # no last_name, no company
+    assert sms_campaigns._company_from_name(c) == "Desert Air HVAC"
+
+    c2 = _Contact("c2", first_name="Environment Concepts Inc")
+    assert sms_campaigns._company_from_name(c2) == "Environment Concepts Inc"
+
+
+def test_company_fallback_ignores_real_people():
+    """A person (has a surname, or a single-word given name) is never taken as
+    a company — the fallback must not turn 'Mike' or 'John Smith' into {{company}}."""
+    # single-word given name, no business hint -> not a company
+    assert sms_campaigns._company_from_name(_Contact("c1", first_name="Mike")) is None
+    # has a surname -> a person, even if multi-word first_name
+    assert (
+        sms_campaigns._company_from_name(
+            _Contact("c2", first_name="Mary Jane", last_name="Watson")
+        )
+        is None
+    )
+    # empty name -> nothing to fall back to
+    assert sms_campaigns._company_from_name(_Contact("c3")) is None

@@ -208,6 +208,35 @@ def infer_city_failsafe(db: Session, org: Organization, contact: Contact) -> str
         return ""
 
 
+# A name reads as a business (not a person) when it carries a company suffix or
+# an industry word — used only as a last resort for {{company}} when no Company
+# is linked and there's no surname, so a single-name person is never mistaken
+# for a company.
+_BIZ_HINT_RE = re.compile(
+    r"\b(llc|inc|co|corp|corporation|ltd|plc|pllc|lp|cpa|hvac|group|"
+    r"services?|associates|company|heating|cooling|plumbing|air|mechanical|"
+    r"electric(?:al)?|roofing|construction|solutions|enterprises|holdings|"
+    r"systems|contracting|remodeling|landscaping|cleaning|&)\b",
+    re.IGNORECASE,
+)
+
+
+def _company_from_name(contact: Contact) -> Optional[str]:
+    """Best-effort business name from the contact's name field, for the
+    {{company}} fallback. Fires only when there's no surname (a real person has
+    one) and the first_name reads like a business — multi-word or a company/
+    industry word — so 'Mike' is never taken as a company but 'Desert Air HVAC'
+    is. Proper-cased via business_case (acronym-aware)."""
+    if (contact.last_name or "").strip():
+        return None
+    fn = (contact.first_name or "").strip()
+    if not fn:
+        return None
+    if " " in fn or _BIZ_HINT_RE.search(fn):
+        return business_case(fn)
+    return None
+
+
 def render_body(
     db: Session,
     contact: Contact,
@@ -233,6 +262,14 @@ def render_body(
     `body_template` overrides step.body_template — the branch-selected
     response body on a reply-triggered step (select_branch)."""
     facts = email_personalize._company_facts(db, contact)
+    # {{company}} fallback: a lead whose business/place name landed in the name
+    # field with no linked Company (a Lead Finder placeholder, or an import that
+    # mapped the business to a name column) should still fill {{company}} from
+    # that name rather than render blank.
+    if not (facts.get("company") or "").strip():
+        from_name = _company_from_name(contact)
+        if from_name:
+            facts = {**facts, "company": from_name}
     extra = {"ai_snippet": ai_snippet}
     if not (contact.first_name or "").strip() and (facts.get("company") or "").strip():
         extra["first_name"] = business_case(facts["company"])
