@@ -1633,10 +1633,30 @@ export function CsvImportDialog({
     reader.readAsText(f);
   };
 
-  // Wide rows (every column populated + custom fields) made a 500-row batch
-  // exceed the API's request-body cap; 200 keeps a fully-populated batch
-  // comfortably under it while still importing a few thousand rows quickly.
-  const BATCH_SIZE = 200;
+  // Batch by BYTE SIZE, not a fixed row count: row width varies wildly (a few
+  // system columns vs. dozens of long custom fields), so any fixed count either
+  // wastes round-trips on narrow rows or blows the API's request-body cap on
+  // wide ones — which is exactly how a 600-row import 413'd. We grow a chunk
+  // until its serialized size approaches TARGET_BYTES (comfortably under the
+  // server's 2MB cap, leaving room for mapping/new_fields), capping row count
+  // too so per-request backend work stays bounded.
+  const TARGET_BYTES = 1_200_000;
+  const MAX_ROWS_PER_BATCH = 300;
+  const enc = new TextEncoder();
+  const rowBytes = (r: Record<string, string>) => enc.encode(JSON.stringify(r)).length + 2;
+  const batchEnd = (all: Record<string, string>[], start: number): number => {
+    let end = start;
+    let bytes = 0;
+    while (end < all.length) {
+      const rb = rowBytes(all[end]);
+      // Always take at least one row, even if it alone exceeds the target
+      // (pathological; the server would 413 it, surfaced as a per-row failure).
+      if (end > start && (bytes + rb > TARGET_BYTES || end - start >= MAX_ROWS_PER_BATCH)) break;
+      bytes += rb;
+      end++;
+    }
+    return end;
+  };
 
   const submit = async () => {
     if (!parsed) return;
@@ -1668,9 +1688,11 @@ export function CsvImportDialog({
     let currentMapping: Record<string, MappingTarget> = { ...mapping };
 
     try {
-      for (let start = 0; start < rows.length; start += BATCH_SIZE) {
+      let start = 0;
+      while (start < rows.length) {
         const isFirst = start === 0;
-        const chunk = rows.slice(start, start + BATCH_SIZE);
+        const end = batchEnd(rows, start);
+        const chunk = rows.slice(start, end);
         setProgress({ done: start, total: rows.length });
         const r = await api<ImportResult>("/api/crm/contacts/import", {
           method: "POST",
@@ -1701,6 +1723,7 @@ export function CsvImportDialog({
           currentMapping = { ...currentMapping };
           for (const cf of r.created_fields) currentMapping[cf.column] = `custom:${cf.key}`;
         }
+        start = end;
       }
       setProgress({ done: rows.length, total: rows.length });
       setResult(agg);
