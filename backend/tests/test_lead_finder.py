@@ -1366,3 +1366,32 @@ def test_apify_item_mapping_unit():
     synthetic = _to_place({"title": "No Id Plumbing", "cid": "987654"})
     assert synthetic.place_id == "apify:987654"
     assert synthetic.rating is None
+
+
+def test_apify_start_run_targets_vortex_actor(monkeypatch):
+    """Pin the actor + input dialect: vortex_data/google-maps
+    (AabCualFIriz3X6Fs) takes locationQueries as an ARRAY — a regression to
+    compass's locationQuery string would make every scrape ignore the
+    location."""
+    from app.services import apify_maps
+
+    captured = {}
+
+    class _Resp:
+        status_code = 201
+
+        def json(self):
+            return {"data": {"id": "run_vortex_1"}}
+
+    def _fake_request(method, url, params=None, **kwargs):
+        captured.update(method=method, url=url, payload=kwargs.get("json"))
+        return _Resp()
+
+    monkeypatch.setattr(apify_maps.httpx, "request", _fake_request)
+    run_id = apify_maps.start_run("hvac contractors", "Mesa AZ", "tok-1", 40)
+    assert run_id == "run_vortex_1"
+    assert apify_maps.ACTOR_ID == "AabCualFIriz3X6Fs"
+    assert f"/v2/acts/{apify_maps.ACTOR_ID}/runs" in captured["url"]
+    assert captured["payload"]["searchStringsArray"] == ["hvac contractors"]
+    assert captured["payload"]["locationQueries"] == ["Mesa AZ"]
+    assert captured["payload"]["maxCrawledPlacesPerSearch"] == 40

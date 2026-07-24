@@ -2876,6 +2876,17 @@ live activation + the entitlement flip, the Outreach module build
       (console.apify.com → Settings → API tokens) into Lead Finder → Data
       providers → "Apify (Google Maps scraper)", then flip the search-source
       toggle to "Apify scraper".
+      ACTOR SWAP (2026-07-24 follow-up, user-directed): the integration now
+      targets vortex_data/google-maps (actor id AabCualFIriz3X6Fs — the
+      actor the user's Apify account uses) instead of
+      compass~crawler-google-places. Input dialect difference: this actor
+      takes locationQueries as an ARRAY (compass took a locationQuery
+      string); output rows carry the same field names _to_place already
+      maps (title/placeId/phone/phoneUnformatted/website/totalScore/
+      categories/cid/fid), so mapping/import are unchanged.
+      APIFY_GMAPS_ACTOR env override remains, but any replacement actor
+      must speak the vortex dialect. Test pins actor id + payload shape
+      (tests 621 → 622). DEPLOYED web + desktop 2026-07-24.
 - [x] Contact-delete cascade fix + purge-the-CRM (2026-07-24): user
       "can't delete all leads" — REAL BUG: services/crm.delete_contact
       predated the SMS/email outreach modules, so any lead ever

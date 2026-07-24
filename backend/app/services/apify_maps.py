@@ -25,8 +25,13 @@ from .places import PlaceResult
 # Env-overridable for local stub verification only — never set in deployments
 # (same pattern as places.PLACES_TEXT_SEARCH_URL).
 APIFY_BASE_URL = os.environ.get("APIFY_BASE_URL", "https://api.apify.com")
-# Apify's canonical Google Maps Scraper actor (compass/crawler-google-places).
-ACTOR_ID = os.environ.get("APIFY_GMAPS_ACTOR", "compass~crawler-google-places")
+# vortex_data/google-maps ("Google Maps Scraper") — the actor this integration
+# targets. Its input dialect is searchStringsArray + locationQueries (ARRAY —
+# unlike compass/crawler-google-places' locationQuery string), and its output
+# rows carry the same field names _to_place maps (title/placeId/address/phone/
+# phoneUnformatted/website/totalScore/categories/cid/fid). If you point
+# APIFY_GMAPS_ACTOR elsewhere, the replacement must speak this dialect.
+ACTOR_ID = os.environ.get("APIFY_GMAPS_ACTOR", "AabCualFIriz3X6Fs")
 # Ceiling per search — a runaway maxCrawledPlaces is pure spend on the org's
 # Apify account and a giant, slow run; 200 is plenty for a prospecting pass.
 MAX_RESULTS = 200
@@ -85,7 +90,7 @@ def start_run(
         "skipClosedPlaces": True,
     }
     if location:
-        run_input["locationQuery"] = location
+        run_input["locationQueries"] = [location]
     resp = _request(
         "POST",
         f"{APIFY_BASE_URL}/v2/acts/{ACTOR_ID}/runs",
