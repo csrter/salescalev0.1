@@ -284,7 +284,7 @@ export function CrmView({
         const [b, cs] = await Promise.all([
           api<Board>(`/api/crm/board?client_id=${clientId}`),
           api<ContactRow[]>(
-            `/api/crm/contacts?client_id=${clientId}${listId ? `&list_id=${listId}` : ""}`
+            `/api/crm/contacts?client_id=${clientId}&limit=5000${listId ? `&list_id=${listId}` : ""}`
           ),
         ]);
         if (!alive) return;

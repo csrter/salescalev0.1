@@ -352,7 +352,7 @@ def update_stages(
 @router.get("/contacts")
 def list_contacts(
     client_id: str,
-    limit: int = 200,
+    limit: int = 1000,
     sort: Optional[str] = None,
     sort_dir: str = "desc",
     cf_filter: Optional[str] = Query(
@@ -419,7 +419,7 @@ def list_contacts(
             )
     stmt = stmt.order_by(order if order is not None else Contact.created_at.desc())
 
-    contacts = list(db.execute(stmt.limit(min(limit, 500))).scalars())
+    contacts = list(db.execute(stmt.limit(min(limit, 5000))).scalars())
     attribution = _attribution_for(db, client, contacts)
     company_names = _company_names(db, contacts)
     return [
