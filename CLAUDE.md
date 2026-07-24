@@ -2926,6 +2926,68 @@ live activation + the entitlement flip, the Outreach module build
       (155MB, backend hash-matched), installed to /Applications,
       launch-verified (health 200 + purge route 401 on the packaged
       backend), repo-root DMG copy refreshed sha-identical.
+- [x] Meta lead polling fallback + BlueBubbles send verification
+      (2026-07-24, "ensure Paganelli Meta leads come through and speed-to-
+      lead texts go out"): two scheduler hardening passes, migration
+      b7c4e1f9d283 (lead_form_configs.last_polled_at +
+      sms_messages.verified_at, additive nullable).
+      (1) services/meta_lead_poll.py — Meta Instant Form POLLING fallback:
+      every 5 min per enabled meta LeadFormConfig, pulls the page's recent
+      leads straight from the Graph API (me/accounts page token →
+      leadgen_forms → form/leads filtered time_created > cursor−15min
+      overlap; first poll looks back 7 days) and feeds each through the
+      SAME _ingest_meta_lead path as the webhook (upsert dedupe by email/
+      phone; notify + auto-enroll fire only on created → idempotent across
+      webhook/poll overlap). Makes lead arrival independent of the
+      external webhook prerequisites (app published, callback registered,
+      Advanced Access). Best-effort per page; failure stamps the cursor so
+      a broken page retries on the interval, never hot-loops. Own isolated
+      scheduler session in main.py.
+      (2) services/sms_verify.py — BlueBubbles post-send verification +
+      auto-retry: the no-Private-API AppleScript path reports success at
+      hand-off and only records real outcomes asynchronously in the Mac's
+      Messages DB (observed live: 17 "fl hvac" opener texts silently died
+      with error 4, 12:43–12:52 UTC, while the paired iPhone's Text
+      Message Forwarding link was down; error codes stamp LATE — a send
+      read error=0 at 1 min flipped to 4 later, hence MIN_AGE=4min).
+      Verify pass per tick: aged unverified sent rows (4min–24h, 25/
+      account) read back from the relay; error≠0 → status=failed +
+      error_code + campaign enrollment REWOUND to the failed step
+      (next_run_at=now; engine guards re-apply; ≤3 retries per
+      enrollment+step so a dead device can't machine-gun); notifications
+      need nothing (lead_notify.retry_failed already handles failed rows);
+      error=0 → verified_at (+delivered only with a receipt — green-bubble
+      SMS gets no receipts, so "sent" stays terminal and the delivery-rate
+      stat on this channel is structurally ~0%, documented not fixed).
+      POST-DEPLOY FINDING: the Mac/relay RETRIES its own failed sends when
+      the forwarding link recovers — the 17 error-4 fl hvac openers all
+      flipped 4 → 0 on the device and were delivered late without our
+      help; the verify pass read the recovered state and just stamped them
+      (no double-send). So the pass only re-queues PERSISTENT failures;
+      known edge: in a multi-hour outage a verify-triggered resend could
+      duplicate a text if the device also retries later (bounded by the
+      ≤3 cap, accepted trade-off vs never texting).
+      CONTEXT/diagnosis this session: Meta API access is DEAD org-wide —
+      both PlatformConnection tokens (FB user 1001543376035495, app
+      1044566034716833) are valid (debug_token is_valid=true, never
+      expires) but every Graph call returns "Cannot call API for app … on
+      behalf of user …" with scopes=[] — the dev-mode/no-app-role (or
+      overdue Data Use Checkup) refusal; it WORKED 2026-07-20 (lead
+      backfill), so something changed console-side since. USER-SIDE FIX:
+      developers.facebook.com → app 1044566034716833 → check App Roles
+      (the connecting FB user must be admin/developer/tester), Data Use
+      Checkup, and restrictions banner; then reconnect Meta for Paganelli/
+      BSD. Until then webhooks AND polling AND Meta ads reads are all
+      refused; the poller starts delivering the moment access returns.
+      Paganelli chain otherwise verified healthy: LeadFormConfig enabled
+      (page 950517128143997), Pag auto active + auto-enroll + tz Phoenix,
+      org+client notify numbers set, sms_opt_in_default on. Pag auto/BSD
+      auto send_window_end 23 → 24 fixed in prod (true 24/7, the toggle's
+      intent). Tests 622 → 629 (test_meta_lead_poll.py pl_org incl. the
+      exact Graph-refusal state; test_sms_verify.py sv_org: fail→rewind,
+      success/receipt, MIN_AGE gate, retry cap). DEPLOYED to production
+      2026-07-24, web + desktop (DMG rebuilt; desktop runs no schedulers
+      so both passes are prod-only behavior).
 - [ ] Stripe live activation + entitlement flip (after 12–14, so real
       limits land everywhere in one pass)
 - [ ] Outreach module build (dev-mode) — go-live gated on Meta App

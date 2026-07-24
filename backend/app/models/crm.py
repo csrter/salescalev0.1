@@ -355,6 +355,11 @@ class LeadFormConfig(Base):
     )  # meta | google | landing_page
     external_key: Mapped[str] = mapped_column(String(200), nullable=False, index=True)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    # Meta polling-fallback cursor (services/meta_lead_poll): when this page's
+    # leads were last pulled from the Graph API. NULL = never polled.
+    last_polled_at: Mapped[Optional[dt.datetime]] = mapped_column(
+        DateTime(timezone=True)
+    )
     created_at: Mapped[dt.datetime] = created_at_column()
 
 

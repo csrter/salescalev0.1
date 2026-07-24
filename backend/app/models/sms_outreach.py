@@ -355,6 +355,11 @@ class SmsMessage(Base):
     error_code: Mapped[Optional[str]] = mapped_column(String(20))
     error_detail: Mapped[Optional[str]] = mapped_column(Text)
     read_at: Mapped[Optional[dt.datetime]] = mapped_column(DateTime(timezone=True))
+    # BlueBubbles post-send verification (services/sms_verify): when this
+    # row's REAL outcome was read back from the Mac's Messages DB. The
+    # AppleScript path reports success at hand-off and only records failures
+    # asynchronously, so "sent" is provisional until this is stamped.
+    verified_at: Mapped[Optional[dt.datetime]] = mapped_column(DateTime(timezone=True))
     # Transport actually used for this message — "iMessage"/"SMS"/"RCS".
     # Populated by status webhooks (Sendblue's `service` field / BlueBubbles'
     # updated-message), not at send time. An iMessage-capable provider

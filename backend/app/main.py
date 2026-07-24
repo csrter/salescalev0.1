@@ -304,7 +304,7 @@ async def _email_outreach_scheduler():
 
     from .db import SchedulerSessionLocal
     from .services import email_campaigns, email_outreach_sync, email_warmup
-    from .services import lead_notify, sms_campaigns
+    from .services import lead_notify, meta_lead_poll, sms_campaigns, sms_verify
 
     log = logging.getLogger("salescale.email_outreach")
 
@@ -326,10 +326,25 @@ async def _email_outreach_scheduler():
                 # alerts / relay forwards) — transient BlueBubbles/device
                 # errors must not silently cost an alert.
                 lead_notify.retry_failed(sms_db)
+                # Read back the TRUE outcome of recent BlueBubbles sends
+                # (fire-and-forget AppleScript reports success at hand-off);
+                # silent device-side failures become failed + auto-retried.
+                sms_verify.run_due(sms_db)
             finally:
                 sms_db.close()
         except Exception:
             log.exception("sms campaign scheduler tick failed")
+        # Meta Instant Form polling fallback — its own isolated session: a
+        # Graph outage (or the app-unpublished token refusal) must never
+        # stall the send ticks above.
+        try:
+            meta_db = SchedulerSessionLocal()
+            try:
+                meta_lead_poll.run_due(meta_db)
+            finally:
+                meta_db.close()
+        except Exception:
+            log.exception("meta lead poll tick failed")
 
     async def _loop():
         while True:
