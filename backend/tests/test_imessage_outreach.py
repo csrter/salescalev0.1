@@ -879,3 +879,75 @@ def test_bluebubbles_true_sms_failure_still_surfaces(monkeypatch):
     guid, code, detail = gateway._bluebubbles_send(_bb_account(), "+14805559997", "hi")
     assert code is not None
     assert "find all handles" in (detail or "").lower()
+
+
+def test_bluebubbles_ambiguous_error_rescued_by_device_probe(monkeypatch):
+    """'[500] Message sent with an error' with no guid — but the device DID
+    record and deliver the text (observed live: a lead alert delivered 4x
+    because every retry trusted the error). The transport must probe the
+    chat and, on finding the from-me message, return its guid as success so
+    nothing re-sends it; sms_verify settles the final state later."""
+    import time
+
+    def _fake_post(url, params=None, json=None, timeout=None):
+        assert url.endswith("/message/text")
+        return _FakeResp(
+            500,
+            {"status": 500, "message": "Message sent with an error"},
+        )
+
+    def _fake_get(url, params=None, timeout=None):
+        if "server/info" in url:
+            return _FakeResp(
+                200,
+                {"status": 200, "data": {"private_api": False, "helper_connected": False}},
+            )
+        assert "/chat/" in url and url.endswith("/message")
+        return _FakeResp(
+            200,
+            {
+                "status": 200,
+                "data": [
+                    {
+                        "guid": "RESCUED_guid",
+                        "text": "hello there",
+                        "isFromMe": True,
+                        "dateCreated": time.time() * 1000,
+                        "error": 0,
+                    }
+                ],
+            },
+        )
+
+    monkeypatch.setattr(gateway.httpx, "post", _fake_post)
+    monkeypatch.setattr(gateway.httpx, "get", _fake_get)
+    monkeypatch.setattr(gateway, "decrypt_secret", lambda s: "pw")
+    acct = _bb_account()
+    acct.bluebubbles_force_sms = True
+    guid, code, detail = gateway._bluebubbles_send(acct, "+14805559999", "hello there")
+    assert (guid, code, detail) == ("RESCUED_guid", None, None)
+
+
+def test_bluebubbles_real_failure_still_fails_when_device_has_no_message(monkeypatch):
+    """Same ambiguous 500, but the chat shows no matching from-me message —
+    the failure must stand (and retry machinery may re-send legitimately)."""
+
+    def _fake_post(url, params=None, json=None, timeout=None):
+        return _FakeResp(500, {"status": 500, "message": "Message sent with an error"})
+
+    def _fake_get(url, params=None, timeout=None):
+        if "server/info" in url:
+            return _FakeResp(
+                200,
+                {"status": 200, "data": {"private_api": False, "helper_connected": False}},
+            )
+        return _FakeResp(200, {"status": 200, "data": []})
+
+    monkeypatch.setattr(gateway.httpx, "post", _fake_post)
+    monkeypatch.setattr(gateway.httpx, "get", _fake_get)
+    monkeypatch.setattr(gateway, "decrypt_secret", lambda s: "pw")
+    acct = _bb_account()
+    acct.bluebubbles_force_sms = True
+    guid, code, detail = gateway._bluebubbles_send(acct, "+14805559999", "hello there")
+    assert guid == ""
+    assert code == "500"

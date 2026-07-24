@@ -502,7 +502,47 @@ def _bluebubbles_send(
         )
         if retry[1] is None:
             return retry
+    # BlueBubbles' AppleScript path can error AFTER Messages.app accepted the
+    # text ("[500] Message sent with an error", no guid returned) — the
+    # recipient still gets it, so treating the error as a failure makes every
+    # retry a DUPLICATE text (observed live: one lead alert delivered 4 times
+    # by lead_notify.retry_failed). Before accepting a failure, ask the device
+    # whether it actually recorded the message; if it did, that guid is the
+    # truth — return success and let sms_verify settle the final outcome.
+    if result[1] is not None:
+        rescued = _bluebubbles_find_recent_sent(base, pw, data["chatGuid"], body)
+        if rescued:
+            return rescued, None, None
     return result
+
+
+def _bluebubbles_find_recent_sent(
+    base: str, pw: str, chat_guid: str, body: str
+) -> Optional[str]:
+    """Did the device record `body` as a from-me message in this chat within
+    the last few minutes? Returns its guid, or None. Existence means
+    Messages.app took ownership of the send regardless of what the API
+    responded — a matching row here must never be re-sent. Best-effort: any
+    probe failure returns None and the original error stands."""
+    try:
+        resp = httpx.get(
+            f"{base}/api/v1/chat/{chat_guid}/message",
+            params={"password": pw, "limit": 10, "sort": "DESC"},
+            timeout=10,
+        )
+        if resp.status_code // 100 != 2:
+            return None
+        cutoff_ms = (utcnow() - dt.timedelta(minutes=5)).timestamp() * 1000
+        for m in resp.json().get("data") or []:
+            if (
+                m.get("isFromMe")
+                and (m.get("text") or "").strip() == body.strip()
+                and (m.get("dateCreated") or 0) >= cutoff_ms
+            ):
+                return m.get("guid")
+    except Exception:
+        return None
+    return None
 
 
 def _bluebubbles_create_chat_send(

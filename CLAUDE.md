@@ -2988,6 +2988,24 @@ live activation + the entitlement flip, the Outreach module build
       success/receipt, MIN_AGE gate, retry cap). DEPLOYED to production
       2026-07-24, web + desktop (DMG rebuilt; desktop runs no schedulers
       so both passes are prod-only behavior).
+- [x] Duplicate lead-alert fix — BlueBubbles ambiguous-failure rescue probe
+      (2026-07-24): user's phone got ~4 copies of one lead alert. Root
+      cause: BlueBubbles' AppleScript path can error AFTER Messages.app
+      accepted the text ("[500] Message sent with an error", NO guid in
+      the response) — the recipient gets the message, our ledger records
+      failed, and lead_notify.retry_failed dutifully re-sends up to its
+      4-attempt cap (each retry ALSO delivering + "failing"). Fix in the
+      one choke point (sms_send._bluebubbles_send): before accepting any
+      failure result, _bluebubbles_find_recent_sent probes the target
+      chat's last 10 messages on the device — a from-me message matching
+      the body within 5 minutes means Messages.app took ownership, so its
+      guid is returned as SUCCESS (sms_verify settles the final outcome
+      4+ min later; true failures with no device row still fail and still
+      retry legitimately). Covers notifications, campaign sends, manual
+      sends and the relay alike since all route through _bluebubbles_send.
+      Tests 629 → 631 (rescued + failure-stands cases in
+      test_imessage_outreach.py). DEPLOYED to production 2026-07-24
+      (backend-only, no migration), web + desktop DMG in lockstep.
 - [ ] Stripe live activation + entitlement flip (after 12–14, so real
       limits land everywhere in one pass)
 - [ ] Outreach module build (dev-mode) — go-live gated on Meta App
