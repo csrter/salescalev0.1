@@ -1474,6 +1474,13 @@ export const updateContact = (id: string, body: ContactEditBody) =>
 export const deleteContact = (id: string) =>
   api<void>(`/api/crm/contacts/${id}`, { method: "DELETE" });
 
+/** Delete EVERY lead under a client (admin; confirm is the typed "DELETE"). */
+export const purgeContacts = (clientId: string, confirm: string) =>
+  api<{ deleted: number }>("/api/crm/contacts/purge", {
+    method: "POST",
+    body: JSON.stringify({ client_id: clientId, confirm }),
+  });
+
 export const bulkDeleteContacts = (contactIds: string[]) =>
   api<{ deleted: number }>("/api/crm/contacts/bulk-delete", {
     method: "POST",

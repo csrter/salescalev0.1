@@ -38,12 +38,19 @@ from ..models.crm import (
     Pipeline,
     PipelineStage,
 )
+from ..models.email_outreach import (
+    EmailEnrollment,
+    EmailMessage,
+    EmailSuppression,
+    EmailThread,
+)
 from ..models.lead_finder import EmailVerificationRecord
 from ..models.outreach import (
     OutreachConversation,
     OutreachEnrollment,
     OutreachProspect,
 )
+from ..models.sms_outreach import SmsEnrollment, SmsMessage
 from .external_sync import push_contact_update
 
 # Sensible generic starting point — renamed/replaced per client the moment
@@ -201,32 +208,91 @@ def get_or_create_company(
     return company.id
 
 
-def delete_contact(db: Session, contact: Contact) -> None:
-    """Delete a contact and everything that references it, so no row is left
-    orphaned or dangling on a not-null FK. Owned CRM children (deals, notes,
-    tasks, tag links) are deleted; looser historical/ledger references
-    (attribution, conversions, verification records, outreach) are detached to
-    keep metrics and metering counts intact."""
-    cid = contact.id
-    deal_ids = [
-        r[0] for r in db.execute(select(Deal.id).where(Deal.contact_id == cid))
-    ]
-    if deal_ids:
-        db.execute(
-            update(Activity)
-            .where(Activity.deal_id.in_(deal_ids))
-            .values(deal_id=None)
-        )
-        db.execute(
-            update(CrmTask)
-            .where(CrmTask.deal_id.in_(deal_ids))
-            .values(deal_id=None)
-        )
-    db.execute(delete(Activity).where(Activity.contact_id == cid))
-    db.execute(delete(CrmTask).where(CrmTask.contact_id == cid))
-    db.execute(delete(ContactTag).where(ContactTag.contact_id == cid))
-    db.execute(delete(ContactListMember).where(ContactListMember.contact_id == cid))
-    db.execute(delete(Deal).where(Deal.contact_id == cid))
+def _cascade_contact_refs(db: Session, cids) -> None:
+    """Clear every row referencing the given contact ids (a list or a SELECT
+    of contact ids) so the contacts themselves can be deleted without any
+    orphan or not-null-FK violation. Shared by single delete_contact and
+    purge_contacts — one place to keep current as new tables reference
+    contacts (the SMS/email outreach tables were missed here once, which
+    made any ever-enrolled lead undeletable on Postgres; SQLite tests don't
+    enforce FKs, so assert row-level outcomes, not just "no exception").
+
+    Posture per table:
+    - Owned CRM children (activities, tasks, tag/list links, deals) and
+      per-contact outreach state (SMS/email ENROLLMENTS, email THREADS) are
+      DELETED — meaningless without the contact.
+    - Append-only ledgers (SmsMessage, EmailMessage — the audit trail and
+      the monthly meters) and compliance rows (EmailSuppression — a deleted
+      contact's address must STAY suppressed) plus attribution/verification
+      history are DETACHED (contact_id=None) so counts and compliance
+      survive the delete.
+    """
+    deal_ids = select(Deal.id).where(Deal.contact_id.in_(cids)).scalar_subquery()
+    db.execute(
+        update(Activity).where(Activity.deal_id.in_(deal_ids)).values(deal_id=None)
+    )
+    db.execute(
+        update(CrmTask).where(CrmTask.deal_id.in_(deal_ids)).values(deal_id=None)
+    )
+    db.execute(delete(Activity).where(Activity.contact_id.in_(cids)))
+    db.execute(delete(CrmTask).where(CrmTask.contact_id.in_(cids)))
+    db.execute(delete(ContactTag).where(ContactTag.contact_id.in_(cids)))
+    db.execute(
+        delete(ContactListMember).where(ContactListMember.contact_id.in_(cids))
+    )
+    db.execute(delete(Deal).where(Deal.contact_id.in_(cids)))
+
+    # Email outreach: detach ledger rows from threads/enrollments before
+    # deleting those, then detach the ledger from the contact itself.
+    thread_ids = (
+        select(EmailThread.id).where(EmailThread.contact_id.in_(cids)).scalar_subquery()
+    )
+    enrollment_ids = (
+        select(EmailEnrollment.id)
+        .where(EmailEnrollment.contact_id.in_(cids))
+        .scalar_subquery()
+    )
+    db.execute(
+        update(EmailMessage)
+        .where(EmailMessage.thread_id.in_(thread_ids))
+        .values(thread_id=None)
+    )
+    db.execute(
+        update(EmailMessage)
+        .where(EmailMessage.enrollment_id.in_(enrollment_ids))
+        .values(enrollment_id=None)
+    )
+    db.execute(
+        update(EmailMessage)
+        .where(EmailMessage.contact_id.in_(cids))
+        .values(contact_id=None)
+    )
+    db.execute(delete(EmailEnrollment).where(EmailEnrollment.contact_id.in_(cids)))
+    db.execute(delete(EmailThread).where(EmailThread.contact_id.in_(cids)))
+    db.execute(
+        update(EmailSuppression)
+        .where(EmailSuppression.contact_id.in_(cids))
+        .values(contact_id=None)
+    )
+
+    # SMS outreach: same shape — ledger detached, enrollments deleted.
+    sms_enrollment_ids = (
+        select(SmsEnrollment.id)
+        .where(SmsEnrollment.contact_id.in_(cids))
+        .scalar_subquery()
+    )
+    db.execute(
+        update(SmsMessage)
+        .where(SmsMessage.enrollment_id.in_(sms_enrollment_ids))
+        .values(enrollment_id=None)
+    )
+    db.execute(
+        update(SmsMessage)
+        .where(SmsMessage.contact_id.in_(cids))
+        .values(contact_id=None)
+    )
+    db.execute(delete(SmsEnrollment).where(SmsEnrollment.contact_id.in_(cids)))
+
     for model in (
         LandingEvent,
         ConversionEvent,
@@ -236,9 +302,35 @@ def delete_contact(db: Session, contact: Contact) -> None:
         OutreachProspect,
     ):
         db.execute(
-            update(model).where(model.contact_id == cid).values(contact_id=None)
+            update(model).where(model.contact_id.in_(cids)).values(contact_id=None)
         )
+
+
+def delete_contact(db: Session, contact: Contact) -> None:
+    """Delete a contact and everything that references it, so no row is left
+    orphaned or dangling on a not-null FK. See _cascade_contact_refs for the
+    delete-vs-detach posture per table."""
+    _cascade_contact_refs(db, [contact.id])
     db.delete(contact)
+
+
+def purge_contacts(db: Session, client: Client) -> int:
+    """Delete EVERY contact under a client in one set-based pass — the
+    "purge the CRM" action. Same cascade semantics as delete_contact, but
+    with subqueries instead of a per-contact loop so thousands of leads
+    clear in one request. Returns the number of contacts deleted. The
+    caller owns the confirmation gate, audit entry, and commit."""
+    cids = (
+        select(Contact.id).where(Contact.client_id == client.id).scalar_subquery()
+    )
+    count = db.execute(
+        select(func.count(Contact.id)).where(Contact.client_id == client.id)
+    ).scalar_one()
+    if count == 0:
+        return 0
+    _cascade_contact_refs(db, cids)
+    db.execute(delete(Contact).where(Contact.client_id == client.id))
+    return int(count)
 
 
 def set_qualified(

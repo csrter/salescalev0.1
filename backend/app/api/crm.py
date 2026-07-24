@@ -59,6 +59,7 @@ from ..schemas import (
     ActivityCreateIn,
     ActivityOut,
     ContactBulkDeleteIn,
+    ContactPurgeIn,
     ContactBulkUpdateIn,
     ContactCreateIn,
     ContactListCreateIn,
@@ -1444,6 +1445,40 @@ def bulk_delete_contacts(
         crm_svc.delete_contact(db, contact)
     db.commit()
     return {"deleted": len(contacts)}
+
+
+@router.post("/contacts/purge")
+def purge_contacts(
+    body: ContactPurgeIn,
+    user: User = Depends(require_admin),
+    scope: TenantScope = Depends(get_scope),
+    db: Session = Depends(get_db),
+):
+    """Delete EVERY lead under a client in one set-based pass (the "purge
+    the CRM" action) — no 500-id batching, no per-row loop. Admin-only,
+    double-confirmed: the body must carry confirm="DELETE" (the UI already
+    makes the user type it). One audit entry records the run + count."""
+    if body.confirm != "DELETE":
+        raise HTTPException(400, 'Type DELETE to confirm purging every lead')
+    client = _client_for(db, scope, body.client_id)
+    deleted = crm_svc.purge_contacts(db, client)
+    db.add(
+        AuditLogEntry(
+            organization_id=client.organization_id,
+            client_id=client.id,
+            user_id=user.id,
+            user_email=user.email,
+            user_name=user.full_name,
+            platform="crm",
+            entity_type="contact",
+            entity_name=client.name,
+            action="contacts.purged",
+            diff=[{"field": "deleted", "after": deleted}],
+            status=AUDIT_SUCCESS,
+        )
+    )
+    db.commit()
+    return {"deleted": deleted}
 
 
 # --- Contact lists ---

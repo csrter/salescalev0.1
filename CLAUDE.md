@@ -2876,6 +2876,45 @@ live activation + the entitlement flip, the Outreach module build
       (console.apify.com → Settings → API tokens) into Lead Finder → Data
       providers → "Apify (Google Maps scraper)", then flip the search-source
       toggle to "Apify scraper".
+- [x] Contact-delete cascade fix + purge-the-CRM (2026-07-24): user
+      "can't delete all leads" — REAL BUG: services/crm.delete_contact
+      predated the SMS/email outreach modules, so any lead ever
+      enrolled/messaged hit a NOT-NULL FK (sms_enrollments/
+      email_enrollments/email_threads.contact_id) and the delete 500'd on
+      Postgres; SQLite (tests/dev) doesn't enforce FKs, so it never
+      surfaced — the same SQLite-passes/Postgres-500s trap as the CSV
+      column caps. FIX: cascade extracted to crm._cascade_contact_refs
+      (shared by single delete + purge, list-or-subquery of contact ids;
+      the one place to extend when a new table references contacts).
+      Posture per table: SMS/email ENROLLMENTS + email THREADS deleted
+      (meaningless without the contact); ledgers (SmsMessage/EmailMessage —
+      audit trail + monthly meters, detached from thread/enrollment first)
+      and EmailSuppression (a deleted contact's address must STAY
+      suppressed — compliance) DETACHED via contact_id=None, alongside the
+      existing attribution/verification/IG-outreach detaches. NEW PURGE:
+      services/crm.purge_contacts(client) — set-based (subqueries, no
+      per-row loop, no 500-id batching) delete of EVERY contact under a
+      client; POST /api/crm/contacts/purge {client_id, confirm:"DELETE"}
+      (require_admin; the confirm literal is enforced SERVER-side on top
+      of the UI's typed confirmation), one audit entry
+      action="contacts.purged" with the count. Frontend (crm.tsx lead
+      list): admin-only "Delete all" danger button → dialog with danger
+      Alert (count + what's kept for compliance) + type-DELETE input
+      gating the submit. Tests 617 → 621 (test_crm_purge.py, own pg_org;
+      fabricates the exact enrolled/messaged/thread/suppression shapes
+      directly — SQLite won't enforce FKs, so the tests assert ROW-LEVEL
+      outcomes: children gone, ledgers detached, suppression survives;
+      plus confirm-guard 400, other-client isolation + single audit row +
+      second-purge=0, cross-org 404). Verified live on alt2: purged the
+      house CRM (7 leads incl. 3 SMS-enrolled — the previously-undeletable
+      shape) through the real dialog; DB shows 0 leads / 0 enrollments /
+      all ledger rows surviving detached / 1 audit row; zero console
+      errors. DEPLOYED to production 2026-07-24 (21e6c2f), web + desktop —
+      code only, no migration: VPS backend/frontend rebuilt, health green,
+      purge route live + auth-gated, zero tracebacks; DMG rebuilt
+      (155MB, backend hash-matched), installed to /Applications,
+      launch-verified (health 200 + purge route 401 on the packaged
+      backend), repo-root DMG copy refreshed sha-identical.
 - [ ] Stripe live activation + entitlement flip (after 12–14, so real
       limits land everywhere in one pass)
 - [ ] Outreach module build (dev-mode) — go-live gated on Meta App

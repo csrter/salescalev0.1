@@ -866,6 +866,15 @@ class ContactBulkDeleteIn(BaseModel):
     contact_ids: List[str] = Field(min_length=1, max_length=500)
 
 
+class ContactPurgeIn(BaseModel):
+    """Delete EVERY lead under a client. confirm must be the literal string
+    "DELETE" — a server-side guard on top of the UI's typed confirmation,
+    so no client bug can fire this destructive action accidentally."""
+
+    client_id: str
+    confirm: str
+
+
 class ContactBulkUpdateIn(BaseModel):
     contact_ids: List[str] = Field(min_length=1, max_length=500)
     fields: ContactUpdateIn

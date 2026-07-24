@@ -39,6 +39,7 @@ import {
   setClientTimezone,
   listContactLists,
   listResearchFields,
+  purgeContacts,
   renameContactList,
   runResearch,
   updateContact,
@@ -995,6 +996,26 @@ function LeadList({
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [confirmingBulk, setConfirmingBulk] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  // Purge-the-CRM: delete every lead under this client. Typed confirmation
+  // ("DELETE") — the server independently requires the same literal.
+  const [showPurge, setShowPurge] = useState(false);
+  const [purgeText, setPurgeText] = useState("");
+  const [purging, setPurging] = useState(false);
+
+  const doPurge = () => {
+    if (purging || purgeText !== "DELETE") return;
+    setPurging(true);
+    purgeContacts(clientId, purgeText)
+      .then((r) => {
+        toast(`Deleted ${r.deleted} lead${r.deleted === 1 ? "" : "s"} — CRM purged`, "ok");
+        setShowPurge(false);
+        setPurgeText("");
+        setSelected(new Set());
+        onCreated();
+      })
+      .catch((e) => toast((e as Error).message, "error"))
+      .finally(() => setPurging(false));
+  };
 
   // System-column choices persist client-side only (the crm-columns preference
   // stores custom-field keys; keeping system columns out of it avoids any
@@ -1275,6 +1296,18 @@ function LeadList({
               Import
             </Button>
           )}
+          {isAdmin && contacts.length > 0 && (
+            <Button
+              variant="danger-outline"
+              size="sm"
+              onClick={() => {
+                setPurgeText("");
+                setShowPurge(true);
+              }}
+            >
+              <Trash2 size={14} /> Delete all
+            </Button>
+          )}
           {isTeam && (
             <Button
               variant="ghost"
@@ -1441,6 +1474,58 @@ function LeadList({
           onClose={() => setShowImport(false)}
           onDone={onCreated}
         />
+      )}
+
+      {showPurge && (
+        <Dialog
+          open
+          onClose={() => !purging && setShowPurge(false)}
+          title="Delete ALL leads"
+          size="sm"
+        >
+          <Alert tone="danger" title="This cannot be undone">
+            Every lead in this CRM ({contacts.length.toLocaleString()}) will be
+            permanently deleted — including their notes, tasks, deals, list
+            memberships and campaign enrollments. Sent-message history and
+            opt-out records are kept for compliance.
+          </Alert>
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              doPurge();
+            }}
+          >
+            <Field label='Type DELETE to confirm'>
+              <input
+                autoFocus
+                value={purgeText}
+                onChange={(e) => setPurgeText(e.target.value)}
+                placeholder="DELETE"
+                aria-label="Type DELETE to confirm"
+              />
+            </Field>
+            <div className="crm-form-actions" style={{ marginTop: "0.75rem" }}>
+              <Button
+                type="submit"
+                variant="danger"
+                size="sm"
+                busy={purging}
+                disabled={purgeText !== "DELETE"}
+              >
+                Delete all {contacts.length.toLocaleString()} leads
+              </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                disabled={purging}
+                onClick={() => setShowPurge(false)}
+              >
+                Cancel
+              </Button>
+            </div>
+          </form>
+        </Dialog>
       )}
 
       {showManageLists && (
