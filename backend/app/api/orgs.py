@@ -140,7 +140,12 @@ def signup(
     if existing is not None:
         raise HTTPException(409, "A user with this email already exists")
 
-    org = Organization(name=body.organization_name)
+    from ..config import get_settings
+
+    plan = get_settings().default_signup_plan
+    if plan not in entitlements.TIER_LIMITS:
+        plan = "starter"
+    org = Organization(name=body.organization_name, plan=plan)
     db.add(org)
     db.flush()
     owner = User(

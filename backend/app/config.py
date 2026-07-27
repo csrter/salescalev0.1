@@ -202,6 +202,12 @@ class Settings(BaseSettings):
     # OAuth social-login return all land here.
     app_base_url: str = "http://localhost:5173"
 
+    # Plan assigned to newly signed-up Organizations. Beta lever: set to
+    # "agency" while Stripe is off so beta orgs don't hit the starter
+    # client/seat caps with no upgrade path. Unknown values fall back to
+    # "starter" at the point of use (api/orgs signup).
+    default_signup_plan: str = "starter"
+
     # Public URL of THIS backend — used to build OAuth redirect_uri values that
     # must match what's registered with Google/Meta.
     api_base_url: str = "http://localhost:8000"

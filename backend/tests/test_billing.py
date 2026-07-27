@@ -170,3 +170,21 @@ def test_webhook_subscription_deleted_downgrades_to_starter(api):
     assert org.plan == "starter"
     assert org.subscription_status == "canceled"
     db2.close()
+
+
+def test_default_signup_plan_lever(api, monkeypatch):
+    """DEFAULT_SIGNUP_PLAN (the beta lever) sets a new org's plan; unknown
+    values fall back to starter instead of minting an unbilled tier."""
+    from app.config import get_settings
+
+    monkeypatch.setattr(get_settings(), "default_signup_plan", "agency")
+    org_id = _signup(api, "Beta Plan Co", "owner@betaplanco.com")["organization_id"]
+    db = SessionLocal()
+    assert db.get(Organization, org_id).plan == "agency"
+    db.close()
+
+    monkeypatch.setattr(get_settings(), "default_signup_plan", "vip-nonsense")
+    org_id = _signup(api, "Typo Plan Co", "owner@typoplanco.com")["organization_id"]
+    db = SessionLocal()
+    assert db.get(Organization, org_id).plan == "starter"
+    db.close()
