@@ -3734,3 +3734,54 @@ def test_failed_notification_retries_then_succeeds_and_caps(
         assert total_retries == lead_notify.NOTIFY_MAX_ATTEMPTS - 1
     finally:
         db.close()
+
+
+def test_monthly_usage_meter_counts_delivered_and_read(api):
+    """The monthly entitlement meter must use the same inclusive status
+    tuple as the daily-cap counters: a delivery/read receipt upgrading a
+    row off 'sent' previously REMOVED it from the meter (undercount →
+    quota overrun)."""
+    r = api.post(
+        "/api/orgs/signup",
+        json={
+            "organization_name": "Meter Co",
+            "email": "owner@meterco.com",
+            "password": "meterco-pass-1",
+            "full_name": "Meter Owner",
+        },
+    )
+    org_id = r.json()["organization_id"]
+    from app.models.core import Organization
+    from app.models.sms_outreach import (
+        SMS_DIR_IN,
+        SMS_DIR_OUT,
+        SMS_MSG_DELIVERED,
+        SMS_MSG_FAILED,
+        SMS_MSG_READ,
+        SMS_MSG_RECEIVED,
+        SMS_MSG_SENT,
+        SmsMessage,
+    )
+    from app.services import entitlements
+
+    with SessionLocal() as db:
+        for status, direction in (
+            (SMS_MSG_SENT, SMS_DIR_OUT),
+            (SMS_MSG_DELIVERED, SMS_DIR_OUT),  # receipt-upgraded — must count
+            (SMS_MSG_READ, SMS_DIR_OUT),  # iMessage read receipt — must count
+            (SMS_MSG_FAILED, SMS_DIR_OUT),  # never delivered — must not
+            (SMS_MSG_RECEIVED, SMS_DIR_IN),  # inbound — must not
+        ):
+            db.add(
+                SmsMessage(
+                    organization_id=org_id,
+                    account_id="meter-acct",
+                    direction=direction,
+                    to_number="+14805550999",
+                    body="meter row",
+                    status=status,
+                )
+            )
+        db.commit()
+        org = db.get(Organization, org_id)
+        assert entitlements.sms_outreach_usage(db, org)["used"] == 3

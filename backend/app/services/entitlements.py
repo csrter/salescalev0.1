@@ -344,7 +344,8 @@ def sms_outreach_usage(db: Session, org: Organization) -> dict:
     ledger (same calendar-month rule as every other meter)."""
     import datetime as dt
 
-    from ..models.sms_outreach import SMS_DIR_OUT, SMS_MSG_SENT, SmsMessage
+    from ..models.sms_outreach import SMS_DIR_OUT, SmsMessage
+    from .sms_send import _COUNTED_SENT_STATUSES
 
     now = dt.datetime.now(dt.timezone.utc)
     month_start = dt.datetime(now.year, now.month, 1, tzinfo=dt.timezone.utc)
@@ -354,7 +355,10 @@ def sms_outreach_usage(db: Session, org: Organization) -> dict:
         .where(
             SmsMessage.organization_id == org.id,
             SmsMessage.direction == SMS_DIR_OUT,
-            SmsMessage.status == SMS_MSG_SENT,
+            # Inclusive tuple, same as the daily-cap counters: a delivery or
+            # read receipt upgrades a row's status, and status=='sent' alone
+            # would REMOVE it from the meter (silent monthly undercount).
+            SmsMessage.status.in_(_COUNTED_SENT_STATUSES),
             SmsMessage.created_at >= month_start,
         )
     ).scalar_one()
