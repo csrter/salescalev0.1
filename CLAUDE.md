@@ -3125,6 +3125,52 @@ live activation + the entitlement flip, the Outreach module build
       REMAINING user-side: operator GOOGLE_PLACES_API_KEY, Supabase backup
       verification + test restore, Meta app publish/roles, Google OAuth →
       Production, ToS/DPA.
+- [x] Beta Phase 2, honesty gates + day-one UX (2026-07-27, same session;
+      commit 3dab92b, deployed with migration f8b3d6c2a9e4 — alembic
+      current on live Supabase): (1) FEATURE FLAGS — services/
+      feature_flags.py, env allowlists IG_OUTREACH_ORG_IDS /
+      BLUEBUBBLES_ORG_IDS (CSV of org ids or "*"; "*" default keeps
+      dev/test unchanged, PROD set to the Atlas Reach + Salescale org ids):
+      IG Outreach nav hidden (dead-ends until Meta App Review) and the
+      BlueBubbles provider hidden AND 403'd server-side at SMS account
+      creation for non-allowlisted orgs; flag map rides on
+      TokenResponse.features (absent on pre-flag cached sessions = treated
+      all-enabled; server enforcement is the real gate). (2) EMAIL open-
+      rate KPI/columns/chart series REMOVED (architecturally always 0% —
+      plain-text sends never embed the pixel; the pixel endpoint itself
+      stays). (3) SMS: persistent A2P 10DLC "connected ≠ registered" Alert
+      on Twilio account cards; no_consent enroll receipts explain the
+      legitimate consent-capture routes. (4) LEAD FINDER no-Places-key
+      setup banner (admin fix inline, member told to ask admin).
+      (5) BILLING: GET /api/billing/usage (all 8 meters incl. new
+      entitlements.client_usage) + Usage panel on the Billing page
+      (.set-usage spec-sheet rows). (6) GDPR EXPORT: GET /api/crm/
+      contacts/{id}/export (require_admin, audit contact.exported) —
+      services/crm.export_contact mirrors _cascade_contact_refs's table
+      list so disclosure and erasure can never drift; "Export data (GDPR)"
+      button in the contact drawer downloads the JSON. (7) INSIGHTS
+      AUTO-SYNC: insights_sync.run_due on its own 10-min-tick scheduler
+      (insights_scheduler_enabled, off in tests; 6h per-connection floor
+      via insights_sync_interval_seconds; cursor platform_connections.
+      last_insights_sync_at, stamped at attempt START so a down platform
+      retries on the interval; manual sync_client stamps the same cursor)
+      + GET /api/insights/status and a "data synced Xh ago / never synced"
+      label beside the dashboard's Sync button. (8) TRACKING EMBED: a
+      copyable per-client JS snippet card in CRM setup (first-touch
+      UTM/click-id localStorage, pageview ping, automatic form capture →
+      /api/track/lead), enabled by a dedicated wildcard-CORS middleware
+      for /api/track/* ONLY (registered AFTER CORSMiddleware → wraps
+      outside it; client sites' origins can't be enumerated in
+      frontend_origins; everything else keeps the strict policy —
+      regression-tested with Origin-header assertions). Tests 647
+      (test_insights_tenancy.py NOTE: run_due tests stub BOTH fetchers and
+      use limit=200 — the suite-wide DB carries other modules' seeded
+      connections with NULL cursors). tsc + vite build clean; verified
+      live on alt2 (usage meters with real counts, open-rate gone, A2P
+      alert, embed card, no-key banner, "never synced" label, zero console
+      errors). Deployed web (health green, billing/usage auth-gated, track
+      preflight 204 from a foreign origin, zero tracebacks) + desktop DMG
+      in lockstep.
 - [ ] Stripe live activation + entitlement flip (after 12–14, so real
       limits land everywhere in one pass)
 - [ ] Outreach module build (dev-mode) — go-live gated on Meta App
