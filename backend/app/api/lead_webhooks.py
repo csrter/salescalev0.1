@@ -18,8 +18,9 @@ Trust model (these are public, unauthenticated-by-JWT endpoints):
 import hmac
 import json
 import re
+import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, Response
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 from starlette.datastructures import UploadFile
@@ -34,7 +35,9 @@ from ..services import connections as conn_svc
 from ..services import crm as crm_svc
 from ..services import custom_fields as custom_fields_svc
 from ..ratelimit import rate_limit
+from ..models.conversions import ConversionEvent
 from ..services import integration_creds, lead_autoenroll, lead_ingest, lead_notify, meta_leadgen
+from ..services.conversion_dispatch import dispatch_conversion
 from ..services.external_sync import push_contact_update
 
 router = APIRouter(prefix="/api/webhooks", tags=["lead-webhooks"])
@@ -126,8 +129,16 @@ async def meta_leadgen_webhook(
             if change.get("field") != "leadgen":
                 continue
             value = change.get("value") or {}
-            results.append(_ingest_meta_lead(db, value))
-    db.commit()
+            # Per-lead isolation + commit: one malformed lead (or a transient
+            # DB error on it) must neither 500 the whole batch — Meta would
+            # redeliver everything — nor roll back the leads already ingested
+            # before it.
+            try:
+                results.append(_ingest_meta_lead(db, value))
+                db.commit()
+            except Exception as e:
+                db.rollback()
+                results.append({"status": "failed", "reason": str(e)})
     # Always 200 once the signature checks out — Meta redelivers on non-2xx
     # and an unroutable page_id won't become routable by retrying.
     return {"received": len(results), "results": results}
@@ -149,6 +160,11 @@ def _ingest_meta_lead(db: Session, value: dict) -> dict:
     if config is None:
         return {"status": "ignored", "reason": "no client configured for page"}
     client = db.get(Client, config.client_id)
+    if client is None:
+        # Stale config: the client was deleted but its LeadFormConfig row
+        # survived. Without this guard the whole webhook 500s and Meta
+        # redelivers the batch forever.
+        return {"status": "ignored", "reason": "stale config: client deleted"}
 
     conn = db.execute(
         select(PlatformConnection).where(
@@ -445,11 +461,29 @@ def _match_custom_fields(db: Session, organization_id: str, extra: dict) -> dict
     return custom_incoming
 
 
+def _dispatch_landing_form_conversion(event_id: str, lead: dict) -> None:
+    """Background half of the landing-form webhook's conversion dispatch —
+    its own session so the webhook response never waits on a platform API
+    (form tools retry on slow webhooks, which would duplicate leads)."""
+    from ..db import SessionLocal
+
+    with SessionLocal() as bg_db:
+        event = bg_db.get(ConversionEvent, event_id)
+        if event is None:
+            return
+        try:
+            dispatch_conversion(bg_db, event, lead)
+            bg_db.commit()
+        except Exception:  # per-platform errors are already isolated inside;
+            bg_db.rollback()  # this guards the dispatch plumbing itself.
+
+
 @router.post("/landing-form/{client_id}/{key}")
 async def landing_form_webhook(
     client_id: str,
     key: str,
     request: Request,
+    background: BackgroundTasks,
     db: Session = Depends(get_db),
     _: None = _webhook_limit,
 ):
@@ -520,28 +554,29 @@ async def landing_form_webhook(
     # Attribution parity with the Google lead-form webhook: any click id/UTM
     # in the payload gets a first-class LandingEvent row, same capture layer
     # as JS-tracked landing pages.
+    landing = None
     if created and any(
         fields.get(k)
         for k in ("utm_source", "utm_medium", "utm_campaign", "gclid", "fbclid")
     ):
-        db.add(
-            LandingEvent(
-                organization_id=client.organization_id,
-                client_id=client.id,
-                session_key=f"landing-webhook-{contact.id}",
-                landing_url=fields.get("landing_url"),
-                utm_source=fields.get("utm_source"),
-                utm_medium=fields.get("utm_medium"),
-                utm_campaign=fields.get("utm_campaign"),
-                utm_content=fields.get("utm_content"),
-                utm_term=fields.get("utm_term"),
-                gclid=fields.get("gclid"),
-                fbclid=fields.get("fbclid"),
-                fbp=fields.get("fbp"),
-                occurred_at=utcnow(),
-                contact_id=contact.id,
-            )
+        landing = LandingEvent(
+            organization_id=client.organization_id,
+            client_id=client.id,
+            session_key=f"landing-webhook-{contact.id}",
+            landing_url=fields.get("landing_url"),
+            utm_source=fields.get("utm_source"),
+            utm_medium=fields.get("utm_medium"),
+            utm_campaign=fields.get("utm_campaign"),
+            utm_content=fields.get("utm_content"),
+            utm_term=fields.get("utm_term"),
+            gclid=fields.get("gclid"),
+            fbclid=fields.get("fbclid"),
+            fbp=fields.get("fbp"),
+            occurred_at=utcnow(),
+            contact_id=contact.id,
         )
+        db.add(landing)
+        db.flush()
     if created and fields.get("message"):
         db.add(
             Activity(
@@ -557,5 +592,41 @@ async def landing_form_webhook(
         push_contact_update(db, client, contact, event="lead.created")
         lead_notify.notify_new_lead(db, client, contact)
         lead_autoenroll.auto_enroll_new_lead(db, client, contact)
+
+    # Server-side conversion tracking (Phase 5): unlike the Meta/Google
+    # NATIVE lead-form webhooks — where the platform already counts its own
+    # form's conversion and a CAPI/upload would double-count — a third-party
+    # landing-page form is invisible to the platforms, so this is exactly
+    # the path server-side upload exists for. One ConversionEvent per
+    # submission (parity with /api/track/lead), dispatched in the background
+    # so a slow platform API can't stall the form tool's webhook into a
+    # retry (which would duplicate the lead).
+    event = ConversionEvent(
+        organization_id=client.organization_id,
+        client_id=client.id,
+        contact_id=contact.id,
+        landing_event_id=landing.id if landing is not None else None,
+        event_name="Lead",
+        event_id=str(uuid.uuid4()),
+        event_source_url=fields.get("landing_url"),
+        occurred_at=utcnow(),
+    )
+    db.add(event)
     db.commit()
+    background.add_task(
+        _dispatch_landing_form_conversion,
+        event.id,
+        {
+            "email": fields.get("email"),
+            "phone": fields.get("phone"),
+            "first_name": fields.get("first_name"),
+            "last_name": fields.get("last_name"),
+            "city": fields.get("city"),
+            "state": fields.get("state"),
+            "zip": fields.get("zip"),
+            "fbp": fields.get("fbp"),
+            # Deliberately no client_ip/user_agent: this request comes from
+            # the form tool's server, not the lead's browser.
+        },
+    )
     return {"status": "created" if created else "updated", "contact_id": contact.id}

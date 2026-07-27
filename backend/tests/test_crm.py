@@ -988,3 +988,155 @@ def test_crm_org_isolation(
     mine = _contacts(api, team_headers, crm_client)
     resp = api.get(f"/api/crm/contacts/{mine[0]['id']}", headers=org2_headers)
     assert resp.status_code == 404
+
+
+# --- lead ingestion: conversion dispatch + webhook hardening (beta P2) ---
+
+
+def test_landing_form_webhook_creates_conversion_event_and_dispatches(
+    api, team_headers, crm_client, monkeypatch
+):
+    """A third-party landing form is invisible to the ad platforms, so the
+    webhook is exactly where Phase 5's server-side upload must fire: one
+    ConversionEvent per submission, dispatched with the lead's own match
+    data and the gclid-bearing landing link."""
+    sent = []
+    monkeypatch.setattr(
+        lead_webhooks,
+        "dispatch_conversion",
+        lambda db, event, lead, **kw: sent.append((event, lead)) or [],
+    )
+    key = api.post(
+        f"/api/clients/{crm_client}/lead-forms/landing-page/rotate",
+        headers=team_headers,
+    ).json()["external_key"]
+
+    resp = api.post(
+        f"/api/webhooks/landing-form/{crm_client}/{key}",
+        json={
+            "email": "convert@example.com",
+            "first_name": "Connie",
+            "gclid": "gclid-dispatch-1",
+            "landing_url": "https://example.com/offer",
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    contact_id = resp.json()["contact_id"]
+
+    assert len(sent) == 1
+    event, lead = sent[0]
+    assert event.contact_id == contact_id
+    assert event.event_name == "Lead"
+    assert event.landing_event_id is not None  # gclid rode in on the payload
+    assert lead["email"] == "convert@example.com"
+    # This request came from the form tool's server, never the lead's
+    # browser — no IP/UA may be sent as platform match data.
+    assert "client_ip_address" not in lead
+
+    from app.models.conversions import ConversionEvent
+
+    with SessionLocal() as db:
+        row = db.get(ConversionEvent, event.id)
+        assert row is not None and row.contact_id == contact_id
+
+
+def test_meta_webhook_stale_config_ignored_not_500(api, crm_client):
+    """A LeadFormConfig whose client has since been deleted must be reported
+    as ignored — not 500 the batch into Meta's redelivery loop."""
+    from app.models.core import Client
+    from app.models.crm import LeadFormConfig
+
+    with SessionLocal() as db:
+        org_id = db.get(Client, crm_client).organization_id
+        db.add(
+            LeadFormConfig(
+                organization_id=org_id,
+                client_id="client-deleted-long-ago",
+                platform="meta",
+                external_key="page-stale-1",
+                enabled=True,
+            )
+        )
+        db.commit()
+
+    envelope = {
+        "object": "page",
+        "entry": [
+            {
+                "id": "page-stale-1",
+                "time": 1730000001,
+                "changes": [
+                    {
+                        "field": "leadgen",
+                        "value": {"leadgen_id": "lead-stale-1", "page_id": "page-stale-1"},
+                    }
+                ],
+            }
+        ],
+    }
+    raw, headers = _meta_signed(envelope)
+    resp = api.post("/api/webhooks/meta/leadgen", content=raw, headers=headers)
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["results"][0]["status"] == "ignored"
+
+
+def test_meta_webhook_one_bad_lead_never_fails_the_batch(
+    api, team_headers, crm_client, monkeypatch
+):
+    """An exception on one lead (past the fetch guard — e.g. inside the
+    upsert) is contained to that lead: the batch 200s and the other lead
+    is ingested and persisted."""
+    from app.services import lead_ingest
+
+    real_upsert = lead_ingest.upsert_contact
+
+    def exploding_upsert(db, client, **kw):
+        if kw.get("email") == "boom@example.com":
+            raise RuntimeError("synthetic upsert failure")
+        return real_upsert(db, client, **kw)
+
+    monkeypatch.setattr(lead_webhooks.lead_ingest, "upsert_contact", exploding_upsert)
+    monkeypatch.setattr(
+        lead_webhooks.meta_leadgen,
+        "fetch_lead",
+        lambda token, leadgen_id: {
+            "id": leadgen_id,
+            "field_data": [
+                {
+                    "name": "email",
+                    "values": [
+                        "boom@example.com"
+                        if leadgen_id == "lead-bad-1"
+                        else "fine@example.com"
+                    ],
+                },
+                {"name": "full_name", "values": ["Batch Survivor"]},
+            ],
+        },
+    )
+    api.put(
+        f"/api/clients/{crm_client}/lead-forms/meta",
+        json={"external_key": "777"},
+        headers=team_headers,
+    )
+
+    def change(lid):
+        return {
+            "field": "leadgen",
+            "value": {"leadgen_id": lid, "page_id": "777", "created_time": 1730000002},
+        }
+
+    envelope = {
+        "object": "page",
+        "entry": [
+            {"id": "777", "time": 1730000002, "changes": [change("lead-bad-1"), change("lead-good-1")]}
+        ],
+    }
+    raw, headers = _meta_signed(envelope)
+    resp = api.post("/api/webhooks/meta/leadgen", content=raw, headers=headers)
+    assert resp.status_code == 200, resp.text
+    statuses = [r["status"] for r in resp.json()["results"]]
+    assert statuses == ["failed", "created"]
+    assert any(
+        c["email"] == "fine@example.com" for c in _contacts(api, team_headers, crm_client)
+    )
