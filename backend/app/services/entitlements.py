@@ -72,11 +72,8 @@ def _limits(org: Organization) -> dict[str, int | None]:
     return TIER_LIMITS.get(org.plan, TIER_LIMITS["starter"])
 
 
-def enforce_can_add_client(db: Session, org: Organization) -> None:
-    """402 when the org is at its plan's client limit."""
-    cap = _limits(org)["clients"]
-    if cap is None:
-        return
+def client_usage(db: Session, org: Organization) -> dict:
+    """Self-service usage visibility for the client cap."""
     count = db.execute(
         select(func.count())
         .select_from(Client)
@@ -84,7 +81,16 @@ def enforce_can_add_client(db: Session, org: Organization) -> None:
         # client — it must never consume a plan slot.
         .where(Client.organization_id == org.id, Client.is_house.is_(False))
     ).scalar_one()
-    if count >= cap:
+    return {"used": count, "limit": _limits(org)["clients"]}
+
+
+def enforce_can_add_client(db: Session, org: Organization) -> None:
+    """402 when the org is at its plan's client limit."""
+    usage = client_usage(db, org)
+    cap = usage["limit"]
+    if cap is None:
+        return
+    if usage["used"] >= cap:
         raise HTTPException(
             status.HTTP_402_PAYMENT_REQUIRED,
             f"Your {org.plan} plan allows {cap} clients. Upgrade to add more.",

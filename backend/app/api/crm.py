@@ -1407,6 +1407,41 @@ def _write_contact_delete_audit(db: Session, contact: Contact, user: User) -> No
     )
 
 
+@router.get("/contacts/{contact_id}/export")
+def export_contact(
+    contact_id: str,
+    user: User = Depends(require_admin),
+    scope: TenantScope = Depends(get_scope),
+    db: Session = Depends(get_db),
+):
+    """GDPR/CCPA data-subject export: one JSON bundle of every row the
+    contact touches — same table list as the deletion cascade, so disclosure
+    and erasure can never drift apart. Admin-gated (it discloses message
+    bodies and attribution history), org-scoped (cross-tenant ids 404),
+    and audit-logged like deletion."""
+    contact = scope.get_or_404(db, Contact, contact_id)
+    name = " ".join(filter(None, [contact.first_name, contact.last_name]))
+    db.add(
+        AuditLogEntry(
+            organization_id=contact.organization_id,
+            client_id=contact.client_id,
+            user_id=user.id,
+            user_email=user.email,
+            user_name=user.full_name,
+            platform="crm",
+            entity_type="contact",
+            entity_external_id=contact.id,
+            entity_name=name or contact.email or contact.phone,
+            action="contact.exported",
+            diff=[],
+            status=AUDIT_SUCCESS,
+        )
+    )
+    bundle = crm_svc.export_contact(db, contact)
+    db.commit()
+    return bundle
+
+
 @router.delete("/contacts/{contact_id}", status_code=204)
 def delete_contact(
     contact_id: str,

@@ -16,6 +16,7 @@ checked is qualified. An Organization with no criteria configured uses a
 plain qualified yes/no.
 """
 
+import datetime as dt
 from typing import Dict, List, Optional, Tuple
 
 from fastapi import HTTPException
@@ -331,6 +332,58 @@ def purge_contacts(db: Session, client: Client) -> int:
     _cascade_contact_refs(db, cids)
     db.execute(delete(Contact).where(Contact.client_id == client.id))
     return int(count)
+
+
+def _dump_row(row) -> dict:
+    """Generic column dump for the GDPR export — every stored value,
+    datetimes ISO-formatted, JSON columns as-is."""
+    out = {}
+    for col in row.__table__.columns:
+        v = getattr(row, col.name)
+        if isinstance(v, (dt.datetime, dt.date)):
+            v = v.isoformat()
+        out[col.name] = v
+    return out
+
+
+def export_contact(db: Session, contact: Contact) -> dict:
+    """GDPR/CCPA data-subject EXPORT: every row this contact touches, as one
+    JSON bundle. The table list deliberately mirrors _cascade_contact_refs
+    (the deletion path) — if a new table joins the cascade, it joins the
+    export, so "what we delete" and "what we disclose" can never drift
+    apart. Verified by query, not assumption (guardrail 9)."""
+    cid = contact.id
+
+    def rows(model, col=None):
+        col = col if col is not None else model.contact_id
+        return [
+            _dump_row(r)
+            for r in db.execute(select(model).where(col == cid)).scalars()
+        ]
+
+    company = db.get(Company, contact.company_id) if contact.company_id else None
+    return {
+        "exported_at": utcnow().isoformat(),
+        "contact": _dump_row(contact),
+        "company": _dump_row(company) if company is not None else None,
+        "activities": rows(Activity),
+        "tasks": rows(CrmTask),
+        "tag_links": rows(ContactTag),
+        "list_memberships": rows(ContactListMember),
+        "deals": rows(Deal),
+        "landing_events": rows(LandingEvent),
+        "conversion_events": rows(ConversionEvent),
+        "email_verifications": rows(EmailVerificationRecord),
+        "email_threads": rows(EmailThread),
+        "email_enrollments": rows(EmailEnrollment),
+        "email_messages": rows(EmailMessage),
+        "email_suppressions": rows(EmailSuppression),
+        "sms_enrollments": rows(SmsEnrollment),
+        "sms_messages": rows(SmsMessage),
+        "ig_outreach_prospects": rows(OutreachProspect),
+        "ig_outreach_enrollments": rows(OutreachEnrollment),
+        "ig_outreach_conversations": rows(OutreachConversation),
+    }
 
 
 def set_qualified(

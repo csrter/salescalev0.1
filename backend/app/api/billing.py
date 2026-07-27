@@ -21,6 +21,7 @@ from ..models.base import utcnow
 from ..models.core import Organization, ProcessedStripeEvent, User
 from ..ratelimit import rate_limit
 from ..schemas import CheckoutRequest, CheckoutSessionOut, SubscriptionOut
+from ..services import entitlements
 
 router = APIRouter(prefix="/api/billing", tags=["billing"])
 log = logging.getLogger("salescale.billing")
@@ -47,6 +48,31 @@ def get_subscription(user: User = Depends(require_team), db: Session = Depends(g
         status=org.subscription_status,
         billing_enabled=bool(get_settings().stripe_secret_key),
     )
+
+
+@router.get("/usage")
+def get_usage(user: User = Depends(require_team), db: Session = Depends(get_db)):
+    """Every metered thing in one place — "X of Y used" self-service
+    visibility (standing guardrail #5) so an org sees a cap coming instead
+    of hitting a raw 402. limit=null means unlimited on this plan."""
+    org = db.get(Organization, user.organization_id)
+    meters = [
+        ("clients", "Clients", entitlements.client_usage(db, org)),
+        ("seats", "Team seats", entitlements.seat_usage(db, org)),
+        ("custom_fields", "Custom CRM fields", entitlements.custom_field_usage(db, org)),
+        ("research_fields", "AI research fields", entitlements.research_field_usage(db, org)),
+        ("lead_finder_searches", "Lead Finder searches (month)", entitlements.lead_finder_usage(db, org)),
+        ("email_verifications", "Email verifications (month)", entitlements.email_verification_usage(db, org)),
+        ("email_sends", "Cold-email sends (month)", entitlements.email_outreach_usage(db, org)),
+        ("sms_sends", "SMS sends (month)", entitlements.sms_outreach_usage(db, org)),
+    ]
+    return {
+        "plan": org.plan,
+        "meters": [
+            {"key": key, "label": label, "used": u["used"], "limit": u["limit"]}
+            for key, label, u in meters
+        ],
+    }
 
 
 @router.post("/checkout", response_model=CheckoutSessionOut)

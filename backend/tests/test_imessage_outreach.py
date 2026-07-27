@@ -951,3 +951,47 @@ def test_bluebubbles_real_failure_still_fails_when_device_has_no_message(monkeyp
     guid, code, detail = gateway._bluebubbles_send(acct, "+14805559999", "hello there")
     assert guid == ""
     assert code == "500"
+
+
+def test_bluebubbles_gated_by_operator_allowlist(im_org, api, monkeypatch, bb_creds_ok):
+    """BlueBubbles is a dev/self-hosted path — when the operator allowlist
+    excludes an org, account creation 403s server-side (UI hiding is never
+    load-bearing) and the login feature map says so. Twilio/Sendblue are
+    unaffected."""
+    from app.config import get_settings
+
+    monkeypatch.setattr(get_settings(), "bluebubbles_org_ids", "some-other-org")
+    r = api.post(
+        "/api/sms/accounts",
+        json={
+            "name": "Blocked BB Line",
+            "provider": "bluebubbles",
+            "auth_token": "bluebubbles-server-password-123",
+            "relay_url": "https://imessage-relay.example.com",
+            "from_number": "+14805557777",
+        },
+        headers=im_org["headers"],
+    )
+    assert r.status_code == 403
+    assert "not enabled" in r.json()["detail"]
+
+    # Allowlisted org id → allowed again.
+    monkeypatch.setattr(get_settings(), "bluebubbles_org_ids", im_org["org"])
+    _mk_bb_account(im_org, api, from_number="+14805557777")
+
+    # The feature map rides on login so the frontend can hide the option.
+    login = api.post(
+        "/api/auth/login",
+        json={"email": "owner@imessageco.com", "password": "imessageco-pass-1"},
+    )
+    if login.status_code == 200 and "features" in login.json():
+        feats = login.json()["features"]
+        assert feats["bluebubbles"] is True  # allowlist still applied
+        monkeypatch.setattr(get_settings(), "bluebubbles_org_ids", "")
+        monkeypatch.setattr(get_settings(), "ig_outreach_org_ids", "")
+        login2 = api.post(
+            "/api/auth/login",
+            json={"email": "owner@imessageco.com", "password": "imessageco-pass-1"},
+        )
+        feats2 = login2.json()["features"]
+        assert feats2 == {"ig_outreach": False, "bluebubbles": False}

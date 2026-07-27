@@ -3,7 +3,9 @@ import {
   ORG_PLANS,
   acceptInvite,
   acceptInviteSignup,
+  getBillingUsage,
   getSubscription,
+  type BillingUsage,
   isMfaChallenge,
   login,
   loginMfa,
@@ -355,12 +357,14 @@ export function AcceptInvite({
 
 export function Billing({ session }: { session: Session }) {
   const [sub, setSub] = useState<Subscription | null>(null);
+  const [usage, setUsage] = useState<BillingUsage | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const isOwner = session.role === "owner";
 
   useEffect(() => {
     getSubscription().then(setSub).catch((e) => setError(e.message));
+    getBillingUsage().then(setUsage).catch(() => undefined); // informative
   }, []);
 
   const go = async (fn: () => Promise<{ url: string }>) => {
@@ -406,6 +410,31 @@ export function Billing({ session }: { session: Session }) {
           Billing isn't configured on this deployment yet. Plans are managed
           manually until Stripe keys are set.
         </Alert>
+      )}
+
+      {usage && (
+        <>
+          <h3>Usage</h3>
+          <div className="set-usage">
+            {usage.meters.map((m) => {
+              const pctUsed =
+                m.limit == null ? 0 : Math.min(1, m.used / Math.max(1, m.limit));
+              const nearCap = m.limit != null && pctUsed >= 0.8;
+              return (
+                <div key={m.key} className="set-usage-row">
+                  <span className="set-usage-label">{m.label}</span>
+                  <span
+                    className={
+                      nearCap ? "set-usage-count set-usage-count--warn" : "set-usage-count"
+                    }
+                  >
+                    {m.used} of {m.limit == null ? "∞" : m.limit} used
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        </>
       )}
 
       {sub && sub.billing_enabled && isOwner && (

@@ -213,6 +213,9 @@ function ProviderKeysCard() {
 
 export function LeadFinderView({ isAdmin = false }: { isAdmin?: boolean }) {
   const toast = useToast();
+  // Day-one setup cue: with no Places key resolvable (org OR platform),
+  // every search 503s — surface the fix up front instead of a dead end.
+  const [placesReady, setPlacesReady] = useState<boolean | null>(null);
   const [query, setQuery] = useState("");
   const [location, setLocation] = useState("");
   const [maxResults, setMaxResults] = useState(20);
@@ -244,6 +247,13 @@ export function LeadFinderView({ isAdmin = false }: { isAdmin?: boolean }) {
     getLeadFinderUsage()
       .then((u) => alive && setUsage(u))
       .catch(() => undefined); // the strip is informative, never blocking
+    listLeadProviders()
+      .then((ps) => {
+        if (!alive) return;
+        const gp = ps.find((p) => p.provider === "google_places");
+        setPlacesReady(gp ? gp.configured : null);
+      })
+      .catch(() => undefined); // banner is informative, never blocking
     return () => {
       alive = false;
     };
@@ -474,6 +484,22 @@ export function LeadFinderView({ isAdmin = false }: { isAdmin?: boolean }) {
           alongside — and emails are verified.
         </p>
       </div>
+
+      {placesReady === false && source === "places" && (
+        <Alert tone="warn" title="Lead Finder needs a Google Places key">
+          No Google Places API key is configured, so searches can't run yet.
+          {isAdmin ? (
+            <>
+              {" "}Add your key under <strong>Data providers</strong> at the
+              bottom of this page (Google Cloud Console → enable "Places API
+              (New)" → create an API key) — or connect an Apify token and
+              switch the search source to the Apify scraper.
+            </>
+          ) : (
+            <> Ask an org admin to add one under Data providers.</>
+          )}
+        </Alert>
+      )}
 
       {usage ? (
         <KpiGrid>

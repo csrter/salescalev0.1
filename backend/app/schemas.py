@@ -115,6 +115,11 @@ class TokenResponse(BaseModel):
     # (remember_device=true on that request) — the frontend stores it and
     # sends it back as X-Device-Token on future /login calls.
     device_token: Optional[str] = None
+    # Operator-level feature visibility (services/feature_flags) — the
+    # frontend hides gated nav/providers. Empty (pre-flag cached sessions)
+    # is treated as all-enabled by the frontend; server-side enforcement is
+    # the real gate.
+    features: Dict[str, bool] = Field(default_factory=dict)
 
 
 class TrustedDeviceOut(BaseModel):

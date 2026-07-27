@@ -33,6 +33,7 @@ import {
   createContactList,
   deleteContact,
   deleteContactList,
+  exportContactData,
   getClient,
   getClientLeadNotifications,
   setClientLeadNotifications,
@@ -2879,6 +2880,26 @@ function DeleteContact({
       ) : (
         <div className="crm-form-actions">
           <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => {
+              exportContactData(contactId)
+                .then((bundle) => {
+                  const blob = new Blob([JSON.stringify(bundle, null, 2)], {
+                    type: "application/json",
+                  });
+                  const a = document.createElement("a");
+                  a.href = URL.createObjectURL(blob);
+                  a.download = `contact-export-${contactId}.json`;
+                  a.click();
+                  URL.revokeObjectURL(a.href);
+                })
+                .catch((e) => toast((e as Error).message, "error"));
+            }}
+          >
+            Export data (GDPR)
+          </Button>
+          <Button
             variant="danger-outline"
             size="sm"
             onClick={() => setConfirming(true)}
@@ -3163,6 +3184,7 @@ function SetupPanel({
       <FieldManager onChanged={onFieldsChanged} />
       <ResearchFieldManager />
       <LeadFormRouting clientId={clientId} />
+      <TrackingEmbedCard clientId={clientId} />
       <ClientTimezoneCard clientId={clientId} />
       <ClientLeadNotifications clientId={clientId} />
       <ExternalSyncConfig clientId={clientId} />
@@ -3534,6 +3556,84 @@ function LeadFormRouting({ clientId }: { clientId: string }) {
  * module dashboard) — e.g. the client's own business owner, texted
  * alongside the agency's own ops numbers when a lead for THIS client
  * arrives. Admin-only; needs an SMS account connected org-wide to send. */
+/** Copy-paste JS tracking embed for the client's own landing pages — the
+ * attribution-rich capture path (/api/track/landing + /api/track/lead):
+ * first-touch UTM/click-id storage, a pageview ping, and automatic form
+ * capture. Previously this contract had zero in-app documentation. */
+function TrackingEmbedCard({ clientId }: { clientId: string }) {
+  const toast = useToast();
+  const snippet = `<script>
+(function () {
+  var API = "${API_BASE}", CID = "${clientId}";
+  var sk = localStorage.getItem("ss_session");
+  if (!sk) { sk = Math.random().toString(36).slice(2) + Date.now().toString(36); localStorage.setItem("ss_session", sk); }
+  var at = {}; try { at = JSON.parse(localStorage.getItem("ss_attrib") || "{}"); } catch (e) {}
+  var q = new URLSearchParams(location.search);
+  ["utm_source","utm_medium","utm_campaign","utm_content","utm_term","gclid","fbclid"].forEach(function (k) {
+    var v = q.get(k); if (v && !at[k]) at[k] = v; // first touch wins
+  });
+  localStorage.setItem("ss_attrib", JSON.stringify(at));
+  var base = { client_id: CID, session_key: sk };
+  fetch(API + "/api/track/landing", { method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(Object.assign({ landing_url: location.href, referrer: document.referrer || null,
+      user_agent: navigator.userAgent }, at, base)), keepalive: true }).catch(function () {});
+  document.addEventListener("submit", function (ev) {
+    var f = ev.target; if (!f || !f.tagName || f.tagName !== "FORM") return;
+    var map = { email: "email", phone: "phone", tel: "phone", first_name: "first_name",
+      last_name: "last_name", city: "city", state: "state", zip: "zip", zip_code: "zip" };
+    var out = Object.assign({}, base);
+    new FormData(f).forEach(function (v, k) {
+      var key = map[String(k).toLowerCase().replace(/[^a-z]+/g, "_")];
+      if (key && v) out[key] = String(v);
+      if (!key && /name/i.test(k) && v && !out.first_name) {
+        var parts = String(v).trim().split(/\\s+/);
+        out.first_name = parts.shift(); if (parts.length) out.last_name = parts.join(" ");
+      }
+    });
+    if (!out.email && !out.phone) return; // nothing identifying — not a lead form
+    fetch(API + "/api/track/lead", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(out), keepalive: true }).catch(function () {});
+  }, true);
+})();
+</${"script"}>`;
+
+  return (
+    <div className="crm-setup-block">
+      <h5 className="crm-subhead crm-subhead--sm">Landing-page tracking embed</h5>
+      <p className="crm-muted">
+        Paste before <code>&lt;/body&gt;</code> on this client's landing
+        pages. It stores first-touch attribution (UTMs, gclid, fbclid),
+        pings a pageview, and submits any form with an email or phone field
+        as a lead — with attribution attached, feeding CRM capture, lead
+        alerts, auto-enroll, and server-side conversion uploads. Prefer a
+        form tool like Webflow or Typeform instead? Use the landing-page
+        webhook above.
+      </p>
+      <textarea
+        className="crm-embed-snippet"
+        readOnly
+        rows={8}
+        value={snippet}
+        onFocus={(e) => e.currentTarget.select()}
+      />
+      <div className="crm-form-actions">
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => {
+            navigator.clipboard
+              .writeText(snippet)
+              .then(() => toast("Embed copied", "ok"))
+              .catch(() => toast("Copy failed — select and copy manually", "error"));
+          }}
+        >
+          Copy snippet
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 function ClientTimezoneCard({ clientId }: { clientId: string }) {
   const toast = useToast();
   const [tz, setTz] = useState<string | null>(null);

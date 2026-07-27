@@ -47,6 +47,8 @@ os.environ["OUTREACH_SCHEDULER_ENABLED"] = "false"
 # Cold-email Outreach: tests drive sync_account/sync_due synchronously, never
 # via the background IMAP loop.
 os.environ["EMAIL_OUTREACH_SCHEDULER_ENABLED"] = "false"
+# Insights auto-sync: tests drive insights_sync.run_due synchronously.
+os.environ["INSIGHTS_SCHEDULER_ENABLED"] = "false"
 
 import pytest
 from fastapi.testclient import TestClient

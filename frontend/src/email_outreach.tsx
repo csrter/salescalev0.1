@@ -351,13 +351,6 @@ function DashboardPanel({
       sortValue: (c) => c.delivery_rate ?? -1,
     },
     {
-      key: "open",
-      header: "Open",
-      align: "right",
-      render: (c) => pct(c.open_rate),
-      sortValue: (c) => c.open_rate ?? -1,
-    },
-    {
       key: "reply",
       header: "Reply",
       align: "right",
@@ -412,7 +405,6 @@ function DashboardPanel({
             <>
               <Kpi label="Sent" value={int(t.sent)} />
               <Kpi label="Delivery rate" value={pct(t.delivery_rate)} />
-              <Kpi label="Open rate" value={pct(t.open_rate)} />
               <Kpi label="Reply rate" value={pct(t.reply_rate)} />
               <Kpi label="Bounce rate" value={pct(t.bounce_rate)} />
               <Kpi label="Unsubscribe rate" value={pct(t.unsubscribe_rate)} />
@@ -453,7 +445,6 @@ function DashboardPanel({
               labels={chartLabels}
               series={[
                 { name: "Sent", data: data!.by_day.map((d) => d.sent) },
-                { name: "Opened", data: data!.by_day.map((d) => d.opened) },
                 { name: "Replied", data: data!.by_day.map((d) => d.replied) },
                 { name: "Bounced", data: data!.by_day.map((d) => d.bounced) },
               ]}
@@ -681,13 +672,6 @@ function CampaignsPanel({ accounts }: { accounts: EmailAccount[] }) {
       sortValue: (c) => c.active_enrollments,
     },
     { key: "sent", header: "Sent", align: "right", render: (c) => int(c.sent), sortValue: (c) => c.sent },
-    {
-      key: "open",
-      header: "Open",
-      align: "right",
-      render: (c) => pct(c.open_rate),
-      sortValue: (c) => c.open_rate ?? -1,
-    },
     {
       key: "reply",
       header: "Reply",

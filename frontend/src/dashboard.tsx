@@ -152,6 +152,16 @@ const PRESET_LABEL: Record<TimeframePreset, string> = {
 
 /** Resolve a preset to concrete since/until dates, recomputed from "today"
  * on every load so a saved "7d" preset never shows a stale window. */
+/** "synced 2h ago"-style freshness label (same shape as the outreach views'
+ * local timeAgo helpers). */
+function dashTimeAgo(iso: string): string {
+  const s = (Date.now() - new Date(iso).getTime()) / 1000;
+  if (s < 60) return "synced just now";
+  if (s < 3600) return `synced ${Math.floor(s / 60)}m ago`;
+  if (s < 86400) return `synced ${Math.floor(s / 3600)}h ago`;
+  return `synced ${Math.floor(s / 86400)}d ago`;
+}
+
 function resolveRange(f: DashFilters): { since: string; until: string; label: string } {
   const today = new Date();
   const until = isoDate(today);
@@ -184,6 +194,9 @@ export function Dashboard({
   const [refresh, setRefresh] = useState(0);
   const [syncing, setSyncing] = useState(false);
   const [syncNote, setSyncNote] = useState<string | null>(null);
+  // Data-freshness cue: when insights were last pulled (manual sync or the
+  // background poll). undefined = still loading, null = never synced.
+  const [lastSynced, setLastSynced] = useState<string | null | undefined>(undefined);
   const [arrange, setArrange] = useState(false);
   const [announce, setAnnounce] = useState("");
   const [filters, setFilters] = useState<DashFilters>(DEFAULT_FILTERS);
@@ -260,6 +273,18 @@ export function Dashboard({
   };
 
   const range = resolveRange(filters);
+
+  useEffect(() => {
+    let alive = true;
+    api<{ last_synced_at: string | null }>(
+      `/api/insights/status?client_id=${clientId}`,
+    )
+      .then((s) => alive && setLastSynced(s.last_synced_at))
+      .catch(() => undefined); // cue is informative, never blocking
+    return () => {
+      alive = false;
+    };
+  }, [clientId, refresh]);
 
   const sync = async () => {
     setSyncing(true);
@@ -373,6 +398,14 @@ export function Dashboard({
               })
             }
           />
+          {isTeam && lastSynced !== undefined && (
+            <span
+              className="dash-status"
+              title="When ad-platform insights were last pulled (auto-refreshes every few hours)"
+            >
+              {lastSynced === null ? "never synced" : `data ${dashTimeAgo(lastSynced)}`}
+            </span>
+          )}
           {isTeam && (
             <Button variant="ghost" size="sm" onClick={sync} busy={syncing}>
               <RefreshCw size={16} aria-hidden="true" /> Sync insights

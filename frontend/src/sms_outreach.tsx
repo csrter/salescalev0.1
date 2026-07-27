@@ -26,6 +26,7 @@ import {
   deleteSmsAccount,
   deleteSmsSuppression,
   enrollSmsContacts,
+  featureEnabled,
   getHouseClient,
   getLeadNotifications,
   getLeadRelay,
@@ -2413,6 +2414,16 @@ function EnrollDialog({
                   </li>
                 ))}
               </ul>
+              {receipt.skipped.some((s) => s.reason === "no_consent") && (
+                <p className="sms-hint">
+                  SMS requires recorded opt-in (TCPA). Ways to record it:
+                  check the attestation box on CSV import, turn on the
+                  org-wide pre-opted-funnel default on the SMS Dashboard (only
+                  if your intake forms genuinely collect SMS consent), or set
+                  opt-in per lead from the contact drawer. STOP and
+                  suppression always win regardless.
+                </p>
+              )}
             </Alert>
           )}
         </div>
@@ -2992,6 +3003,18 @@ function AccountsPanel({
                   <Alert tone="danger">{a.error_detail}</Alert>
                 )}
 
+                {a.provider === "twilio" && a.status === "active" && (
+                  // "connected" only proves the credentials — carriers still
+                  // filter unregistered long-code traffic silently, so the
+                  // reminder stays on the card, not just the connect dialog.
+                  <Alert tone="warn" title="A2P 10DLC">
+                    Connected ≠ registered: without an approved A2P 10DLC
+                    Brand + Campaign in the Twilio Console, carriers silently
+                    filter this number's messages. Verify registration before
+                    sending volume.
+                  </Alert>
+                )}
+
                 <div className="sms-account-stat">
                   <span>
                     {int(a.sends_today)} of {int(a.daily_send_cap)} sent today
@@ -3287,7 +3310,11 @@ function AccountDialog({
               options={[
                 { value: "twilio", label: "Twilio (SMS)" },
                 { value: "sendblue", label: "Sendblue (iMessage/SMS)" },
-                { value: "bluebubbles", label: "BlueBubbles (dev)" },
+                // Self-hosted dev path — operator-allowlisted orgs only
+                // (server enforces the same gate on account creation).
+                ...(featureEnabled("bluebubbles")
+                  ? [{ value: "bluebubbles", label: "BlueBubbles (dev)" }]
+                  : []),
               ]}
               value={provider}
               onChange={(v) => setProvider(v as SmsProvider)}

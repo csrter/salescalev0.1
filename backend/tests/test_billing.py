@@ -188,3 +188,20 @@ def test_default_signup_plan_lever(api, monkeypatch):
     db = SessionLocal()
     assert db.get(Organization, org_id).plan == "starter"
     db.close()
+
+
+def test_usage_endpoint_reports_all_meters(api, biz):
+    r = api.get("/api/billing/usage", headers=biz["headers"])
+    assert r.status_code == 200, r.text
+    body = r.json()
+    keys = {m["key"] for m in body["meters"]}
+    assert keys == {
+        "clients", "seats", "custom_fields", "research_fields",
+        "lead_finder_searches", "email_verifications", "email_sends",
+        "sms_sends",
+    }
+    for m in body["meters"]:
+        assert isinstance(m["used"], int)
+        assert m["limit"] is None or isinstance(m["limit"], int)
+    clients = next(m for m in body["meters"] if m["key"] == "clients")
+    assert clients["used"] >= 1  # biz created a client in its fixture

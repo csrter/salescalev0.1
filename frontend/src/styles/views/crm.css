@@ -890,3 +890,19 @@
   flex-direction: column;
   gap: 2px;
 }
+
+/* Landing-page tracking embed — spec-sheet code block: mono, inset well. */
+.crm-embed-snippet {
+  width: 100%;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: 1.5;
+  color: var(--ink-soft);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: var(--space-3);
+  resize: vertical;
+  white-space: pre;
+  overflow-x: auto;
+}

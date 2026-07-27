@@ -157,3 +157,40 @@ def test_import_sized_batch_is_accepted(api, team_headers, seeded):
         headers={**team_headers, "Origin": "http://localhost:5173"},
     )
     assert resp.status_code != 413, "a 200-row wide batch must fit under the body cap"
+
+
+def test_track_endpoints_allow_any_origin(api, seeded):
+    """/api/track/* is embedded on CLIENTS' OWN landing pages — origins the
+    frontend_origins() allowlist can never enumerate. The dedicated capture
+    CORS layer must answer preflights and stamp a wildcard origin, while
+    every other route keeps the strict policy."""
+    foreign = {"Origin": "https://some-client-site.example"}
+
+    r = api.options(
+        "/api/track/landing",
+        headers={
+            **foreign,
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "Content-Type",
+        },
+    )
+    assert r.status_code == 204
+    assert r.headers["access-control-allow-origin"] == "*"
+    assert "POST" in r.headers["access-control-allow-methods"]
+
+    r = api.post(
+        "/api/track/landing",
+        json={
+            "client_id": seeded["client_a"],
+            "session_key": "cors-embed-check-1",
+            "landing_url": "https://some-client-site.example/lp",
+            "gclid": "cors-gclid-1",
+        },
+        headers=foreign,
+    )
+    assert r.status_code in (200, 201), r.text
+    assert r.headers["access-control-allow-origin"] == "*"
+
+    # A non-track route from a foreign origin gets NO wildcard grant.
+    r = api.get("/api/health", headers=foreign)
+    assert r.headers.get("access-control-allow-origin") != "*"

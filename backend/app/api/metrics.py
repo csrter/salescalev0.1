@@ -84,6 +84,31 @@ def sync_insights(
     return {"results": insights_sync.sync_client(db, client, days)}
 
 
+@router.get("/insights/status")
+def insights_status(
+    client_id: str,
+    scope: TenantScope = Depends(get_scope),
+    db: Session = Depends(get_db),
+):
+    """Data-freshness cue for the dashboard: when this client's insights
+    were last pulled (manual Sync or the background poll), across its
+    active connections. null = never synced (or nothing connected)."""
+    from ..models.core import CONN_ACTIVE, PlatformConnection
+
+    client = _client_for(db, scope, client_id)
+    stamps = [
+        c.last_insights_sync_at
+        for c in db.execute(
+            select(PlatformConnection).where(
+                PlatformConnection.client_id == client.id,
+                PlatformConnection.status == CONN_ACTIVE,
+            )
+        ).scalars()
+        if c.last_insights_sync_at is not None
+    ]
+    return {"last_synced_at": max(stamps).isoformat() if stamps else None}
+
+
 @router.get("/metrics/blended")
 def blended(
     client_id: str,

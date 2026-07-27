@@ -208,6 +208,18 @@ class Settings(BaseSettings):
     # "starter" at the point of use (api/orgs signup).
     default_signup_plan: str = "starter"
 
+    # Feature-visibility allowlists (services/feature_flags): CSV of org ids,
+    # or "*" for everyone. "*" default keeps dev/test unchanged; production
+    # restricts both to dogfood orgs so beta orgs never see dead-end doors.
+    ig_outreach_org_ids: str = "*"
+    bluebubbles_org_ids: str = "*"
+
+    # Background insights poll (insights_sync.run_due): per-connection floor
+    # between automatic pulls. Dashboards otherwise only refresh on the
+    # manual Sync button.
+    insights_scheduler_enabled: bool = True
+    insights_sync_interval_seconds: int = 21600  # 6h
+
     # Public URL of THIS backend — used to build OAuth redirect_uri values that
     # must match what's registered with Google/Meta.
     api_base_url: str = "http://localhost:8000"

@@ -17,6 +17,7 @@ import {
   TEAM_ROLES,
   api,
   createClient,
+  featureEnabled,
   getHouseClient,
   getPlatforms,
   getSession,
@@ -441,7 +442,9 @@ export default function App() {
     { key: "clients", label: "Clients", icon: Building2, section: "Workspace", show: true },
     { key: "crm", label: "CRM", icon: Table2, section: "Workspace", show: isTeam },
     { key: "leads", label: "Lead Finder", icon: Compass, section: "Workspace", show: isTeam },
-    { key: "outreach", label: "Outreach", icon: Send, section: "Outreach", show: isTeam },
+    // IG Outreach go-live is gated on Meta App Review — hidden unless the
+    // operator allowlists the org (dead-end door otherwise; beta honesty).
+    { key: "outreach", label: "Outreach", icon: Send, section: "Outreach", show: isTeam && featureEnabled("ig_outreach") },
     { key: "email", label: "Email", icon: Mail, section: "Outreach", show: isTeam },
     { key: "sms", label: "SMS", icon: MessageSquare, section: "Outreach", show: isTeam },
     { key: "changes", label: "Pending changes", icon: GitBranch, section: "Activity", show: isTeam },

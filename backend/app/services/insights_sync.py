@@ -198,6 +198,11 @@ def sync_client(db: Session, client: Client, days: int = 30) -> List[Dict[str, A
                 }
             )
             continue
+        # Manual sync moves the auto-poll cursor too — the freshness cue
+        # reflects it, and run_due won't immediately re-pull the same days.
+        from ..models.base import utcnow
+
+        conn.last_insights_sync_at = utcnow()
         try:
             rows = _sync_account(db, account, conn, days)
             results.append(
@@ -230,3 +235,67 @@ def sync_client(db: Session, client: Client, days: int = 30) -> List[Dict[str, A
                 }
             )
     return results
+
+
+# --- background auto-sync (run_due) ------------------------------------------
+
+# Restatement window for the automatic poll: platforms restate the last few
+# days (late conversions, spend corrections), so each pass re-pulls a short
+# tail rather than one day.
+AUTO_SYNC_DAYS = 3
+# Connections per tick — bounds one tick's wall-clock (a Google read can
+# take up to its 45s per-RPC deadline).
+AUTO_SYNC_MAX_CONNECTIONS = 3
+
+
+def run_due(db: Session, limit: int = AUTO_SYNC_MAX_CONNECTIONS) -> int:
+    """Automatically sync the active connections whose last poll is older
+    than insights_sync_interval_seconds (or that never synced). Before this
+    pass existed, dashboards only refreshed on the manual Sync button.
+
+    The cursor is stamped at attempt START, so a connection whose platform
+    is down retries on the interval instead of hot-looping every tick.
+    Auth failures flip the connection to disconnected exactly like the
+    manual sync path. Returns the number of connections attempted."""
+    from ..config import get_settings
+    from ..models.base import utcnow
+
+    cutoff = utcnow() - dt.timedelta(
+        seconds=get_settings().insights_sync_interval_seconds
+    )
+    conns = db.execute(
+        select(PlatformConnection)
+        .where(
+            PlatformConnection.status == CONN_ACTIVE,
+            (
+                PlatformConnection.last_insights_sync_at.is_(None)
+                | (PlatformConnection.last_insights_sync_at < cutoff)
+            ),
+        )
+        .order_by(PlatformConnection.last_insights_sync_at.asc().nulls_first())
+        .limit(limit)
+    ).scalars().all()
+    attempted = 0
+    for conn in conns:
+        conn.last_insights_sync_at = utcnow()
+        db.commit()
+        attempted += 1
+        accounts = (
+            db.execute(
+                select(AdAccount).where(AdAccount.connection_id == conn.id)
+            )
+            .scalars()
+            .all()
+        )
+        for account in accounts:
+            try:
+                _sync_account(db, account, conn, AUTO_SYNC_DAYS)
+            except PLATFORM_AUTH_ERRORS as e:
+                db.rollback()
+                conn_svc.mark_disconnected(db, conn, str(e))
+                db.commit()
+                break  # revoked — no point trying its other accounts
+            except Exception:  # rate limit/outage: isolate, retry next interval
+                db.rollback()
+        db.commit()
+    return attempted

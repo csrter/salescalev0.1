@@ -18,6 +18,16 @@ export interface Session {
   email_verified?: boolean;
   // Org requires 2FA and this user hasn't set it up — gate to enrollment.
   mfa_setup_required?: boolean;
+  // Operator-level feature visibility (beta honesty gates). Absent on
+  // sessions minted before the flag existed — treated as all-enabled;
+  // the server enforces the real gate regardless.
+  features?: Record<string, boolean>;
+}
+
+/** True unless the session's feature map explicitly disables the flag. */
+export function featureEnabled(name: string): boolean {
+  const f = getSession()?.features;
+  return f ? f[name] !== false : true;
 }
 
 export function getSession(): Session | null {
@@ -427,6 +437,14 @@ export interface Subscription {
 
 export const getSubscription = () =>
   api<Subscription>("/api/billing/subscription");
+
+export interface BillingUsage {
+  plan: OrgPlan;
+  /** limit=null means unlimited on this plan. */
+  meters: { key: string; label: string; used: number; limit: number | null }[];
+}
+
+export const getBillingUsage = () => api<BillingUsage>("/api/billing/usage");
 
 export const startCheckout = (plan: OrgPlan) =>
   api<{ url: string }>("/api/billing/checkout", {
@@ -1473,6 +1491,11 @@ export const updateContact = (id: string, body: ContactEditBody) =>
 
 export const deleteContact = (id: string) =>
   api<void>(`/api/crm/contacts/${id}`, { method: "DELETE" });
+
+/** GDPR/CCPA data-subject export — one JSON bundle of everything the
+ * contact touches (admin-only; mirrors the deletion cascade's table list). */
+export const exportContactData = (id: string) =>
+  api<Record<string, unknown>>(`/api/crm/contacts/${id}/export`);
 
 /** Delete EVERY lead under a client (admin; confirm is the typed "DELETE"). */
 export const purgeContacts = (clientId: string, confirm: string) =>

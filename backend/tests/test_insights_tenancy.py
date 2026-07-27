@@ -142,3 +142,89 @@ def test_quality_snapshot_org_scoped_the_same_way(two_orgs):
         by_org = {r.organization_id: r.value for r in rows}
         assert by_org[a.organization_id] == 7
         assert by_org[b.organization_id] == 3
+
+
+def test_run_due_polls_due_connections_and_paces(two_orgs, monkeypatch):
+    """The background poll syncs active connections on the interval, stamps
+    the cursor at attempt start (a broken platform retries on the interval,
+    never hot-loops), and manual/auto share the cursor."""
+    import app.services.insights_sync as isync
+    from app.models.core import AdAccount, PlatformConnection
+
+    a = two_orgs[0]
+    with SessionLocal() as db:
+        conn = PlatformConnection(
+            organization_id=a.organization_id,
+            client_id=a.client_id,
+            platform="meta",
+            status="active",
+        )
+        db.add(conn)
+        db.flush()
+        db.add(
+            AdAccount(
+                organization_id=a.organization_id,
+                client_id=a.client_id,
+                connection_id=conn.id,
+                platform="meta",
+                external_id="act_autosync_1",
+                name="Autosync",
+            )
+        )
+        db.commit()
+        conn_id = conn.id
+
+    calls = []
+    # Both fetchers stubbed: the suite-wide DB carries other modules' seeded
+    # meta/google connections with NULL cursors, and run_due may legitimately
+    # pick those up too — a real fetcher would try their fake tokens.
+    monkeypatch.setitem(
+        isync.INSIGHTS_FETCHERS,
+        "meta",
+        lambda db, account, conn, since, until: calls.append(account.external_id) or 0,
+    )
+    monkeypatch.setitem(
+        isync.INSIGHTS_FETCHERS, "google", lambda *a: 0
+    )
+    with SessionLocal() as db:
+        assert isync.run_due(db, limit=200) >= 1
+    assert "act_autosync_1" in calls
+
+    # Freshly stamped — a second pass inside the interval skips it.
+    calls.clear()
+    with SessionLocal() as db:
+        isync.run_due(db, limit=200)
+    assert "act_autosync_1" not in calls
+    with SessionLocal() as db:
+        stamped = db.get(PlatformConnection, conn_id).last_insights_sync_at
+        assert stamped is not None
+
+
+def test_run_due_failure_still_stamps_cursor(two_orgs, monkeypatch):
+    import app.services.insights_sync as isync
+    from app.models.core import PlatformConnection
+
+    a = two_orgs[0]
+    with SessionLocal() as db:
+        # This module's own connection (created in the previous test) — the
+        # suite-wide DB has other orgs' connections we must not depend on.
+        conn = db.execute(
+            select(PlatformConnection).where(
+                PlatformConnection.client_id == a.client_id,
+                PlatformConnection.platform == "meta",
+            )
+        ).scalars().one()
+        conn.last_insights_sync_at = None
+        db.commit()
+        conn_id = conn.id
+
+    def _boom(db, account, conn, since, until):
+        raise RuntimeError("platform down")
+
+    monkeypatch.setitem(isync.INSIGHTS_FETCHERS, "meta", _boom)
+    monkeypatch.setitem(isync.INSIGHTS_FETCHERS, "google", lambda *a: 0)
+    with SessionLocal() as db:
+        isync.run_due(db, limit=200)  # must not raise
+        row = db.get(PlatformConnection, conn_id)
+        assert row.last_insights_sync_at is not None  # retries on interval
+        assert row.status == "active"  # outage ≠ revoked

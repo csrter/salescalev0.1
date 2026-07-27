@@ -62,6 +62,7 @@ from ..services import custom_fields as custom_fields_svc
 from ..services import (
     ai_provider,
     entitlements,
+    feature_flags,
     research as research_svc,
     sms_campaigns,
     sms_consent,
@@ -194,6 +195,14 @@ def create_account(
     db: Session = Depends(get_db),
 ):
     if body.provider == "bluebubbles":
+        # Operator allowlist (services/feature_flags): the self-hosted
+        # BlueBubbles path needs a Mac + Apple ID the operator controls —
+        # not offered to external orgs. UI hiding is never load-bearing.
+        if not feature_flags.bluebubbles_allowed(scope.organization_id):
+            raise HTTPException(
+                403, "The BlueBubbles provider is not enabled for this "
+                "organization — connect Twilio or Sendblue instead."
+            )
         if not body.relay_url:
             raise HTTPException(422, "Provide the BlueBubbles relay URL.")
         if not body.from_number:

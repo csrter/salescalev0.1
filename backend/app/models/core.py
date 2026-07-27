@@ -345,6 +345,12 @@ class PlatformConnection(Base):
     disconnected_at: Mapped[Optional[dt.datetime]] = mapped_column(
         DateTime(timezone=True)
     )
+    # Cursor for the background insights poll (insights_sync.run_due) —
+    # stamped at attempt start so a failing connection retries on the
+    # interval instead of hot-looping. Also the dashboard's staleness cue.
+    last_insights_sync_at: Mapped[Optional[dt.datetime]] = mapped_column(
+        DateTime(timezone=True)
+    )
 
     client: Mapped["Client"] = relationship("Client", back_populates="connections")
 

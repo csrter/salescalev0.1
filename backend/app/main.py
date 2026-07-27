@@ -158,6 +158,34 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+# Registered AFTER add_middleware(CORSMiddleware, ...) above → wraps OUTSIDE
+# it (last-added is outermost), which is exactly what the public capture
+# endpoints need: /api/track/* is embedded as a <script> on CLIENTS' OWN
+# landing pages, whose origins can't be enumerated in frontend_origins().
+# These endpoints are unauthenticated, rate-limited capture — a wildcard
+# origin discloses nothing and carries no credentials. Everything else
+# keeps the strict CORSMiddleware policy untouched.
+@app.middleware("http")
+async def _public_capture_cors(request, call_next):
+    if not request.url.path.startswith("/api/track/"):
+        return await call_next(request)
+    if request.method == "OPTIONS":
+        from starlette.responses import Response as _Resp
+
+        return _Resp(
+            status_code=204,
+            headers={
+                "Access-Control-Allow-Origin": "*",
+                "Access-Control-Allow-Methods": "POST, OPTIONS",
+                "Access-Control-Allow-Headers": "Content-Type",
+                "Access-Control-Max-Age": "86400",
+            },
+        )
+    response = await call_next(request)
+    response.headers["Access-Control-Allow-Origin"] = "*"
+    return response
+
 # Routers left OPEN so a 2FA-gated user can still authenticate, enroll, and
 # manage their session/policy: auth, social_auth, mfa, orgs, admin (super-admin
 # only), platforms (discovery), and the public ingest/branding routers.
@@ -357,5 +385,39 @@ async def _email_outreach_scheduler():
                 await asyncio.get_event_loop().run_in_executor(None, _tick)
             except Exception:
                 log.exception("email outreach scheduler tick failed")
+
+    asyncio.create_task(_loop())
+
+
+@app.on_event("startup")
+async def _insights_scheduler():
+    """Background insights poll: keeps the dashboard's time-series fresh
+    without the manual Sync button. Own loop with a slow tick (10 min) —
+    run_due paces itself per connection (insights_sync_interval_seconds)
+    and bounds each tick's connection count, so a slow platform read never
+    backs up the outreach schedulers. Disabled in tests."""
+    if not _settings.insights_scheduler_enabled or not _settings.run_schedulers():
+        return
+    import asyncio
+
+    from .db import SchedulerSessionLocal
+    from .services import insights_sync
+
+    log = logging.getLogger("salescale.insights")
+
+    def _tick():
+        db = SchedulerSessionLocal()
+        try:
+            insights_sync.run_due(db)
+        finally:
+            db.close()
+
+    async def _loop():
+        while True:
+            await asyncio.sleep(600)
+            try:
+                await asyncio.get_event_loop().run_in_executor(None, _tick)
+            except Exception:
+                log.exception("insights scheduler tick failed")
 
     asyncio.create_task(_loop())

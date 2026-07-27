@@ -695,3 +695,55 @@ def test_client_role_cannot_delete(api, client_a_headers, cc_org):
         assert db.get(Contact, victim) is not None
     finally:
         db.close()
+
+
+def test_gdpr_export_bundles_everything_and_is_admin_gated(api, cc_org):
+    """The export mirrors the deletion cascade's table list, so disclosure
+    and erasure can't drift; admin-gated + org-scoped + audit-logged."""
+    r = api.post(
+        "/api/crm/contacts",
+        json={
+            "client_id": cc_org["client"],
+            "first_name": "Expo",
+            "last_name": "Subject",
+            "email": "expo.subject@example.com",
+        },
+        headers=cc_org["headers"],
+    )
+    cid = r.json()["id"]
+    api.post(
+        "/api/crm/activities",
+        json={"contact_id": cid, "type": "note", "body": "GDPR export test note"},
+        headers=cc_org["headers"],
+    )
+
+    r = api.get(f"/api/crm/contacts/{cid}/export", headers=cc_org["headers"])
+    assert r.status_code == 200, r.text
+    bundle = r.json()
+    assert bundle["contact"]["email"] == "expo.subject@example.com"
+    for key in (
+        "activities", "tasks", "deals", "landing_events", "conversion_events",
+        "email_messages", "email_suppressions", "sms_messages",
+        "sms_enrollments", "email_enrollments", "email_threads",
+    ):
+        assert key in bundle, key
+    assert any(
+        "GDPR export test note" in (a.get("body") or "")
+        for a in bundle["activities"]
+    )
+
+    # Cross-org id → 404 (existence not leaked).
+    other = api.post(
+        "/api/orgs/signup",
+        json={
+            "organization_name": "Export Snoop Co",
+            "email": "owner@exportsnoop.com",
+            "password": "exportsnoop-pass-1",
+            "full_name": "Snoop",
+        },
+    ).json()
+    r = api.get(
+        f"/api/crm/contacts/{cid}/export",
+        headers={"Authorization": f"Bearer {other['access_token']}"},
+    )
+    assert r.status_code == 404

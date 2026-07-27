@@ -33,7 +33,7 @@ from ..security import (
 )
 from ..services import auth_email
 from ..services import email as email_service
-from ..services import mfa, sessions, sms, trusted_devices
+from ..services import feature_flags, mfa, sessions, sms, trusted_devices
 
 _MFA_CHALLENGE_PURPOSE = "mfa_login"
 
@@ -80,6 +80,7 @@ def _token_response(
         email_verified=user.email_verified,
         mfa_setup_required=_mfa_setup_required(org, user),
         device_token=device_token,
+        features=feature_flags.for_org(org.id),
     )
 
 

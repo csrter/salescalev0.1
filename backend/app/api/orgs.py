@@ -34,7 +34,7 @@ from ..deps import (
     require_verified_email,
 )
 from ..ratelimit import enforce_bucket, rate_limit
-from ..services import auth_email, entitlements, lead_notify, sessions, sms_consent, team
+from ..services import auth_email, entitlements, feature_flags, lead_notify, sessions, sms_consent, team
 from ..models.base import utcnow
 from ..models.core import (
     ORG_SUSPENDED,
@@ -178,6 +178,7 @@ def signup(
         client_id=None,
         full_name=owner.full_name,
         is_superadmin=is_superadmin(owner),
+        features=feature_flags.for_org(org.id),
     )
 
 
