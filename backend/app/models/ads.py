@@ -137,7 +137,10 @@ class QualitySnapshot(Base):
     __tablename__ = "quality_snapshots"
     __table_args__ = (
         UniqueConstraint(
-            "platform", "entity_type", "entity_external_id", "metric", "date",
+            # org in the key for the same reason as uq_insight_entity_day:
+            # a shared external account must never collide across tenants.
+            "organization_id", "platform", "entity_type",
+            "entity_external_id", "metric", "date",
             name="uq_quality_snapshot",
         ),
     )
@@ -171,7 +174,12 @@ class InsightDaily(Base):
     __tablename__ = "insights_daily"
     __table_args__ = (
         UniqueConstraint(
-            "platform", "entity_type", "entity_external_id", "date",
+            # organization_id is load-bearing: two Organizations can manage
+            # (and sync) the SAME external ad account — without the org in
+            # the key, the second org's sync would find and overwrite the
+            # first org's rows (cross-tenant data loss).
+            "organization_id", "platform", "entity_type",
+            "entity_external_id", "date",
             name="uq_insight_entity_day",
         ),
     )

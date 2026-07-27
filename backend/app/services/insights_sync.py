@@ -38,6 +38,10 @@ def _upsert_insight(db: Session, account: AdAccount, row: Dict[str, Any]) -> Non
     )
     existing = db.execute(
         select(InsightDaily).where(
+            # Org filter is load-bearing: without it, a second Organization
+            # syncing the same external account would find (and overwrite)
+            # another tenant's row. Matches uq_insight_entity_day.
+            InsightDaily.organization_id == account.organization_id,
             InsightDaily.platform == account.platform,
             InsightDaily.entity_type == row["entity_type"],
             InsightDaily.entity_external_id == row["entity_external_id"],
@@ -77,6 +81,7 @@ def _upsert_snapshot(
 ) -> None:
     existing = db.execute(
         select(QualitySnapshot).where(
+            QualitySnapshot.organization_id == account.organization_id,
             QualitySnapshot.platform == account.platform,
             QualitySnapshot.entity_type == row["entity_type"],
             QualitySnapshot.entity_external_id == row["entity_external_id"],
