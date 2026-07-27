@@ -3076,6 +3076,55 @@ live activation + the entitlement flip, the Outreach module build
       test restore. Tests 631 → 632. Deployed web (backend rebuilt,
       settings verified loaded in the container, health green, alembic
       unchanged b7c4e1f9d283) + desktop DMG in lockstep.
+- [x] Beta Phase 2, correctness half (2026-07-27, same session as Phase 0;
+      commits 18b313e/298b46e/04cd0ae/1a028bb): the audit's five hard
+      correctness fixes, all deployed to prod (migrations d5a8c3f1b9e2 +
+      e6f2a8b4c9d1 applied to live Supabase, alembic current = e6f2a8b4c9d1
+      head). (1) TENANCY: uq_insight_entity_day + uq_quality_snapshot gained
+      organization_id as leading column and insights_sync's upsert lookups
+      filter on it — entity ids are platform-global, so an external ad
+      account changing hands between orgs had the new org's sync OVERWRITE
+      the old org's time-series rows (models/ads.py; loosening-only, no
+      dedupe; tests/test_insights_tenancy.py). (2) CONVERSIONS: the generic
+      landing-form webhook now creates a ConversionEvent per submission and
+      dispatches Phase 5 server-side uploads in a BackgroundTask (slow
+      platform API must not stall the form tool into a retry-duplicate);
+      Meta/Google NATIVE lead-form paths deliberately stay dispatch-free —
+      the platforms already count their own form conversions and a CAPI/
+      upload would double-count. No IP/UA sent (the webhook comes from the
+      form tool's server, not the lead's browser). (3) META WEBHOOK
+      HARDENING: stale config (client deleted) → ignored instead of a 500
+      that loops Meta redelivery; per-lead try/commit so one bad lead never
+      fails or rolls back the batch. (4) SMS METER: sms_outreach_usage now
+      counts the inclusive status tuple (sent/delivered/read via
+      sms_send._COUNTED_SENT_STATUSES) — receipts upgrading rows off 'sent'
+      silently removed them from the monthly quota meter. (5) EMAIL MAILBOX
+      AUTO-RECOVERY: IMAP sync failures flip an account to error only after
+      SYNC_FAILURE_THRESHOLD=3 consecutive failures (new
+      sync_failure_count; SMTP/IMAP are often different servers — one blip
+      used to strand sends AND sync until a human clicked Test), and a new
+      scheduler pass email_outreach_sync.reprobe_errored re-probes errored
+      mailboxes (15-min pacing via last_reprobe_at, migration
+      e6f2a8b4c9d1) and revives on success — active + counters cleared +
+      rearm_account, the reconnect contract. PLUS the flip-time trap
+      defused early: PUT /api/orgs/me/branding lets a mailing-address-ONLY
+      save bypass _require_white_labeling (CAN-SPAM is every-tier
+      compliance, not a white-label perk). Tests 632 → 641. Deployed web
+      (health green, zero tracebacks) + desktop DMG in lockstep. GitHub:
+      remote is now SSH (git@github.com:csrter/salescalev0.1.git), user
+      registered the Mac's key, feature/ui-revamp AND main pushed —
+      first-ever backup of the repo (192 commits published after a
+      secret-scan of the range). Sentry LIVE in prod (atlas-reach.sentry.io,
+      SENTRY_DSN set, test event verified end-to-end). REMAINING Phase 2
+      (honesty gates + day-one UX, next session): hide IG Outreach nav +
+      BlueBubbles provider for non-dogfood orgs; email Open-rate KPI
+      (remove or implement pixel); insights auto-sync scheduler +
+      staleness badge; Lead Finder/verification no-key banners + JS-embed
+      snippet card; Twilio A2P 10DLC warning; SMS consent cold-start
+      remediation links; billing usage meters; GDPR export endpoint.
+      REMAINING user-side: operator GOOGLE_PLACES_API_KEY, Supabase backup
+      verification + test restore, Meta app publish/roles, Google OAuth →
+      Production, ToS/DPA.
 - [ ] Stripe live activation + entitlement flip (after 12–14, so real
       limits land everywhere in one pass)
 - [ ] Outreach module build (dev-mode) — go-live gated on Meta App
