@@ -556,9 +556,12 @@ def test_sync_unsubscribe_reply_suppresses(
     assert gateway.SUPPRESSED == _send_via_gateway(acct["id"], contact_id)[0]
 
 
-def test_sync_transport_error_sets_account_error_and_does_not_raise(
+def test_sync_transport_error_only_disables_after_threshold(
     ce_org, api, probe_ok, monkeypatch
 ):
+    """A transient IMAP blip must not strand the mailbox: the account stays
+    active (last_sync_error recorded) until SYNC_FAILURE_THRESHOLD
+    consecutive failures, and one success resets the streak."""
     acct = _create_account(ce_org, api, from_email="sync4@coldemailco.com")
 
     def _boom(account, last_uid):
@@ -568,11 +571,84 @@ def test_sync_transport_error_sets_account_error_and_does_not_raise(
     db = SessionLocal()
     try:
         account = db.get(EmailAccount, acct["id"])
-        result = sync.sync_account(db, account)  # must not raise
+        for i in range(1, sync.SYNC_FAILURE_THRESHOLD):
+            result = sync.sync_account(db, account)  # must not raise
+            db.commit()
+            assert "error" in result
+            assert account.status == "active", f"disabled on failure {i}"
+            assert "connection refused" in account.last_sync_error
+
+        # A success mid-streak resets the counter — three failures spread
+        # over weeks never add up to a disable.
+        monkeypatch.setattr(email_transport, "fetch_new", lambda a, u: [])
+        sync.sync_account(db, account)
         db.commit()
-        assert "error" in result
+        assert account.sync_failure_count == 0
+
+        monkeypatch.setattr(email_transport, "fetch_new", _boom)
+        for _ in range(sync.SYNC_FAILURE_THRESHOLD):
+            sync.sync_account(db, account)
+        db.commit()
+        assert account.status == "error"  # a real outage still disables
+        assert "connection refused" in account.error_detail
+    finally:
+        db.close()
+
+
+def test_reprobe_errored_revives_account_and_paces_itself(
+    ce_org, api, probe_ok, monkeypatch
+):
+    acct = _create_account(ce_org, api, from_email="sync5@coldemailco.com")
+    db = SessionLocal()
+    try:
+        account = db.get(EmailAccount, acct["id"])
+        account.status = "error"
+        account.error_detail = "IMAP sync failed 3 times in a row: down"
+        account.sync_failure_count = 3
+        db.commit()
+
+        # Transport still down: reprobe attempts, account stays errored.
+        monkeypatch.setattr(
+            email_transport,
+            "probe",
+            lambda a: {"smtp_ok": False, "imap_ok": False, "detail": "still down"},
+        )
+        results = sync.reprobe_errored(db)
+        assert results and results[0]["recovered"] is False
         assert account.status == "error"
-        assert "connection refused" in account.last_sync_error
+        first_probe_at = account.last_reprobe_at
+
+        # Within the pacing interval the account is not probed again.
+        monkeypatch.setattr(
+            email_transport,
+            "probe",
+            lambda a: (_ for _ in ()).throw(AssertionError("probed too soon")),
+        )
+        assert sync.reprobe_errored(db) == []
+        assert account.last_reprobe_at == first_probe_at
+
+        # Interval elapsed + transport recovered → active, counters cleared.
+        account.last_reprobe_at = utcnow() - dt.timedelta(
+            seconds=sync.REPROBE_INTERVAL_SECONDS + 1
+        )
+        db.commit()
+        rearms = []
+        from app.services import email_campaigns
+
+        monkeypatch.setattr(
+            email_campaigns, "rearm_account", lambda d, aid: rearms.append(aid)
+        )
+        monkeypatch.setattr(
+            email_transport,
+            "probe",
+            lambda a: {"smtp_ok": True, "imap_ok": True, "detail": None},
+        )
+        results = sync.reprobe_errored(db)
+        assert results and results[0]["recovered"] is True
+        assert account.status == "active"
+        assert account.error_detail is None
+        assert account.sync_failure_count == 0
+        assert rearms == [account.id]  # reconnect contract: enrollments re-arm
     finally:
         db.close()
 
@@ -803,3 +879,32 @@ def test_transport_deadline_propagates_original_exception():
 
     with pytest.raises(ConnectionRefusedError):
         email_transport._run_with_deadline("refused.example.com", _boom)
+
+
+def test_mailing_address_not_trapped_behind_white_label_gate(ce_org, api, monkeypatch):
+    """mailing_address is CAN-SPAM compliance (cold-email activation needs it
+    on EVERY tier), so when the entitlement flip turns the white-label gate
+    real, a mailing-address-only save must still pass; changing actual
+    branding must not."""
+    from app.api import branding as branding_api
+
+    monkeypatch.setattr(
+        branding_api.entitlements, "can_use_white_labeling", lambda org: False
+    )
+    r = api.put(
+        "/api/orgs/me/branding",
+        json={"mailing_address": "100 Compliance Way, Phoenix, AZ 85001"},
+        headers=ce_org["headers"],
+    )
+    assert r.status_code == 200, r.text
+    assert "Compliance Way" in r.json()["branding"]["mailing_address"]
+
+    r = api.put(
+        "/api/orgs/me/branding",
+        json={
+            "mailing_address": "100 Compliance Way, Phoenix, AZ 85001",
+            "product_name": "Not Allowed Co",
+        },
+        headers=ce_org["headers"],
+    )
+    assert r.status_code == 403

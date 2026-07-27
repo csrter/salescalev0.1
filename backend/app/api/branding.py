@@ -122,8 +122,17 @@ def set_branding(
     db: Session = Depends(get_db),
 ):
     org = _org_for(db, user)
-    _require_white_labeling(org)
     payload = body.model_dump()
+    # mailing_address is a CAN-SPAM compliance field (cold-email activation
+    # requires it on EVERY tier), not a white-label perk — it must never be
+    # trapped behind the white-label paywall when the entitlement flip
+    # lands. The gate applies only when anything else changes.
+    current = org.branding or {}
+    changed = {
+        k for k, v in payload.items() if (current.get(k) or None) != (v or None)
+    }
+    if changed - {"mailing_address"}:
+        _require_white_labeling(org)
     error = branding.validate_branding(payload)
     if error:
         raise HTTPException(400, error)

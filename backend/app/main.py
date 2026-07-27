@@ -314,6 +314,10 @@ async def _email_outreach_scheduler():
             email_campaigns.run_due(db)
             email_warmup.run_due(db)
             email_outreach_sync.sync_due(db)
+            # Auto-recover errored mailboxes (paced internally to one probe
+            # per account per 15 min) — revives sends/sync after transient
+            # SMTP/IMAP outages without waiting for a human to click Test.
+            email_outreach_sync.reprobe_errored(db)
         finally:
             db.close()
         # Isolated session + its own try/except: an SMS failure must never

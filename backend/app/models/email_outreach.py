@@ -157,6 +157,17 @@ class EmailAccount(Base):
     )
     last_imap_uid: Mapped[Optional[int]] = mapped_column(Integer)
     last_sync_error: Mapped[Optional[str]] = mapped_column(Text)
+    # Consecutive IMAP sync failures. The account only flips to error at
+    # SYNC_FAILURE_THRESHOLD (email_outreach_sync) — one transient blip must
+    # not strand sends + sync until a human clicks Test. Reset on success.
+    sync_failure_count: Mapped[int] = mapped_column(
+        Integer, default=0, nullable=False
+    )
+    # Last automatic health re-probe of an errored account
+    # (email_outreach_sync.reprobe_errored) — paces the recovery poll.
+    last_reprobe_at: Mapped[Optional[dt.datetime]] = mapped_column(
+        DateTime(timezone=True)
+    )
     created_at: Mapped[dt.datetime] = created_at_column()
 
 

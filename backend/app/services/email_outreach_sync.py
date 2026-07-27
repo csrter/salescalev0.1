@@ -50,6 +50,12 @@ from ..services import email_transport
 
 log = logging.getLogger("salescale.email_outreach")
 
+# Consecutive IMAP failures before an account flips to error (see
+# sync_account) — 3 ticks ≈ a few minutes of genuine outage, not one blip.
+SYNC_FAILURE_THRESHOLD = 3
+# Floor between automatic health re-probes of an errored mailbox.
+REPROBE_INTERVAL_SECONDS = 900
+
 
 def _noop(*args, **kwargs) -> None:
     return None
@@ -259,9 +265,26 @@ def sync_account(db: Session, account: EmailAccount) -> dict:
     try:
         messages = email_transport.fetch_new(account, last_uid)
     except email_transport.EmailTransportError as e:
-        account.status = ACCOUNT_ERROR
+        # One transient IMAP blip must not strand the mailbox (error status
+        # blocks sends AND sync until someone clicks Test) — flip to error
+        # only after SYNC_FAILURE_THRESHOLD consecutive failures. SMTP and
+        # IMAP are often different servers (SES to send, self-hosted to
+        # receive), so sending may be perfectly healthy through a brief
+        # receive-side outage. An extended outage still errors the account:
+        # blind sending can't see stop-on-reply, so it must not run forever.
+        account.sync_failure_count = (account.sync_failure_count or 0) + 1
         account.last_sync_error = str(e)
-        return {"account_id": account.id, "error": str(e)}
+        if account.sync_failure_count >= SYNC_FAILURE_THRESHOLD:
+            account.status = ACCOUNT_ERROR
+            account.error_detail = (
+                f"IMAP sync failed {account.sync_failure_count} times in a "
+                f"row: {e}"
+            )
+        return {
+            "account_id": account.id,
+            "error": str(e),
+            "consecutive_failures": account.sync_failure_count,
+        }
 
     counts: Dict[str, int] = {}
     max_uid = last_uid
@@ -300,6 +323,7 @@ def sync_account(db: Session, account: EmailAccount) -> dict:
     account.last_imap_uid = max_uid
     account.last_synced_at = utcnow()
     account.last_sync_error = None
+    account.sync_failure_count = 0
     return {"account_id": account.id, "processed": len(messages), "outcomes": counts}
 
 
@@ -325,5 +349,48 @@ def sync_due(db: Session, limit: int = 10) -> List[dict]:
     results: List[dict] = []
     for account in accounts:
         results.append(sync_account(db, account))
+        db.commit()
+    return results
+
+
+def reprobe_errored(db: Session, limit: int = 5) -> List[dict]:
+    """Automatic recovery for errored mailboxes: re-run the same transport
+    probe the manual Test button uses, at most once per
+    REPROBE_INTERVAL_SECONDS per account, and revive on success (status back
+    to active, counters cleared, parked/errored enrollments re-armed via
+    rearm_account — the same contract as the reconnect flow). Before this
+    pass, a transient outage at 2am stranded a mailbox until a human
+    clicked Test."""
+    from . import email_campaigns
+
+    cutoff = utcnow() - dt.timedelta(seconds=REPROBE_INTERVAL_SECONDS)
+    accounts = db.execute(
+        select(EmailAccount)
+        .where(
+            EmailAccount.status == ACCOUNT_ERROR,
+            or_(
+                EmailAccount.last_reprobe_at.is_(None),
+                EmailAccount.last_reprobe_at < cutoff,
+            ),
+        )
+        .order_by(EmailAccount.last_reprobe_at.asc().nulls_first())
+        .limit(limit)
+    ).scalars().all()
+    results: List[dict] = []
+    for account in accounts:
+        account.last_reprobe_at = utcnow()
+        try:
+            probe = email_transport.probe(account)
+            ok = probe["smtp_ok"] and probe["imap_ok"]
+        except Exception as e:  # a broken probe is just "still down"
+            ok, probe = False, {"detail": str(e)}
+        if ok:
+            account.status = ACCOUNT_ACTIVE
+            account.error_detail = None
+            account.last_sync_error = None
+            account.sync_failure_count = 0
+            email_campaigns.rearm_account(db, account.id)
+            log.info("email account %s auto-recovered", account.id)
+        results.append({"account_id": account.id, "recovered": ok})
         db.commit()
     return results
