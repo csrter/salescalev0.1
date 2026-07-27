@@ -3006,6 +3006,76 @@ live activation + the entitlement flip, the Outreach module build
       Tests 629 → 631 (rescued + failure-stands cases in
       test_imessage_outreach.py). DEPLOYED to production 2026-07-24
       (backend-only, no migration), web + desktop DMG in lockstep.
+- [x] BSD Google Ads + landing-page conversion overhaul (2026-07-25/26,
+      client-ops session — WordPress-side, no Salescale code): rewrote the
+      Best Spas Direct moving-sale landing + thank-you pages (wordpress-sale
+      container on the VPS, pages 7/76) for conversion intent; mu-plugins
+      bsd-google-ads-tag.php (gtag AW-18291942873 site-wide, event snippets
+      removed) + bsd-salescale-proxy.php gained a /bsd/v1/landing relay to
+      api.salescale.lol/api/track/landing with client_id pinned server-side;
+      page JS does first-touch attribution capture (localStorage bsd_attrib:
+      gclid/gbraid/wbraid/utm_*) + pageview ping + form payload enrichment;
+      sticky mobile call/price bar. WP-CLI gotchas that cost real time:
+      wp_update_post needs wp_set_current_user(admin)+kses_remove_filters()
+      (else script/style escaped to text) AND wp_slash() (else backslashes
+      in JS regexes eaten). Verified live end-to-end. IN-ACCOUNT Google Ads
+      changes (keyword dedupe/negatives, RSA rewrite to match the new LP,
+      bidding, campaign 23992792715 audit) are BLOCKED on the user-side
+      Google OAuth app publish (project 894154810113 in Testing mode = 7-day
+      refresh-token death; both org tokens revoked) + reconnecting
+      BSD/Paganelli Google in Integrations. Foreign conversion tag
+      AW-18292295114 double-firing flagged for client-side cleanup.
+- [x] Beta-readiness audit + plan (2026-07-27): six-domain Opus agent audit
+      (auth/tenancy, CRM/Lead Finder, email, SMS, ads/metrics,
+      billing/portal/ops) — verdict: core is beta-grade, tenant isolation
+      held everywhere; gaps are config + a short list of fixes. Consolidated
+      plan delivered in-session. P0 CONFIG (done, see next entry). P0
+      EXTERNAL (user-side, weeks of lead time — START NOW): Meta app
+      1044566034716833 roles/Data-Use-Checkup + publish + App Review; Google
+      OAuth app → Production; ToS/DPA legal docs. P0/P1 CODE (next
+      sessions): InsightDaily unique constraint is ORG-BLIND (cross-tenant
+      overwrite on a shared ad account — models/ads.py, needs
+      organization_id migration); dispatch_conversion never fires for
+      native lead-form leads (lead_webhooks.py — Phase-5 silently no-ops on
+      the main lead source); SMS monthly usage meter counts only status
+      'sent' (entitlements.py:~357 — receipts remove rows, undercounts);
+      one transient IMAP error hard-disables a mailbox w/ no auto-recovery;
+      meta leadgen webhook can 500 on stale config + one bad lead fails the
+      batch; CAN-SPAM mailing_address must decouple from the white-label
+      gate BEFORE the entitlement flip; HIDE for external orgs: IG Outreach
+      nav (dead-ends until Meta review) + BlueBubbles provider (dev-only);
+      email Open-rate KPI is architecturally always 0% (no pixel — remove
+      or implement); white-label custom domains verify but never provision
+      (Traefik/TLS) — honest copy for beta; insights auto-sync scheduler +
+      staleness badge; Lead Finder/verification no-key banners + JS-embed
+      snippet card; Twilio A2P 10DLC warning; SMS consent cold-start
+      remediation links; billing usage meters; GDPR EXPORT endpoint
+      (deletion exists, export doesn't). AUDIT DISCREPANCY: no code found
+      for Phase 10's call tracking / health score / NPS / creative approval
+      despite STATUS claiming built — verify before promising in beta
+      convos. Also: Supabase backup restore never tested; schedulers are
+      single-replica-only (no SKIP LOCKED); DMG unsigned.
+- [x] Beta Phase 0 — prod config levers (2026-07-27, deployed 2b32972):
+      (1) APP_BASE_URL=https://app.salescale.lol on the VPS backend/.env —
+      password-reset/verify/invite links no longer point at localhost:5173
+      (the top audit blocker; .env backup kept as .env.bak-phase0).
+      (2) TRUST_FORWARDED_FOR=1 — behind Traefik the rate limiter now keys
+      on real client IPs from X-Forwarded-For instead of collapsing every
+      tenant into one proxy-IP bucket (ratelimit.py/sessions/
+      trusted_devices all read it). (3) NEW settings.default_signup_plan
+      (env DEFAULT_SIGNUP_PLAN, default "starter"; unknown → starter
+      fallback) wired into /api/orgs/signup — set to "agency" in prod so
+      beta orgs skip the starter 5-client/5-seat 402 wall while Stripe is
+      off; flip back at the entitlement flip. Prod orgs checked: Salescale
+      + Atlas Reach already agency; test org "Final" left starter.
+      sentry-sdk 2.65.0 confirmed in the prod image — SENTRY_DSN is
+      paste-and-recreate when the user makes a Sentry project (user-side).
+      STILL USER-SIDE from Phase 0: SENTRY_DSN, operator
+      GOOGLE_PLACES_API_KEY (Lead Finder is dead for new orgs without it),
+      optional operator GEMINI_API_KEY, Supabase backup verification + one
+      test restore. Tests 631 → 632. Deployed web (backend rebuilt,
+      settings verified loaded in the container, health green, alembic
+      unchanged b7c4e1f9d283) + desktop DMG in lockstep.
 - [ ] Stripe live activation + entitlement flip (after 12–14, so real
       limits land everywhere in one pass)
 - [ ] Outreach module build (dev-mode) — go-live gated on Meta App
