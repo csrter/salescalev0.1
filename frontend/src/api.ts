@@ -59,6 +59,42 @@ function setDeviceToken(t: string | null) {
 // tens of seconds (the backend caps its own platform reads at 45s).
 const REQUEST_TIMEOUT_MS = 75_000;
 
+/** Turn an error body into something a human can act on.
+ *
+ * FastAPI's `detail` is a plain string for HTTPException, but Pydantic
+ * request-validation (422) returns an ARRAY of {loc, msg, type} objects.
+ * Passing that array straight to `new Error()` stringifies it to
+ * "[object Object],[object Object]" — which is what every validation error
+ * in the app used to look like. Each entry becomes "path → to → field:
+ * message" instead, with the leading "body" segment dropped (it's noise —
+ * it just means "the request payload"). */
+export function formatApiError(body: unknown, status: number): string {
+  const detail = (body as { detail?: unknown } | null)?.detail;
+  if (typeof detail === "string" && detail.trim()) return detail;
+  if (Array.isArray(detail)) {
+    const seen = new Set<string>();
+    for (const entry of detail) {
+      if (typeof entry === "string") {
+        seen.add(entry);
+        continue;
+      }
+      const e = entry as { loc?: unknown[]; msg?: string };
+      const loc = Array.isArray(e.loc) ? [...e.loc] : [];
+      if (loc[0] === "body" || loc[0] === "query") loc.shift();
+      const where = loc.length ? `${loc.join(" → ")}: ` : "";
+      seen.add(`${where}${e.msg ?? "invalid value"}`);
+    }
+    const parts = [...seen];
+    if (parts.length) {
+      // Cap the toast: the first few say enough to find the bad field.
+      const shown = parts.slice(0, 3).join("; ");
+      return parts.length > 3 ? `${shown} (+${parts.length - 3} more)` : shown;
+    }
+  }
+  if (detail && typeof detail === "object") return JSON.stringify(detail);
+  return `HTTP ${status}`;
+}
+
 export async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const session = getSession();
   let resp: Response;
@@ -88,7 +124,7 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
   }
   if (!resp.ok) {
     const body = await resp.json().catch(() => ({}));
-    throw new Error(body.detail ?? `HTTP ${resp.status}`);
+    throw new Error(formatApiError(body, resp.status));
   }
   if (resp.status === 204) return undefined as T;
   return (await resp.json()) as T;

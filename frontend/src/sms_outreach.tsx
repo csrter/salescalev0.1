@@ -1098,6 +1098,36 @@ function CampaignEditor({
 
   const saveSteps = async () => {
     if (!detail) return;
+    // Catch the empty-field cases here rather than round-tripping to a 422:
+    // "Add branch" starts a branch blank, so a half-filled one is the easiest
+    // way to get stuck, and the message names the exact step + branch.
+    for (let i = 0; i < steps.length; i++) {
+      const s = steps[i];
+      if (!s.body.trim()) {
+        onToast(`Step ${i + 1}: the message can't be empty`, "error");
+        return;
+      }
+      const branches = s.branches ?? [];
+      for (let b = 0; b < branches.length; b++) {
+        const label = branches[b].label.trim();
+        const body = branches[b].body.trim();
+        if (!label || !body) {
+          onToast(
+            `Step ${i + 1}, branch ${b + 1}: ${
+              !label ? "needs a branch name" : `"${label}" needs a response`
+            }`,
+            "error",
+          );
+          return;
+        }
+      }
+      const labels = branches.map((x) => x.label.trim().toLowerCase());
+      const dupe = labels.find((l, j) => labels.indexOf(l) !== j);
+      if (dupe) {
+        onToast(`Step ${i + 1}: two branches are both named "${dupe}"`, "error");
+        return;
+      }
+    }
     setBusy(true);
     try {
       const d = await saveSmsSteps(detail.id, steps.map((s, i) => ({ ...s, position: i + 1 })));
