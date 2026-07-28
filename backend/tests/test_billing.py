@@ -448,3 +448,92 @@ def test_unsubscribed_org_still_gets_a_checkout_session(api, monkeypatch):
     assert r.json()["url"] == "https://checkout.example"
     assert not modified
     assert sessions_created[0]["line_items"] == [{"price": "price_pro_y", "quantity": 1}]
+
+
+def test_product_config_resolves_prices_and_maps_plans(api, monkeypatch):
+    """Operators may configure three PRODUCT ids instead of six price ids:
+    checkout resolves the product's active price for the interval (cached),
+    and the webhook maps a subscription back to its plan by product — so
+    swapping a price in the Stripe dashboard needs no redeploy."""
+    from app.api import billing as billing_api
+
+    s = get_settings()
+    for attr in (
+        "stripe_price_starter", "stripe_price_pro", "stripe_price_agency",
+        "stripe_price_starter_yearly", "stripe_price_pro_yearly",
+        "stripe_price_agency_yearly",
+    ):
+        monkeypatch.setattr(s, attr, "")
+    monkeypatch.setattr(s, "stripe_product_pro", "prod_pro_1")
+    monkeypatch.setattr(s, "stripe_product_agency", "prod_agency_1")
+    billing_api._PRICE_CACHE.clear()
+
+    lookups = []
+
+    class _Fake:
+        class Price:
+            @staticmethod
+            def list(**kw):
+                lookups.append(kw)
+                return {
+                    "data": [
+                        # A metered price must be ignored, not charged.
+                        {"id": "price_metered", "recurring": {"interval": "month", "usage_type": "metered"}},
+                        {"id": "price_pro_month", "recurring": {"interval": "month", "usage_type": "licensed"}},
+                        {"id": "price_pro_year", "recurring": {"interval": "year", "usage_type": "licensed"}},
+                    ]
+                }
+
+    assert billing_api._resolve_price(_Fake, s, "pro", "month") == "price_pro_month"
+    assert billing_api._resolve_price(_Fake, s, "pro", "year") == "price_pro_year"
+    # Second call for the same (product, interval) is served from cache.
+    before = len(lookups)
+    assert billing_api._resolve_price(_Fake, s, "pro", "month") == "price_pro_month"
+    assert len(lookups) == before
+    # A plan with neither price nor product configured resolves to nothing.
+    assert billing_api._resolve_price(_Fake, s, "starter", "month") == ""
+
+    # Webhook: product on the price object decides the plan, whichever
+    # interval's price it is and even for a price id we've never seen.
+    assert s.plan_for_stripe_price("price_never_seen", "prod_agency_1") == "agency"
+    assert s.plan_for_stripe_price("price_never_seen", "prod_unknown") is None
+    billing_api._PRICE_CACHE.clear()
+
+
+def test_webhook_maps_plan_by_product(api, monkeypatch):
+    """A subscription.updated carrying only a product id still lands the org
+    on the right tier."""
+    org_id = _signup(api, "Prod Map Co", "owner@prodmap.com")["organization_id"]
+    db = SessionLocal()
+    org = db.get(Organization, org_id)
+    org.stripe_customer_id = "cus_prodmap1"
+    org.plan = "starter"
+    db.commit()
+    db.close()
+
+    s = get_settings()
+    monkeypatch.setattr(s, "stripe_product_agency", "prod_agency_1")
+    db = SessionLocal()
+    apply_subscription_event(
+        db,
+        {
+            "id": "evt_prodmap_1",
+            "type": "customer.subscription.updated",
+            "created": 1900000000,
+            "data": {
+                "object": {
+                    "customer": "cus_prodmap1",
+                    "status": "active",
+                    "items": {
+                        "data": [
+                            {"price": {"id": "price_whatever", "product": "prod_agency_1"}}
+                        ]
+                    },
+                }
+            },
+        },
+    )
+    db.close()
+    db2 = SessionLocal()
+    assert db2.get(Organization, org_id).plan == "agency"
+    db2.close()

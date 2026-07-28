@@ -204,6 +204,14 @@ class Settings(BaseSettings):
     stripe_price_starter_yearly: str = ""
     stripe_price_pro_yearly: str = ""
     stripe_price_agency_yearly: str = ""
+    # PREFERRED config: point at the Stripe PRODUCT and let the backend
+    # resolve each interval's active price (api/billing._resolve_price).
+    # Editing a price in Stripe then needs no redeploy, and the webhook maps
+    # a subscription back to its plan by product — no price bookkeeping at
+    # all. The explicit STRIPE_PRICE_* ids above still win when set.
+    stripe_product_starter: str = ""
+    stripe_product_pro: str = ""
+    stripe_product_agency: str = ""
     # Public URL of the web app — Checkout success/cancel + portal return + the
     # OAuth social-login return all land here.
     app_base_url: str = "http://localhost:5173"
@@ -268,14 +276,37 @@ class Settings(BaseSettings):
         }
         return (yearly if interval == "year" else monthly).get(plan, "")
 
-    def plan_for_stripe_price(self, price_id: str) -> str | None:
-        """Reverse map for the webhook — BOTH intervals resolve to the same
-        plan, so an org switching monthly↔annual keeps its tier."""
+    def stripe_product_for_plan(self, plan: str) -> str:
+        return {
+            "starter": self.stripe_product_starter,
+            "pro": self.stripe_product_pro,
+            "agency": self.stripe_product_agency,
+        }.get(plan, "")
+
+    def plan_for_stripe_product(self, product_id: str) -> str | None:
+        if not product_id:
+            return None
+        for plan in ("starter", "pro", "agency"):
+            if self.stripe_product_for_plan(plan) == product_id:
+                return plan
+        return None
+
+    def plan_for_stripe_price(
+        self, price_id: str, product_id: str | None = None
+    ) -> str | None:
+        """Reverse map for the webhook. Product wins (one id covers both
+        intervals and survives price edits); explicit price ids are the
+        fallback. Either way BOTH intervals resolve to the same plan, so an
+        org switching monthly↔annual keeps its tier."""
+        by_product = self.plan_for_stripe_product(product_id or "")
+        if by_product:
+            return by_product
         if not price_id:
             return None
         for plan in ("starter", "pro", "agency"):
             for interval in ("month", "year"):
-                if self.stripe_price_for_plan(plan, interval) == price_id:
+                configured = self.stripe_price_for_plan(plan, interval)
+                if configured and configured == price_id:
                     return plan
         return None
 

@@ -79,8 +79,50 @@ def get_usage(user: User = Depends(require_team), db: Session = Depends(get_db))
 
 PLAN_RANK = {"starter": 1, "pro": 2, "agency": 3}
 
+# Resolved (product, interval) -> price id. Prices rarely change and a wrong
+# entry would survive until restart, so this is only populated from a live
+# lookup and never from user input.
+_PRICE_CACHE: dict[tuple[str, str], str] = {}
 
-def _change_plan(stripe, settings, org: Organization, db: Session, price_id: str) -> str:
+
+def _resolve_price(stripe, settings, plan: str, interval: str) -> str:
+    """The price id to charge for (plan, interval).
+
+    An explicit STRIPE_PRICE_* wins. Otherwise the product's active recurring
+    price for that interval is looked up once and cached — so an operator
+    configures three product ids instead of six price ids, and editing a
+    price in Stripe needs no redeploy."""
+    explicit = settings.stripe_price_for_plan(plan, interval)
+    if explicit:
+        return explicit
+    product = settings.stripe_product_for_plan(plan)
+    if not product:
+        return ""
+    cached = _PRICE_CACHE.get((product, interval))
+    if cached:
+        return cached
+    try:
+        prices = stripe.Price.list(product=product, active=True, limit=100)
+    except Exception as e:  # a Stripe outage must read as "not configured"
+        log.warning("price lookup failed for %s/%s: %s", plan, interval, e)
+        return ""
+    for price in prices.get("data", []):
+        recurring = price.get("recurring") or {}
+        # Flat subscription prices only — a metered price can't be charged
+        # with quantity=1 the way the checkout line item does.
+        if (
+            recurring.get("interval") == interval
+            and recurring.get("interval_count", 1) == 1
+            and recurring.get("usage_type", "licensed") != "metered"
+        ):
+            _PRICE_CACHE[(product, interval)] = price["id"]
+            return price["id"]
+    return ""
+
+
+def _change_plan(
+    stripe, settings, org: Organization, db: Session, price_id: str, target: str
+) -> str:
     """Switch an existing subscription to a different price in place.
 
     Upgrades bill immediately with proration (the org gets the higher limits
@@ -94,8 +136,12 @@ def _change_plan(stripe, settings, org: Organization, db: Session, price_id: str
     item = sub["items"]["data"][0]
     if item["price"]["id"] == price_id:
         raise HTTPException(400, "That is already this organization's plan")
-    current = settings.plan_for_stripe_price(item["price"]["id"]) or org.plan
-    target = settings.plan_for_stripe_price(price_id) or org.plan
+    current = (
+        settings.plan_for_stripe_price(
+            item["price"]["id"], (item["price"] or {}).get("product")
+        )
+        or org.plan
+    )
     upgrading = PLAN_RANK.get(target, 0) > PLAN_RANK.get(current, 0)
     stripe.Subscription.modify(
         org.stripe_subscription_id,
@@ -123,7 +169,7 @@ def create_checkout(
 ):
     settings = get_settings()
     stripe = _stripe()
-    price_id = settings.stripe_price_for_plan(body.plan, body.interval)
+    price_id = _resolve_price(stripe, settings, body.plan, body.interval)
     if not price_id:
         raise HTTPException(
             400,
@@ -140,7 +186,9 @@ def create_checkout(
         "trialing",
         "past_due",
     ):
-        return CheckoutSessionOut(url=_change_plan(stripe, settings, org, db, price_id))
+        return CheckoutSessionOut(
+            url=_change_plan(stripe, settings, org, db, price_id, body.plan)
+        )
 
     customer_id = org.stripe_customer_id
     if not customer_id:
@@ -244,8 +292,13 @@ def apply_subscription_event(db: Session, event: dict) -> None:
                 org.plan = "starter"
             else:
                 items = (obj.get("items") or {}).get("data") or []
-                price_id = items[0]["price"]["id"] if items else None
-                mapped = settings.plan_for_stripe_price(price_id) if price_id else None
+                price = items[0].get("price") or {} if items else {}
+                # Stripe includes the product on the price object, so the
+                # plan resolves without a second API call — and keeps
+                # resolving if the price itself was swapped in the dashboard.
+                mapped = settings.plan_for_stripe_price(
+                    price.get("id"), price.get("product")
+                )
                 if mapped:
                     org.plan = mapped
             org.subscription_event_at = when
