@@ -16,12 +16,21 @@ import {
   verifyEmail,
   type InviteLookup,
   type LoginChallenge,
+  type BillingInterval,
   type OrgPlan,
   type Session,
   type Subscription,
 } from "./api";
 import { Logo } from "./logo";
-import { Alert, Button, Field, Kpi, KpiGrid, KpiSkeleton } from "./components/ui";
+import {
+  Alert,
+  Button,
+  Field,
+  Kpi,
+  KpiGrid,
+  KpiSkeleton,
+  Segmented,
+} from "./components/ui";
 import "./styles/views/settings.css";
 
 function Brand() {
@@ -355,9 +364,32 @@ export function AcceptInvite({
 
 /* ---- in-app: billing / subscription ---- */
 
+/** Pricing-page copy, kept in sync with the Stripe product catalog. Prices
+ * are display-only — Stripe's price ids are the source of truth for what is
+ * actually charged (backend STRIPE_PRICE_* env). */
+const PLAN_COPY: Record<OrgPlan, { monthly: string; yearly: string; meta: string }> = {
+  starter: {
+    monthly: "$59",
+    yearly: "$600",
+    meta: "1 user · 1 ad account per platform · 5 clients",
+  },
+  pro: {
+    monthly: "$99",
+    yearly: "$1,000",
+    meta: "15 seats · 5 ad accounts per platform · white-label + AI",
+  },
+  agency: {
+    monthly: "$199",
+    yearly: "$1,999",
+    meta: "Unlimited seats, clients & ad accounts · everything included",
+  },
+};
+
 export function Billing({ session }: { session: Session }) {
   const [sub, setSub] = useState<Subscription | null>(null);
   const [usage, setUsage] = useState<BillingUsage | null>(null);
+  // NB: not named setInterval — that would shadow the global timer fn.
+  const [billingInterval, setBillingInterval] = useState<BillingInterval>("month");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const isOwner = session.role === "owner";
@@ -440,33 +472,53 @@ export function Billing({ session }: { session: Session }) {
       {sub && sub.billing_enabled && isOwner && (
         <>
           <h3>Change plan</h3>
+          <div className="set-plan-interval">
+            <Segmented
+              ariaLabel="Billing interval"
+              options={[
+                { value: "month", label: "Monthly" },
+                { value: "year", label: "Annual (2 months free)" },
+              ]}
+              value={billingInterval}
+              onChange={(v) => setBillingInterval(v as BillingInterval)}
+            />
+          </div>
           <div className="set-plans">
-            {(ORG_PLANS.filter((p) => p !== "starter") as OrgPlan[]).map((plan) => {
+            {ORG_PLANS.map((plan) => {
               const current = sub.plan === plan;
+              const p = PLAN_COPY[plan];
               return (
                 <div
                   key={plan}
                   className={current ? "set-plan set-plan--current" : "set-plan"}
                 >
                   <div className="set-plan-label">
-                    Plan {current && <span className="set-plan-tag">current</span>}
+                    {plan} {current && <span className="set-plan-tag">current</span>}
                   </div>
-                  <div className="set-plan-price">{plan}</div>
-                  <span className="set-plan-meta">
-                    {plan === "pro" ? "25 clients · 15 seats" : "Unlimited"}
-                  </span>
+                  <div className="set-plan-price">
+                    {billingInterval === "year" ? p.yearly : p.monthly}
+                    <span className="set-plan-per">
+                      {billingInterval === "year" ? "/yr" : "/mo"}
+                    </span>
+                  </div>
+                  <span className="set-plan-meta">{p.meta}</span>
                   <Button
                     className="set-plan-cta"
                     variant="primary"
                     disabled={busy || current}
-                    onClick={() => go(() => startCheckout(plan))}
+                    onClick={() => go(() => startCheckout(plan, billingInterval))}
                   >
-                    {current ? "Current plan" : "Upgrade"}
+                    {current ? "Current plan" : "Switch to this plan"}
                   </Button>
                 </div>
               );
             })}
           </div>
+          <p className="set-note">
+            Upgrades take effect immediately and are prorated on your next
+            invoice; downgrades and interval switches apply at the end of the
+            current billing period.
+          </p>
           <div className="set-billing-portal">
             <Button variant="ghost" disabled={busy} onClick={() => go(openBillingPortal)}>
               Manage billing &amp; invoices

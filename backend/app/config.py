@@ -196,8 +196,14 @@ class Settings(BaseSettings):
     # /api/billing endpoints return 503). Each plan maps to a Stripe Price.
     stripe_secret_key: str = ""
     stripe_webhook_secret: str = ""
+    # Every tier is paid (no free plan). Monthly ids keep their original
+    # names; the annual ids are the _YEARLY suffix.
+    stripe_price_starter: str = ""
     stripe_price_pro: str = ""
     stripe_price_agency: str = ""
+    stripe_price_starter_yearly: str = ""
+    stripe_price_pro_yearly: str = ""
+    stripe_price_agency_yearly: str = ""
     # Public URL of the web app — Checkout success/cancel + portal return + the
     # OAuth social-login return all land here.
     app_base_url: str = "http://localhost:5173"
@@ -247,15 +253,30 @@ class Settings(BaseSettings):
             self.meta_login_app_secret or self.meta_app_secret,
         )
 
-    def stripe_price_for_plan(self, plan: str) -> str:
-        return {"pro": self.stripe_price_pro, "agency": self.stripe_price_agency}.get(
-            plan, ""
-        )
+    def stripe_price_for_plan(self, plan: str, interval: str = "month") -> str:
+        """Price id for a (plan, billing interval). Every tier is paid — there
+        is no free plan — and each has a monthly and an annual price."""
+        monthly = {
+            "starter": self.stripe_price_starter,
+            "pro": self.stripe_price_pro,
+            "agency": self.stripe_price_agency,
+        }
+        yearly = {
+            "starter": self.stripe_price_starter_yearly,
+            "pro": self.stripe_price_pro_yearly,
+            "agency": self.stripe_price_agency_yearly,
+        }
+        return (yearly if interval == "year" else monthly).get(plan, "")
 
     def plan_for_stripe_price(self, price_id: str) -> str | None:
-        for plan in ("pro", "agency"):
-            if price_id and self.stripe_price_for_plan(plan) == price_id:
-                return plan
+        """Reverse map for the webhook — BOTH intervals resolve to the same
+        plan, so an org switching monthly↔annual keeps its tier."""
+        if not price_id:
+            return None
+        for plan in ("starter", "pro", "agency"):
+            for interval in ("month", "year"):
+                if self.stripe_price_for_plan(plan, interval) == price_id:
+                    return plan
         return None
 
 

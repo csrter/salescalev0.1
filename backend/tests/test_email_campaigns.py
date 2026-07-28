@@ -1030,12 +1030,14 @@ def test_analytics_rate_math(cc_org, api, probe_ok):
     assert any(a["from_email"] == "an@campaignco.com" for a in r.json()["accounts"])
 
 
-def test_usage_endpoint(cc_org, api, probe_ok):
+def test_usage_endpoint(cc_org, api, probe_ok, set_plan):
+    set_plan(cc_org["org"], "starter")
     r = api.get("/api/email-outreach/usage", headers=cc_org["headers"])
     assert r.status_code == 200, r.text
     body = r.json()
     assert "used" in body["sends"] and "limit" in body["sends"]
     assert body["plan"] == "starter"
+    set_plan(cc_org["org"], "agency")  # module-scoped org — restore
 
 
 # --- isolation + role gating ------------------------------------------------

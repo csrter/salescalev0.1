@@ -35,9 +35,14 @@ TIER_LIMITS: dict[str, dict[str, int | None]] = {
     # (Google Places ~$35/1k searches, verification ~$8/1k emails). Unlike
     # seats/clients, even the agency tier keeps a finite number — an
     # unmetered tenant here is direct margin loss, not just oversubscription.
+    # ad_accounts_per_platform is the pricing page's headline differentiator
+    # ("1 account per platform" / "5 per platform" / unlimited) — enforced at
+    # attach time in services/ad_accounts.
     "starter": {
         "clients": 5,
-        "seats": 5,
+        # "Entry-level, SINGLE USER plan" per the Stripe product copy.
+        "seats": 1,
+        "ad_accounts_per_platform": 1,
         "custom_fields": 20,
         "research_fields": 5,
         "lead_finder_searches": 40,
@@ -48,6 +53,7 @@ TIER_LIMITS: dict[str, dict[str, int | None]] = {
     "pro": {
         "clients": 25,
         "seats": 15,
+        "ad_accounts_per_platform": 5,
         "custom_fields": 50,
         "research_fields": 15,
         "lead_finder_searches": 200,
@@ -58,6 +64,7 @@ TIER_LIMITS: dict[str, dict[str, int | None]] = {
     "agency": {
         "clients": None,
         "seats": None,
+        "ad_accounts_per_platform": None,  # unlimited, per the pricing page
         "custom_fields": None,
         "research_fields": None,
         "lead_finder_searches": 1000,
@@ -384,16 +391,52 @@ def enforce_can_send_sms(db: Session, org: Organization) -> None:
         )
 
 
+# Tiers that unlock the two tier-gated capabilities. The Stripe pricing page
+# markets white-labeling from Pro up ("White-label Capable"); AI is the same
+# gate by operator decision. NOTE: mailing_address is deliberately NOT behind
+# the white-label gate (CAN-SPAM applies on every tier) — see api/branding.
+PAID_FEATURE_TIERS = ("pro", "agency")
+
+
 def can_use_white_labeling(org: Organization) -> bool:
     """May this Organization configure branding, custom domains, and branded
-    email? Phase 8: return based on the org's subscription tier."""
-    return True
+    email? Pro and Agency only."""
+    return org.plan in PAID_FEATURE_TIERS
 
 
 def can_use_ai_insights(org: Organization) -> bool:
-    """May this Organization use AI explanations/summaries at all?
-    Phase 8: return based on the org's subscription tier."""
-    return True
+    """May this Organization use AI explanations/summaries, cold-outreach
+    personalization, and AI research fields? Pro and Agency only."""
+    return org.plan in PAID_FEATURE_TIERS
+
+
+def ad_account_usage(db: Session, org: Organization, platform: str) -> dict:
+    """Attached ad accounts on ONE platform vs the plan's per-platform cap —
+    the pricing page's headline limit (1 / 5 / unlimited)."""
+    from ..models.core import AdAccount
+
+    used = db.execute(
+        select(func.count())
+        .select_from(AdAccount)
+        .where(AdAccount.organization_id == org.id, AdAccount.platform == platform)
+    ).scalar_one()
+    return {"used": used, "limit": _limits(org).get("ad_accounts_per_platform")}
+
+
+def enforce_can_attach_ad_account(
+    db: Session, org: Organization, platform: str
+) -> None:
+    """402 when the org is at its per-platform ad-account limit. Gates the
+    attach path (connect callback + the account picker), never the read of
+    accounts already attached — a downgrade must not break existing data."""
+    usage = ad_account_usage(db, org, platform)
+    cap = usage["limit"]
+    if cap is not None and usage["used"] >= cap:
+        raise HTTPException(
+            status.HTTP_402_PAYMENT_REQUIRED,
+            f"Your {org.plan} plan allows {cap} {platform} ad account"
+            f"{'' if cap == 1 else 's'}. Upgrade to connect more.",
+        )
 
 
 def ai_monthly_query_limit(org: Organization) -> int:

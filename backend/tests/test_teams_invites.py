@@ -3,6 +3,8 @@ trail. Every acceptance check in PHASE_13_TEAMS_SEATS.md has a test here or
 in test_team_roles.py; UI hiding is never load-bearing."""
 import re
 
+import pytest
+
 from app.db import SessionLocal
 from app.models.base import utcnow
 from app.models.core import Organization, User
@@ -374,8 +376,33 @@ def test_expired_invite_rejected(api):
 # --- seats ---
 
 
-def test_pending_invites_count_against_seats(api):
-    h = _headers(_signup(api, "Seatful Co", "owner@seatful.com"))
+
+@pytest.fixture()
+def five_seat_plan(monkeypatch):
+    """Pin a 5-seat cap for the seat-RESERVATION tests below. They exercise
+    the reservation semantics (a pending invite holds a seat; accept
+    re-checks), not the commercial tier numbers — so they patch the limit
+    instead of hard-coding whatever Starter/Pro currently sell."""
+    from app.services import entitlements
+
+    monkeypatch.setitem(entitlements.TIER_LIMITS["starter"], "seats", 5)
+    return "starter"
+
+
+def _pin_plan(org_id, plan):
+    from app.db import SessionLocal
+    from app.models.core import Organization
+
+    db = SessionLocal()
+    db.get(Organization, org_id).plan = plan
+    db.commit()
+    db.close()
+
+
+def test_pending_invites_count_against_seats(api, five_seat_plan):
+    signed = _signup(api, "Seatful Co", "owner@seatful.com")
+    _pin_plan(signed["organization_id"], five_seat_plan)
+    h = _headers(signed)
     # starter = 5 seats; owner occupies 1 → 4 invites fill the plan.
     for i in range(4):
         assert (
@@ -396,8 +423,10 @@ def test_pending_invites_count_against_seats(api):
     assert seats == {"used": 1, "pending_invites": 4, "limit": 5, "plan": "starter"}
 
 
-def test_accept_blocked_when_seats_filled_after_send(api):
-    h = _headers(_signup(api, "Squeeze Co", "owner@squeeze.com"))
+def test_accept_blocked_when_seats_filled_after_send(api, five_seat_plan):
+    signed = _signup(api, "Squeeze Co", "owner@squeeze.com")
+    _pin_plan(signed["organization_id"], five_seat_plan)
+    h = _headers(signed)
     inv = api.post(
         "/api/orgs/me/invites",
         headers=h,

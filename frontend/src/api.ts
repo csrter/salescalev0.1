@@ -446,10 +446,15 @@ export interface BillingUsage {
 
 export const getBillingUsage = () => api<BillingUsage>("/api/billing/usage");
 
-export const startCheckout = (plan: OrgPlan) =>
+export type BillingInterval = "month" | "year";
+
+/** Starts a subscription, OR switches an existing one to this plan/interval
+ * (the backend routes subscribers to a proration-aware change + the portal,
+ * never a second subscription). Both return a URL to send the user to. */
+export const startCheckout = (plan: OrgPlan, interval: BillingInterval = "month") =>
   api<{ url: string }>("/api/billing/checkout", {
     method: "POST",
-    body: JSON.stringify({ plan }),
+    body: JSON.stringify({ plan, interval }),
   });
 
 export const openBillingPortal = () =>

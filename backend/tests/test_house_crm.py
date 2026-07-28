@@ -62,12 +62,12 @@ def test_house_client_hidden_from_roster(api, team_headers):
     assert api.get(f"/api/clients/{house_id}", headers=team_headers).status_code == 200
 
 
-def test_house_client_does_not_consume_a_plan_slot(api):
-    """A fresh starter org (5-client cap): materializing the house client must
-    not eat a slot — all 5 real clients still fit, the 6th is blocked."""
-    h = {
-        "Authorization": f"Bearer {_signup(api, 'House Cap Co', 'cap@housecap.com')['access_token']}"
-    }
+def test_house_client_does_not_consume_a_plan_slot(api, set_plan):
+    """On starter (5-client cap): materializing the house client must not eat
+    a slot — all 5 real clients still fit, the 6th is blocked."""
+    signed = _signup(api, 'House Cap Co', 'cap@housecap.com')
+    set_plan(signed["organization_id"], "starter")
+    h = {"Authorization": f"Bearer {signed['access_token']}"}
     assert api.get("/api/orgs/me/house-client", headers=h).status_code == 200
     for i in range(5):
         assert (

@@ -148,7 +148,7 @@ def test_search_unconfigured_is_503(api, team_headers):
     assert r.status_code == 503
 
 
-def test_search_quota_402_at_cap(api, fake_places, places_key):
+def test_search_quota_402_at_cap(api, fake_places, places_key, set_plan):
     # Fresh starter org (cap: 40/month) — burn the quota with ledger rows
     # directly, then the next real search must 402.
     r = api.post(
@@ -163,6 +163,7 @@ def test_search_quota_402_at_cap(api, fake_places, places_key):
     assert r.status_code == 201
     headers = {"Authorization": f"Bearer {r.json()['access_token']}"}
     org_id = r.json()["organization_id"]
+    set_plan(org_id, "starter")  # cap: 40 searches/month
     db = SessionLocal()
     for i in range(40):
         db.add(LeadFinderSearch(organization_id=org_id, query=f"q{i}"))
@@ -241,7 +242,7 @@ def test_search_filters_pass_through(api, team_headers, fake_places, places_key)
     assert fake_places[-1]["open_now"] is True
 
 
-def test_search_quota_clamps_pages_not_402(api, monkeypatch, places_key):
+def test_search_quota_clamps_pages_not_402(api, monkeypatch, places_key, set_plan):
     """With 1 page left this month, a 60-result request returns one page and
     flags the clamp instead of refusing the whole search."""
     r = api.post(
@@ -256,6 +257,7 @@ def test_search_quota_clamps_pages_not_402(api, monkeypatch, places_key):
     assert r.status_code == 201
     headers = {"Authorization": f"Bearer {r.json()['access_token']}"}
     org_id = r.json()["organization_id"]
+    set_plan(org_id, "starter")
     db = SessionLocal()
     for i in range(39):  # starter cap is 40 pages/month → 1 left
         db.add(LeadFinderSearch(organization_id=org_id, query=f"q{i}"))
@@ -554,7 +556,7 @@ def test_bulk_verify_cross_tenant_404(api, lf_org, org2_headers):
     assert r.status_code == 404
 
 
-def test_verify_quota_402(api):
+def test_verify_quota_402(api, set_plan):
     """Batch metering: a request that doesn't fit the monthly cap is 402 and
     verifies nothing."""
     r = api.post(
@@ -568,6 +570,7 @@ def test_verify_quota_402(api):
     )
     headers = {"Authorization": f"Bearer {r.json()['access_token']}"}
     org_id = r.json()["organization_id"]
+    set_plan(org_id, "starter")  # cap: 250 verifications/month
     client_id = api.post(
         "/api/clients", json={"name": "VQ Client"}, headers=headers
     ).json()["id"]

@@ -363,7 +363,8 @@ class AdminSignupPoint(BaseModel):
 
 
 class CheckoutRequest(BaseModel):
-    plan: str  # pro | agency
+    plan: str  # starter | pro | agency — every tier is paid
+    interval: str = Field(default="month", pattern="^(month|year)$")
 
 
 class CheckoutSessionOut(BaseModel):

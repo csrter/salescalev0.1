@@ -399,3 +399,15 @@
 .set-billing-portal {
   margin-top: var(--space-6);
 }
+
+/* Billing-interval toggle + annual/monthly price unit. */
+.set-plan-interval {
+  margin-bottom: var(--space-4);
+}
+
+.set-plan-per {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--ink-soft);
+  margin-left: 2px;
+}

@@ -335,8 +335,8 @@ def test_removed_select_option_blocks_then_keeps_or_remaps(api, team_headers, cf
     assert got["custom_fields"][f["key"]] == b_key
 
 
-def test_cap_blocks_over_limit(api):
-    """A fresh org is on the default (starter) tier: cap = 20 active fields.
+def test_cap_blocks_over_limit(api, set_plan):
+    """On the starter tier the cap is 20 active fields.
     Uses its own org so filling the cap doesn't perturb other suites. Archiving
     frees a slot."""
     resp = api.post(
@@ -349,6 +349,7 @@ def test_cap_blocks_over_limit(api):
         },
     )
     assert resp.status_code == 201, resp.text
+    set_plan(resp.json()["organization_id"], "starter")  # cap: 20 fields
     headers = {"Authorization": f"Bearer {resp.json()['access_token']}"}
 
     created, last, first_id = 0, None, None

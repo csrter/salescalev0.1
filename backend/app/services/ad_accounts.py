@@ -170,6 +170,16 @@ def attach(
                 "connected elsewhere"
             )
         return None
+    # Per-platform ad-account cap (the pricing page's headline limit). Checked
+    # HERE — the one function that creates AdAccount rows — so the OAuth
+    # callback and the manual picker are both covered. Re-attaching an
+    # already-attached account returned above, so this never blocks a no-op.
+    from ..models.core import Organization
+    from . import entitlements
+
+    org = db.get(Organization, organization_id)
+    if org is not None:
+        entitlements.enforce_can_attach_ad_account(db, org, conn.platform)
     acct = AdAccount(
         organization_id=organization_id,
         client_id=client_id,

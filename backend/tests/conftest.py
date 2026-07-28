@@ -49,6 +49,10 @@ os.environ["OUTREACH_SCHEDULER_ENABLED"] = "false"
 os.environ["EMAIL_OUTREACH_SCHEDULER_ENABLED"] = "false"
 # Insights auto-sync: tests drive insights_sync.run_due synchronously.
 os.environ["INSIGHTS_SCHEDULER_ENABLED"] = "false"
+# Every tier is paid and Starter is deliberately tight (1 seat, 1 ad
+# account per platform), so feature suites sign up on the top tier and
+# the tier-limit tests set org.plan explicitly (see test_billing).
+os.environ["DEFAULT_SIGNUP_PLAN"] = "agency"
 
 import pytest
 from fastapi.testclient import TestClient
@@ -289,3 +293,21 @@ def org2(api):
 @pytest.fixture(scope="session")
 def org2_headers(org2):
     return org2["headers"]
+
+
+@pytest.fixture()
+def set_plan():
+    """Pin an Organization's subscription tier.
+
+    Signup lands on DEFAULT_SIGNUP_PLAN (agency in tests — see the env block
+    above), so any test asserting a TIER LIMIT must declare the tier it is
+    testing rather than relying on the signup default.
+    """
+
+    def _set(org_id: str, plan: str) -> None:
+        db = SessionLocal()
+        db.get(Organization, org_id).plan = plan
+        db.commit()
+        db.close()
+
+    return _set

@@ -59,6 +59,8 @@ def get_usage(user: User = Depends(require_team), db: Session = Depends(get_db))
     meters = [
         ("clients", "Clients", entitlements.client_usage(db, org)),
         ("seats", "Team seats", entitlements.seat_usage(db, org)),
+        ("meta_ad_accounts", "Meta ad accounts", entitlements.ad_account_usage(db, org, "meta")),
+        ("google_ad_accounts", "Google ad accounts", entitlements.ad_account_usage(db, org, "google")),
         ("custom_fields", "Custom CRM fields", entitlements.custom_field_usage(db, org)),
         ("research_fields", "AI research fields", entitlements.research_field_usage(db, org)),
         ("lead_finder_searches", "Lead Finder searches (month)", entitlements.lead_finder_usage(db, org)),
@@ -75,6 +77,44 @@ def get_usage(user: User = Depends(require_team), db: Session = Depends(get_db))
     }
 
 
+PLAN_RANK = {"starter": 1, "pro": 2, "agency": 3}
+
+
+def _change_plan(stripe, settings, org: Organization, db: Session, price_id: str) -> str:
+    """Switch an existing subscription to a different price in place.
+
+    Upgrades bill immediately with proration (the org gets the higher limits
+    now, so it pays now); downgrades and interval switches take effect at the
+    period end with no proration, so nobody is charged for leaving a tier.
+    Returns the portal URL — the org lands somewhere that shows the change and
+    its next invoice rather than a dead end. The org's `plan` column is NOT
+    written here: customer.subscription.updated is the single source of truth
+    (same rule as checkout), so a failed change can't leave the tier lying."""
+    sub = stripe.Subscription.retrieve(org.stripe_subscription_id)
+    item = sub["items"]["data"][0]
+    if item["price"]["id"] == price_id:
+        raise HTTPException(400, "That is already this organization's plan")
+    current = settings.plan_for_stripe_price(item["price"]["id"]) or org.plan
+    target = settings.plan_for_stripe_price(price_id) or org.plan
+    upgrading = PLAN_RANK.get(target, 0) > PLAN_RANK.get(current, 0)
+    stripe.Subscription.modify(
+        org.stripe_subscription_id,
+        items=[{"id": item["id"], "price": price_id}],
+        proration_behavior="always_invoice" if upgrading else "none",
+        billing_cycle_anchor="unchanged",
+        metadata={"organization_id": org.id, "plan": target},
+    )
+    log.info(
+        "org %s subscription changed %s -> %s (%s)",
+        org.id, current, target, "upgrade" if upgrading else "downgrade/interval",
+    )
+    session = stripe.billing_portal.Session.create(
+        customer=org.stripe_customer_id,
+        return_url=f"{settings.app_base_url}/?billing=plan_changed",
+    )
+    return session.url
+
+
 @router.post("/checkout", response_model=CheckoutSessionOut)
 def create_checkout(
     body: CheckoutRequest,
@@ -83,10 +123,24 @@ def create_checkout(
 ):
     settings = get_settings()
     stripe = _stripe()
-    price_id = settings.stripe_price_for_plan(body.plan)
+    price_id = settings.stripe_price_for_plan(body.plan, body.interval)
     if not price_id:
-        raise HTTPException(400, f"No Stripe price configured for plan '{body.plan}'")
+        raise HTTPException(
+            400,
+            f"No Stripe price configured for plan '{body.plan}' "
+            f"({body.interval}ly)",
+        )
     org = db.get(Organization, user.organization_id)
+
+    # An org that already has a live subscription must CHANGE it, never buy a
+    # second one — Checkout always creates a new subscription, so sending an
+    # existing subscriber here would double-bill them.
+    if org.stripe_subscription_id and org.subscription_status in (
+        "active",
+        "trialing",
+        "past_due",
+    ):
+        return CheckoutSessionOut(url=_change_plan(stripe, settings, org, db, price_id))
 
     customer_id = org.stripe_customer_id
     if not customer_id:
@@ -103,6 +157,7 @@ def create_checkout(
         mode="subscription",
         customer=customer_id,
         line_items=[{"price": price_id, "quantity": 1}],
+        allow_promotion_codes=True,
         success_url=f"{settings.app_base_url}/?billing=success",
         cancel_url=f"{settings.app_base_url}/?billing=cancelled",
         metadata={"organization_id": org.id, "plan": body.plan},
