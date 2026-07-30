@@ -489,3 +489,136 @@ route — get the Docker network attachment right instead.
 - **Inbound webhooks stay out of this path entirely** by default (see
   above) — this relay's blast radius is limited to the one send/verify
   call shape `services/sms_send.py` already makes.
+
+---
+
+## Mac mini build — the recommended sender host
+
+This section exists because the two hosts above taught us the difference the
+hard way. **Use this for any new sender Mac.**
+
+### Why not another EC2 Mac
+
+| | EC2 Mac | Physical Mac mini |
+|---|---|---|
+| SIP / Private API | **Impossible** (no Recovery Mode) → AppleScript only | Disable SIP → **Private API** |
+| Send confirmation | Fire-and-forget; failures surface minutes later via `sms_verify` | **Synchronous** — the API tells you it failed |
+| iMessage registration | Apple blocks datacenters (`error=22`); attestation rots | Normal, expected environment |
+| Cost | ~$0.88/hr ≈ **$630/mo**, 24h min host allocation | ~$400–600 once |
+
+Failure this section is written to prevent (observed live, 2026-07-29): the
+EC2 Mac lost its `cryptex1` attestation ticket
+(`/System/Volumes/iSCPreboot/<UUID>/cryptex1/current/apticket.*.im4m`
+missing). `identityservicesd` then can't BAA-sign, so IDS registration can't
+renew. A **cached** registration kept SMS working for ~3 days after the
+Jul 23 boot, then died: **434 sends failed with `error=4`** while the relay
+itself looked perfectly healthy on `/api/v1/ping`. Text Message Forwarding
+also stopped, because that too depends on a live device registration.
+
+### 1. Hardware + macOS
+
+- Any Apple Silicon Mac mini (M1 base is plenty — BlueBubbles just drives
+  Messages.app). Wired ethernet, on a UPS.
+- Do **not** put it on a datacenter IP if you can avoid it; a normal
+  office/residential connection is the environment iMessage registration
+  expects.
+- Create ONE admin user for the sender (e.g. `sender`). Remember the
+  password — auto-login, SIP re-enable, and Screen Sharing all need it.
+
+### 2. Dedicated Apple ID
+
+Sign Messages into an Apple ID **created for this purpose** — never a
+personal one. Automated bulk messaging is against Apple's iMessage ToS, and
+the realistic consequence is the Apple ID getting flagged. Keep the blast
+radius to an account you can replace.
+
+Attach a phone number to it if you want green-bubble SMS as well; that needs
+Text Message Forwarding from a paired iPhone with a **voice+SMS** line (a
+data-only eSIM cannot do it).
+
+### 3. Disable SIP (this is the whole reliability upgrade)
+
+Apple Silicon:
+
+1. Shut down. Hold the **power button** until "Loading startup options".
+2. **Options → Continue → Utilities → Terminal**.
+3. `csrutil disable` → authenticate as the admin user → `reboot`.
+4. Verify after boot: `csrutil status` → `System Integrity Protection status: disabled`.
+
+BlueBubbles' Private API installer may also require disabling library
+validation / AMFI depending on the macOS version — follow the instructions
+**in the app**, which are version-specific, rather than a recipe from here.
+
+### 4. BlueBubbles + Private API
+
+1. Install BlueBubbles Server, sign in, enable **Private API** and install
+   its helper bundle when prompted.
+2. Set a strong server password (this is Salescale's "Server password").
+3. Confirm `/api/v1/server/info` reports **`private_api: true` and
+   `helper_connected: true`**. If either is false you are still on the
+   AppleScript path — stop and fix it here, because that is the exact
+   configuration that produced 200 silent failures.
+4. Enable BlueBubbles' own auto-start, and still install the
+   `com.bluebubbles.server` LaunchAgent from this directory (belt and braces
+   — the app's auto-start was off on the EC2 box and a reboot left it dead).
+
+### 5. Headless hardening
+
+Same measures as the "Uptime hardening" table above, all of which apply:
+
+```bash
+sudo pmset -a autorestart 1 sleep 0 disablesleep 1   # reboot on power loss, never sleep
+sudo systemsetup -setremotelogin on                  # ssh
+sudo launchctl enable system/com.apple.screensharing # VNC (tunnel it, never expose 5900)
+```
+
+**Enable auto-login** (System Settings → Users & Groups → "Automatically log
+in as"). BlueBubbles drives Messages.app, so it only runs inside a logged-in
+GUI session — without auto-login a reboot parks at the login window and the
+relay stays down until someone screen-shares in. This has bitten this project
+twice.
+
+Install `imsg-watchdog.sh` + `com.salescale.imsgwatchdog.plist` from this
+directory: it covers both "local API stopped answering" and "local API fine
+but the public relay is dead (stale tunnel socket)".
+
+### 6. Relay wiring
+
+Reuse **steps 3 and 6** above verbatim, with a fresh port and hostname so it
+coexists with the other relays:
+
+| Hostname | Tunnel port |
+|---|---|
+| `imessage-relay.salescale.lol` | 12345 (MacBook) |
+| `imsg.atlasreach.io` | 8443 (EC2) |
+| **pick a new one, e.g. `imsg-mini.atlasreach.io`** | **e.g. 12346** |
+
+Mind the two confirmed gotchas: `-R 12346:localhost:1234` (bare port) paired
+with `permitlisten="localhost:12346"`, and **never** the `restrict`
+shorthand.
+
+### 7. Connect in Salescale
+
+SMS → Accounts → Connect a number → provider **BlueBubbles**:
+
+- Relay URL: `https://imsg-mini.atlasreach.io`
+- Server password: from step 4
+- iMessage number: the Mac's handle
+- Min/max seconds between sends: leave the 20–45s default. Only automated
+  campaign sends are paced; a human 1:1 reply is never throttled.
+- Leave **"Send as SMS only"** OFF unless this Mac genuinely cannot send
+  iMessage — that flag exists for the EC2 box's dead-iMessage situation.
+
+Then paste the account's inbound webhook URL into BlueBubbles' webhook
+config, and ramp volume slowly on a new Apple ID.
+
+### 8. Verification checklist
+
+- [ ] `csrutil status` → disabled
+- [ ] `/api/v1/server/info` → `private_api: true`, `helper_connected: true`
+- [ ] Public relay ping over HTTPS returns BlueBubbles' 401 (auth gate alive)
+- [ ] A real send from Salescale → arrives, **and** `chat.db` shows
+      `error=0, is_sent=1` (`sqlite3 ~/Library/Messages/chat.db "select service,
+      error,is_sent from message where is_from_me=1 order by date desc limit 5;"`)
+- [ ] Kill BlueBubbles → watchdog relaunches it within ~60s
+- [ ] Reboot → auto-login, BlueBubbles up, tunnel up, relay answers
