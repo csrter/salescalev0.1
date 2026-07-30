@@ -622,3 +622,43 @@ config, and ramp volume slowly on a new Apple ID.
       error,is_sent from message where is_from_me=1 order by date desc limit 5;"`)
 - [ ] Kill BlueBubbles → watchdog relaunches it within ~60s
 - [ ] Reboot → auto-login, BlueBubbles up, tunnel up, relay answers
+
+### Using a MacBook instead of a mini
+
+A spare MacBook (Air is fine — BlueBubbles just drives Messages.app, so the
+fanless thermals don't matter) works identically and is the cheaper path.
+Everything above applies, plus four laptop-specific items:
+
+**1. Lid-closed operation.** macOS sleeps on lid close, which kills the GUI
+session BlueBubbles needs. Keep it plugged in and disable sleep outright:
+
+```bash
+sudo pmset -a disablesleep 1     # allows lid-closed running on AC
+sudo pmset -a sleep 0 displaysleep 10 autorestart 1
+```
+
+Verify with `pmset -g | grep -E "sleep|SleepDisabled"`. Leave it somewhere
+ventilated — not shut in a drawer or stacked under something.
+
+**2. FileVault will defeat auto-login.** This is the one that catches people:
+with FileVault on, a reboot stops at the *disk-unlock* screen **before**
+auto-login can run, so the machine sits there with no GUI session and the
+relay stays down — exactly the auto-login failure mode, one layer earlier.
+Either turn FileVault off on a dedicated sender box, or use
+`sudo fdesetup authrestart` for planned reboots (unlocks once, then boots
+through). Check state with `fdesetup status`.
+
+**3. No ethernet port.** Use a USB-C/Thunderbolt ethernet adapter. Wi-Fi
+works, but the tunnel + webhook path is much happier on wire, and the
+watchdog will otherwise be papering over roaming drops.
+
+**4. Battery.** Continuous AC is fine on modern macOS (Optimized Battery
+Charging handles it); heat is what degrades cells, so ventilation matters
+more than charge level.
+
+### One Apple ID per Mac — do not share
+
+If two BlueBubbles Macs are signed into the **same** Apple ID, both receive
+every inbound message and both fire their webhook, so Salescale ingests each
+reply twice (double lead-notify, double reply-branch handling). Give each
+sender Mac its own dedicated Apple ID and its own `SmsAccount` row.
