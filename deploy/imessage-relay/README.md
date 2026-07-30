@@ -102,6 +102,7 @@ someone screen-shares in. This happened live on 2026-07-23.
 
 | File | Runs on | Purpose |
 |---|---|---|
+| `FRESH-MAC-SETUP.md` | — | **Start here for a new sender Mac.** Ordered do-it checklist from erase to verified send; this README holds the rationale. |
 | `Caddyfile` | Relay VPS | Public HTTPS termination + reverse proxy to the tunnel's loopback port. |
 | `com.salescale.bluebubbles-tunnel.plist` | **The Mac** (launchd) | Keeps the reverse SSH tunnel open. **Use this one on macOS.** |
 | `autossh-bluebubbles.service` | A Linux host (systemd) | Same tunnel, systemd form. Reference only — macOS doesn't use systemd. Only relevant if you ever run the tunnel from a Linux box instead of the Mac directly. |
