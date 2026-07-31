@@ -241,6 +241,8 @@ class Settings(BaseSettings):
     # Sendblue REST base (SMS provider). Their v1 docs use .co, v2 uses .com;
     # override if an org's account lives on the other host.
     sendblue_base_url: str = "https://api.sendblue.co"
+    # Telnyx v2 API base (override only for local stub verification).
+    telnyx_base_url: str = "https://api.telnyx.com"
 
     # Social login. Reuses the ad OAuth apps by default; override per-provider
     # if you register separate apps for sign-in.

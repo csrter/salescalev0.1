@@ -149,7 +149,12 @@ class AccountIn(BaseModel):
     # sendblue: account_sid = API Key ID, auth_token = API Secret Key.
     # bluebubbles: account_sid unused (defaults to "bluebubbles"), auth_token
     # = the BlueBubbles server password, relay_url = the VPS relay base URL.
-    provider: str = Field(default="twilio", pattern="^(twilio|sendblue|bluebubbles)$")
+    # telnyx: account_sid unused (defaults to "telnyx"), auth_token = the V2
+    # API key, messaging_service_sid = the Messaging Profile id (optional
+    # when a from_number is pinned).
+    provider: str = Field(
+        default="twilio", pattern="^(twilio|sendblue|bluebubbles|telnyx)$"
+    )
     account_sid: Optional[str] = Field(default=None, max_length=64)
     auth_token: str = Field(min_length=8, max_length=200)
     from_number: Optional[str] = Field(default=None, max_length=20)
@@ -209,6 +214,14 @@ def create_account(
             raise HTTPException(422, "Provide the iMessage sending number/handle.")
         if body.messaging_service_sid:
             raise HTTPException(422, "Messaging Service SID is a Twilio concept.")
+    elif body.provider == "telnyx":
+        if not body.from_number and not body.messaging_service_sid:
+            raise HTTPException(
+                422,
+                "Provide a from number or a Messaging Profile ID.",
+            )
+        if body.relay_url:
+            raise HTTPException(422, "Relay URL is a BlueBubbles concept.")
     elif body.provider == "sendblue":
         if not body.account_sid:
             raise HTTPException(422, "Provide the Account SID / API Key ID.")
@@ -253,7 +266,10 @@ def create_account(
         # bluebubbles has no meaningful account_sid — the non-null column is
         # satisfied with a placeholder; auth_token carries the server
         # password for that provider instead.
-        account_sid=(body.account_sid or "bluebubbles").strip(),
+        account_sid=(
+            body.account_sid
+            or ("telnyx" if body.provider == "telnyx" else "bluebubbles")
+        ).strip(),
         auth_token_encrypted=encrypt_secret(body.auth_token.strip()),
         from_number=sms_consent.normalize_phone(body.from_number),
         messaging_service_sid=(body.messaging_service_sid or "").strip() or None,

@@ -3219,13 +3219,18 @@ function AccountDialog({
   const isEdit = Boolean(existing);
   const isSendblue = provider === "sendblue";
   const isBluebubbles = provider === "bluebubbles";
+  const isTelnyx = provider === "telnyx";
+  // Telnyx authenticates with a single Bearer API key — no second public id.
+  const needsSid = !isBluebubbles && !isTelnyx;
   // Provider changes only at create time; editing keeps the stored provider.
   const sidLabel = isSendblue ? "API Key ID" : "Account SID";
   const secretLabel = isBluebubbles
     ? "Server password"
     : isSendblue
       ? "API Secret Key"
-      : "Auth token";
+      : isTelnyx
+        ? "API key (V2)"
+        : "Auth token";
 
   const save = async () => {
     if (!name.trim()) {
@@ -3239,6 +3244,11 @@ function AccountDialog({
       }
       if (!fromNumber.trim()) {
         toast("An iMessage sending number is required", "error");
+        return;
+      }
+    } else if (isTelnyx) {
+      if (!fromNumber.trim() && !messagingServiceSid.trim()) {
+        toast("Provide a from number or a Messaging Profile ID", "error");
         return;
       }
     } else {
@@ -3263,8 +3273,9 @@ function AccountDialog({
     const base: SmsAccountBody = {
       name: name.trim(),
       // BlueBubbles has no meaningful SID — the backend fills a placeholder.
-      account_sid: isBluebubbles ? null : accountSid.trim(),
+      account_sid: needsSid ? accountSid.trim() : null,
       from_number: fromNumber.trim() || null,
+      // Telnyx: this field carries the Messaging Profile id.
       messaging_service_sid:
         isBluebubbles || isSendblue ? null : messagingServiceSid.trim() || null,
       relay_url: isBluebubbles ? relayUrl.trim() : null,
@@ -3339,6 +3350,7 @@ function AccountDialog({
               ariaLabel="SMS provider"
               options={[
                 { value: "twilio", label: "Twilio (SMS)" },
+                { value: "telnyx", label: "Telnyx (SMS)" },
                 { value: "sendblue", label: "Sendblue (iMessage/SMS)" },
                 // Self-hosted dev path — operator-allowlisted orgs only
                 // (server enforces the same gate on account creation).
@@ -3365,7 +3377,7 @@ function AccountDialog({
               placeholder="https://relay.example.com"
             />
           </Field>
-        ) : (
+        ) : needsSid ? (
           <Field label={sidLabel}>
             <input
               value={accountSid}
@@ -3373,7 +3385,7 @@ function AccountDialog({
               placeholder={isSendblue ? "your Sendblue API Key ID" : "ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"}
             />
           </Field>
-        )}
+        ) : null}
         <Field
           label={secretLabel}
           description={isEdit ? "Leave blank to keep the current secret." : undefined}
@@ -3395,7 +3407,9 @@ function AccountDialog({
                   ? "iMessage number"
                   : isSendblue
                     ? "Sendblue number"
-                    : "From number"
+                    : isTelnyx
+                      ? "Telnyx number"
+                      : "From number"
               }
               description="A sending number in E.164 format."
               optional={!isSendblue && !isBluebubbles}
@@ -3407,11 +3421,18 @@ function AccountDialog({
               />
             </Field>
             {!isSendblue && !isBluebubbles && (
-              <Field label="Messaging Service SID" optional>
+              <Field
+                label={isTelnyx ? "Messaging Profile ID" : "Messaging Service SID"}
+                optional
+              >
                 <input
                   value={messagingServiceSid}
                   onChange={(e) => setMessagingServiceSid(e.target.value)}
-                  placeholder="MGxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+                  placeholder={
+                    isTelnyx
+                      ? "40017a7b-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+                      : "MGxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+                  }
                 />
               </Field>
             )}
@@ -3421,7 +3442,9 @@ function AccountDialog({
               ? "The iMessage-registered number this relay sends from."
               : isSendblue
                 ? "Sendblue assigns you a dedicated number — enter it here."
-                : "Provide either a from number or a Messaging Service SID."}
+                : isTelnyx
+                  ? "Provide either a from number or a Messaging Profile ID."
+                  : "Provide either a from number or a Messaging Service SID."}
           </p>
         </div>
 

@@ -213,7 +213,9 @@ def _apply_status(
     """Provider-agnostic delivery-receipt handling. `status` is normalized to
     lowercase; 'delivered'/'sent' → delivered, failure words → failed,
     'read' → read (Sendblue/iMessage read receipts only — Twilio never sends
-    this status, so the branch is simply unreachable on that provider)."""
+    this status, so the branch is simply unreachable on that provider).
+    Telnyx's terminal failures (delivery_failed / sending_failed / expired)
+    map to failed — without them a dead send would sit at 'sent' forever."""
     if not sid:
         return
     row = db.execute(
@@ -230,7 +232,16 @@ def _apply_status(
         row.read_at = row.read_at or utcnow()
     elif status in ("delivered",):
         row.status = SMS_MSG_DELIVERED
-    elif status in ("failed", "undelivered", "error", "declined"):
+    elif status in (
+        "failed",
+        "undelivered",
+        "error",
+        "declined",
+        # Telnyx terminal failures (message.finalized).
+        "delivery_failed",
+        "sending_failed",
+        "expired",
+    ):
         row.status = SMS_MSG_FAILED
         if error_code is not None:
             row.error_code = str(error_code)
@@ -363,6 +374,118 @@ async def sendblue_status(account_id: str, token: str, request: Request):
             payload.get("status") or "",
             payload.get("error_code"),
         )
+        db.commit()
+    finally:
+        db.close()
+    return {"ok": True}
+
+
+# --- Telnyx (v2 webhooks; token-authenticated URL, same posture as Sendblue) ---
+#
+# Telnyx DOES sign webhooks (Ed25519 over "timestamp|body" with a portal
+# public key), but that key is account-level portal config with no home in
+# SmsAccount, so authenticity here rests on the unguessable per-account token
+# in the URL path — the mechanism already proven for Sendblue. Adding
+# signature verification later means storing the public key and checking it
+# in _require_token's place; nothing else in this file changes.
+
+
+def _telnyx_event(payload: dict) -> tuple[str, dict]:
+    """Telnyx wraps everything as {data: {event_type, payload}}."""
+    data = payload.get("data") or {}
+    return (data.get("event_type") or ""), (data.get("payload") or {})
+
+
+def _telnyx_number(value) -> Optional[str]:
+    """`from` is an object; `to` is a list of objects. Both carry
+    phone_number."""
+    if isinstance(value, dict):
+        return value.get("phone_number")
+    if isinstance(value, list) and value:
+        first = value[0]
+        return first.get("phone_number") if isinstance(first, dict) else None
+    return value if isinstance(value, str) else None
+
+
+@router.post("/telnyx/inbound/{account_id}/{token}")
+async def telnyx_inbound(account_id: str, token: str, request: Request):
+    """Telnyx inbound-message webhook (event_type message.received)."""
+    db = SessionLocal()
+    try:
+        account = db.get(SmsAccount, account_id)
+        if account is None:
+            raise HTTPException(404, "Not found")
+        _require_token(account, token)
+        try:
+            body_json = await request.json()
+        except Exception:
+            body_json = {}
+        event_type, data = _telnyx_event(body_json)
+        # The same URL may receive delivery events if the operator pointed the
+        # profile's single webhook here — route them rather than drop them.
+        if event_type.startswith("message.") and event_type != "message.received":
+            recipients = data.get("to") or []
+            status = (recipients[0].get("status") if recipients else "") or ""
+            errors = data.get("errors") or []
+            _apply_status(
+                db,
+                account,
+                data.get("id"),
+                status,
+                (errors[0] or {}).get("code") if errors else None,
+            )
+        elif event_type == "message.received":
+            _process_inbound(
+                db,
+                account,
+                from_raw=_telnyx_number(data.get("from")),
+                to_raw=_telnyx_number(data.get("to")),
+                body=(data.get("text") or "").strip(),
+                provider_sid=data.get("id"),
+            )
+        db.commit()
+    finally:
+        db.close()
+    return {"ok": True}
+
+
+@router.post("/telnyx/status/{account_id}/{token}")
+async def telnyx_status(account_id: str, token: str, request: Request):
+    """Telnyx delivery receipts (message.sent / message.finalized). The
+    per-recipient status under `to` is the outcome; `errors` carries the
+    failure code."""
+    db = SessionLocal()
+    try:
+        account = db.get(SmsAccount, account_id)
+        if account is None:
+            raise HTTPException(404, "Not found")
+        _require_token(account, token)
+        try:
+            body_json = await request.json()
+        except Exception:
+            body_json = {}
+        event_type, data = _telnyx_event(body_json)
+        if event_type == "message.received":
+            # Profile pointed both event types at this URL — handle it.
+            _process_inbound(
+                db,
+                account,
+                from_raw=_telnyx_number(data.get("from")),
+                to_raw=_telnyx_number(data.get("to")),
+                body=(data.get("text") or "").strip(),
+                provider_sid=data.get("id"),
+            )
+        else:
+            recipients = data.get("to") or []
+            status = (recipients[0].get("status") if recipients else "") or ""
+            errors = data.get("errors") or []
+            _apply_status(
+                db,
+                account,
+                data.get("id"),
+                status,
+                (errors[0] or {}).get("code") if errors else None,
+            )
         db.commit()
     finally:
         db.close()

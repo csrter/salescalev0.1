@@ -84,6 +84,7 @@ _STOP_FOOTER = "Reply STOP to opt out"
 # so it's the default — overridable via env if an org's account is on the
 # other host. (Both accept the same sb-api-key-id / sb-api-secret-key auth.)
 _SENDBLUE_BASE = "https://api.sendblue.co"
+_TELNYX_BASE = "https://api.telnyx.com"
 # Sendblue message.status values that mean the send did not succeed. Their
 # docs: "any error_code besides 0 or null is a failure."
 _SENDBLUE_FAIL_STATUSES = {"ERROR", "DECLINED"}
@@ -606,6 +607,100 @@ def _verify_bluebubbles(account: SmsAccount) -> Tuple[bool, str]:
     return False, f"BlueBubbles HTTP {resp.status_code}"
 
 
+# --- Telnyx transport (v2 Messages API, BYO API key) ---
+
+
+def _telnyx_headers(account: SmsAccount) -> dict:
+    """Telnyx authenticates with a single Bearer API key (V2). There is no
+    second public identifier, so `account_sid` holds the Messaging Profile
+    id when one is used and the key lives in auth_token_encrypted."""
+    return {
+        "Authorization": f"Bearer {decrypt_secret(account.auth_token_encrypted or '')}",
+        "Content-Type": "application/json",
+    }
+
+
+def _telnyx_error(payload: dict, fallback: str) -> Tuple[str, str]:
+    """Telnyx returns {"errors": [{code, title, detail}]} — take the first."""
+    errors = payload.get("errors") or []
+    if errors:
+        first = errors[0] or {}
+        detail = first.get("detail") or first.get("title") or fallback
+        return str(first.get("code") or ""), detail
+    return "", fallback
+
+
+def _telnyx_send(
+    account: SmsAccount, to_number: str, body: str
+) -> Tuple[str, Optional[str], Optional[str]]:
+    """One POST /v2/messages. Returns (message_id, error_code, error_detail).
+
+    Delivery is asynchronous: a 2xx means Telnyx ACCEPTED the message, not
+    that it landed. The real outcome arrives on the status webhook
+    (message.finalized) and moves the ledger row — same contract as Twilio.
+    Raises SmsProviderError on a network-level failure so the caller's
+    existing handling applies."""
+    base = (get_settings().telnyx_base_url or _TELNYX_BASE).rstrip("/")
+    data: dict = {"to": to_number, "text": body}
+    # A Messaging Profile routes/pools numbers; `from` pins one sender. At
+    # least one is required, which the API layer enforces at connect time.
+    if account.from_number:
+        data["from"] = account.from_number
+    if account.messaging_service_sid:
+        data["messaging_profile_id"] = account.messaging_service_sid
+    api_base = (get_settings().api_base_url or "").rstrip("/")
+    if api_base and not api_base.startswith("http://localhost") and account.webhook_token:
+        # Per-message webhook override so delivery receipts reach THIS
+        # account's tokened URL even if the profile's default points
+        # elsewhere. Telnyx signs webhooks (Ed25519), but the token in the
+        # path is what we verify against — same posture as Sendblue.
+        data["webhook_url"] = (
+            f"{api_base}/api/sms/webhooks/telnyx/status/"
+            f"{account.id}/{account.webhook_token}"
+        )
+    try:
+        resp = httpx.post(
+            f"{base}/v2/messages", json=data, headers=_telnyx_headers(account), timeout=20
+        )
+    except httpx.HTTPError as e:
+        raise SmsProviderError(f"Telnyx is unreachable: {e}")
+    payload = {}
+    try:
+        payload = resp.json()
+    except Exception:
+        pass
+    if resp.status_code // 100 != 2:
+        code, detail = _telnyx_error(payload, f"Telnyx HTTP {resp.status_code}")
+        return "", code or str(resp.status_code), detail
+    message = payload.get("data") or {}
+    # Per-recipient status is nested under `to`; a terminal failure here is a
+    # real failure even though the HTTP call succeeded.
+    recipients = message.get("to") or []
+    status = (recipients[0].get("status") if recipients else "") or ""
+    if status.lower() in ("delivery_failed", "sending_failed"):
+        return message.get("id", ""), status, f"Telnyx rejected the message ({status})"
+    return message.get("id", ""), None, None
+
+
+def _verify_telnyx(account: SmsAccount) -> Tuple[bool, str]:
+    """Cheap credential probe: list messaging profiles."""
+    base = (get_settings().telnyx_base_url or _TELNYX_BASE).rstrip("/")
+    try:
+        resp = httpx.get(
+            f"{base}/v2/messaging_profiles",
+            headers=_telnyx_headers(account),
+            params={"page[size]": 1},
+            timeout=15,
+        )
+    except httpx.HTTPError as e:
+        return False, f"Telnyx is unreachable: {e}"
+    if resp.status_code // 100 == 2:
+        return True, "ok"
+    if resp.status_code in (401, 403):
+        return False, "Telnyx rejected the API key."
+    return False, f"Telnyx HTTP {resp.status_code}"
+
+
 def _provider_send(
     account: SmsAccount, to_number: str, body: str
 ) -> Tuple[str, Optional[str], Optional[str]]:
@@ -613,6 +708,8 @@ def _provider_send(
         return _bluebubbles_send(account, to_number, body)
     if account.provider == "sendblue":
         return _sendblue_send(account, to_number, body)
+    if account.provider == "telnyx":
+        return _telnyx_send(account, to_number, body)
     return _twilio_send(account, to_number, body)
 
 
@@ -641,6 +738,8 @@ def verify_credentials(account: SmsAccount) -> Tuple[bool, str]:
         return _verify_bluebubbles(account)
     if account.provider == "sendblue":
         return _verify_sendblue(account)
+    if account.provider == "telnyx":
+        return _verify_telnyx(account)
     return _verify_twilio(account)
 
 

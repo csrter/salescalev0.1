@@ -2125,7 +2125,7 @@ export const listSmsCrmContactsForClient = (clientId: string) =>
 
 export type SmsAccountStatus = "active" | "error";
 
-export type SmsProvider = "twilio" | "sendblue" | "bluebubbles";
+export type SmsProvider = "twilio" | "sendblue" | "bluebubbles" | "telnyx";
 
 /** Recent-send-sampled health signal (last 25 outbound messages). See
  * services/sms_send.channel_health on the backend. */
@@ -2540,6 +2540,16 @@ export function smsWebhookUrls(account: {
     return {
       inbound: `${API_BASE}/api/webhooks/imessage/bluebubbles/${account.id}`,
       status: `${API_BASE}/api/webhooks/imessage/bluebubbles/${account.id}`,
+    };
+  }
+  if (account.provider === "telnyx") {
+    // Telnyx signs webhooks (Ed25519) but that key is portal-level config
+    // with no home on the account, so the per-account URL token is the
+    // authenticity check — same posture as Sendblue.
+    const t = account.webhook_token ?? "";
+    return {
+      inbound: `${API_BASE}/api/sms/webhooks/telnyx/inbound/${account.id}/${t}`,
+      status: `${API_BASE}/api/sms/webhooks/telnyx/status/${account.id}/${t}`,
     };
   }
   if (account.provider === "sendblue") {
