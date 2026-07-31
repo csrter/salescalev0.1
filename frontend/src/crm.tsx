@@ -3394,7 +3394,12 @@ function CriteriaEditor({
 function LeadFormRouting({ clientId }: { clientId: string }) {
   const toast = useToast();
   const [configs, setConfigs] = useState<
-    { platform: string; external_key: string; enabled: boolean }[]
+    {
+      platform: string;
+      external_key: string;
+      enabled: boolean;
+      webhook_url?: string | null;
+    }[]
   >([]);
   const [pageId, setPageId] = useState("");
   const [googleKey, setGoogleKey] = useState("");
@@ -3426,8 +3431,14 @@ function LeadFormRouting({ clientId }: { clientId: string }) {
 
   const googleUrl = `${API_BASE}/api/webhooks/google/lead-form/${clientId}`;
   const landingConfig = configs.find((c) => c.platform === "landing_page");
+  // Prefer the URL the server built from API_BASE_URL. Building it here from
+  // API_BASE is wrong wherever the app's own API origin is not the public one
+  // — in the desktop app that is http://localhost:8000, its own bundled
+  // backend, and such a URL silently never delivers once pasted into a form
+  // tool. The local fallback only covers an older backend.
   const landingUrl = landingConfig
-    ? `${API_BASE}/api/webhooks/landing-form/${clientId}/${landingConfig.external_key}`
+    ? landingConfig.webhook_url ??
+      `${API_BASE}/api/webhooks/landing-form/${clientId}/${landingConfig.external_key}`
     : null;
 
   const rotateLandingWebhook = () => {

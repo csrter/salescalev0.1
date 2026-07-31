@@ -1211,6 +1211,13 @@ class LeadFormConfigOut(BaseModel):
     platform: str
     external_key: str
     enabled: bool
+    # Full public URL for the platforms whose key is folded into the path
+    # (landing_page). Built server-side from API_BASE_URL rather than left to
+    # the frontend, because the frontend's own API origin is not always the
+    # public one: in the desktop app it is http://localhost:8000, its own
+    # bundled backend, so a URL built there is useless the moment somebody
+    # pastes it into a third-party form tool.
+    webhook_url: Optional[str] = None
 
 
 class ConversionDispatchOut(BaseModel):

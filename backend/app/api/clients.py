@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from ..config import get_settings
 from ..db import get_db
 from ..deps import TenantScope, get_scope, require_admin
 from ..models.core import Client, Organization, PlatformConnection, User
@@ -158,6 +159,24 @@ def get_guarantee(
 # conversion configs) ---
 
 
+def _lead_form_out(config: LeadFormConfig) -> LeadFormConfigOut:
+    """Serialize a lead-form config, attaching the public webhook URL.
+
+    Only landing_page carries its secret in the URL path, so only it gets a
+    URL. Built from API_BASE_URL server-side: the caller's own API origin is
+    not reliably the public one (the desktop app talks to its own bundled
+    backend on localhost), and a localhost URL pasted into a form tool
+    silently never delivers.
+    """
+    out = LeadFormConfigOut.model_validate(config)
+    if config.platform == "landing_page":
+        base = get_settings().api_base_url.rstrip("/")
+        out.webhook_url = (
+            f"{base}/api/webhooks/landing-form/{config.client_id}/{config.external_key}"
+        )
+    return out
+
+
 @router.get("/{client_id}/lead-forms", response_model=List[LeadFormConfigOut])
 def list_lead_form_configs(
     client_id: str,
@@ -167,11 +186,12 @@ def list_lead_form_configs(
     client = db.get(Client, client_id)
     if client is None or client.organization_id != user.organization_id:
         raise HTTPException(404, "Not found")
-    return (
+    configs = (
         db.execute(select(LeadFormConfig).where(LeadFormConfig.client_id == client.id))
         .scalars()
         .all()
     )
+    return [_lead_form_out(c) for c in configs]
 
 
 @router.put("/{client_id}/lead-forms/{platform}", response_model=LeadFormConfigOut)
@@ -217,7 +237,7 @@ def set_lead_form_config(
         config.external_key = body.external_key
         config.enabled = body.enabled
     db.commit()
-    return config
+    return _lead_form_out(config)
 
 
 @router.post(
@@ -257,7 +277,7 @@ def rotate_landing_page_webhook(
         config.external_key = key
         config.enabled = True
     db.commit()
-    return config
+    return _lead_form_out(config)
 
 
 @router.patch(
@@ -282,7 +302,7 @@ def set_landing_page_webhook_enabled(
         raise HTTPException(404, "No landing-page webhook configured yet")
     config.enabled = body.enabled
     db.commit()
-    return config
+    return _lead_form_out(config)
 
 
 # --- Phase 6: optional external CRM sync (admin, opt-in per client) ---

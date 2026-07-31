@@ -478,6 +478,44 @@ def test_generic_webhook_captures_matching_custom_field_for_notification(
 # --- lead ingestion: landing-page path updates instead of duplicating ---
 
 
+def test_landing_page_config_returns_public_webhook_url(api, team_headers, crm_client):
+    """The webhook URL must be built server-side from API_BASE_URL.
+
+    The frontend cannot build it from its own API origin: in the desktop app
+    that origin is http://localhost:8000 (its own bundled backend), so a URL
+    constructed there is dead the moment somebody pastes it into a third-party
+    form tool. Regression test for exactly that.
+    """
+    from app.config import get_settings
+
+    base = get_settings().api_base_url.rstrip("/")
+
+    rotated = api.post(
+        f"/api/clients/{crm_client}/lead-forms/landing-page/rotate",
+        headers=team_headers,
+    )
+    assert rotated.status_code == 200, rotated.text
+    body = rotated.json()
+    key = body["external_key"]
+
+    expected = f"{base}/api/webhooks/landing-form/{crm_client}/{key}"
+    assert body["webhook_url"] == expected
+
+    # And it survives a round trip through the list endpoint, which is what
+    # the client-setup screen actually renders.
+    listed = api.get(f"/api/clients/{crm_client}/lead-forms", headers=team_headers)
+    assert listed.status_code == 200, listed.text
+    landing = [c for c in listed.json() if c["platform"] == "landing_page"]
+    assert landing and landing[0]["webhook_url"] == expected
+
+    # The path the URL advertises is the one that actually ingests.
+    ingest = api.post(
+        f"/api/webhooks/landing-form/{crm_client}/{key}",
+        json={"Email": "public-url@example.com", "Name": "Public Url"},
+    )
+    assert ingest.status_code in (200, 201), ingest.text
+
+
 def test_landing_lead_resubmission_updates_existing_contact(api, crm_client):
     body = {
         "client_id": crm_client,
