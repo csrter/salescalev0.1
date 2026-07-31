@@ -3171,6 +3171,26 @@ live activation + the entitlement flip, the Outreach module build
       errors). Deployed web (health green, billing/usage auth-gated, track
       preflight 204 from a foreign origin, zero tracebacks) + desktop DMG
       in lockstep.
+- [x] Landing-form webhook URL served from the backend (2026-07-30): the
+      client-setup screen built the URL from the frontend's own API origin
+      (`API_BASE`), which is NOT the public origin everywhere — in the desktop
+      app it is http://localhost:8000, its own bundled backend, so the URL
+      shown there is dead the moment it is pasted into a third-party form tool
+      (same class as the already-known localhost SMS webhook cards).
+      `LeadFormConfigOut` gained `webhook_url`, built server-side from
+      `API_BASE_URL` for the `landing_page` platform only (the one whose secret
+      lives in the URL path); all three landing-page endpoints plus the list
+      endpoint now serialize through `_lead_form_out()`. Frontend prefers the
+      server value and keeps the old construction as a fallback for an older
+      backend. Test asserts the URL matches API_BASE_URL, survives the list
+      endpoint the screen actually renders, and that the advertised path really
+      ingests. NOTE while verifying: `test_conversions.py::
+      test_conversion_event_org_scoping_in_db` fails when run alongside
+      test_crm/test_crm_contacts/test_client_role/test_attribution but passes
+      21/21 alone — confirmed PRE-EXISTING by rerunning the identical
+      combination against a fully reverted tree, not caused by this change.
+      DEPLOYED to production 2026-07-30 (c721986): backend+frontend rebuilt,
+      health green, bundle contains zero `localhost:8000`.
 - [ ] Stripe live activation + entitlement flip (after 12–14, so real
       limits land everywhere in one pass)
 - [ ] Outreach module build (dev-mode) — go-live gated on Meta App
