@@ -3226,11 +3226,30 @@ live activation + the entitlement flip, the Outreach module build
       lead form itself was NOT test-submitted — a real submission creates a
       live CRM contact and fires the client's lead-notification texts; the
       form markup/JS are unchanged from the previously verified version.
-      USER-SIDE follow-ups: update the Google Ads RSAs + sitelinks that still
-      say "moving sale"/"up to 50% off" (still blocked on the Google OAuth
-      app publish + reconnecting BSD's Google account), update the Google
-      Business Profile address, and confirm showroom hours didn't change with
-      the move (carried over as Mon-Sat 10-6, Sun 12-5).
+      USER-SIDE follow-ups: update the Google Business Profile address, and
+      confirm showroom hours didn't change with the move (carried over as
+      Mon-Sat 10-6, Sun 12-5).
+      MATCHING GOOGLE ADS COPY (same session, delivered as a doc, NOT pushed):
+      BSD's google PlatformConnection is status=disconnected in prod (verified
+      by query), so the 07-25 blocker is unchanged — the OAuth app (project
+      894154810113) is still in Testing mode, refresh tokens die at 7 days,
+      both org tokens revoked; publishing it to Production + reconnecting BSD
+      in Integrations is what unblocks staged writes. Nothing Google is cached
+      locally either (campaigns/ad_groups/ads hold only Paganelli's Meta rows),
+      so the currently-serving creative was read from Google's public Ads
+      Transparency Center instead: advertiser "Best Spas Direct LLC"
+      (AR12082977282759589889), one text ad, last shown 2026-07-29 —
+      "Up to 50% off all models! - 4.9 * Rating / Get your best price before
+      inventory sells out." That now CONTRADICTS the rebuilt LP (up to 30% off
+      SELECT models), which is a misrepresentation-policy risk, not just a
+      Quality Score one — flagged to the user as pause-today regardless of when
+      the new copy lands. Deliverable: 15 RSA headlines + 4 descriptions + 2
+      paths + 4 sitelinks (deep-linked to the new page's real anchor ids
+      #bsd-lead-form/#bsd-location/#bsd-offer/#bsd-faq) + 8 callouts + a Brands
+      structured snippet, every asset character-count-verified by script
+      against Google's limits (0 over), plus pinning guidance (pin ONE headline
+      slot only) and the rating-claim caveat (prefer the Seller Ratings
+      extension over an in-text 4.9 claim).
 - [ ] Stripe live activation + entitlement flip (after 12–14, so real
       limits land everywhere in one pass)
 - [ ] Outreach module build (dev-mode) — go-live gated on Meta App
