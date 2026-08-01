@@ -3191,6 +3191,46 @@ live activation + the entitlement flip, the Outreach module build
       combination against a fully reverted tree, not caused by this change.
       DEPLOYED to production 2026-07-30 (c721986): backend+frontend rebuilt,
       health green, bundle contains zero `localhost:8000`.
+- [x] BSD soft-opening landing page rebuild (2026-07-31, client-ops —
+      WordPress-side, no Salescale code): Best Spas Direct moved from 7464 E
+      Main St to 5307 S Power Rd, Mesa AZ 85212, so the moving-sale page was
+      rebuilt as a new-location soft-opening offer (first 10 customers: up to
+      30% off select models, free chemical kit, free steps, free delivery
+      within 100 miles, 0% financing OAC). Same wordpress-sale container,
+      pages 7 + 76; all prior brand/product assets, the proven CSS
+      architecture, the form field contract, and the first-touch attribution
+      JS were kept verbatim so the /bsd/v1/lead + /bsd/v1/landing relays and
+      the landing-form webhook mapping keep working unchanged (only the
+      payload's `campaign` value changed, moving-sale → soft-opening).
+      New on the page: a five-item offer-stack section, a "Find our new
+      showroom" block with a we've-moved callout + lazy Google Maps embed +
+      directions link, rewritten FAQ, and JSON-LD
+      (HomeAndConstructionBusiness with the new address/hours/rating +
+      FAQPage) — the old page had no structured data. Two fixes found in
+      passing: the page carried its OWN inline gtag base tag on top of the
+      site-wide mu-plugin (AW-18291942873 loaded twice — inline copy removed,
+      now exactly one), and the thank-you page still showed the old E Main St
+      address and "moving sale" wording (updated, plus noindex). SEO title/
+      description/OG set through Yoast's post-meta keys rather than a
+      competing head plugin. WP-CLI is NOT installed in this container —
+      updates go through `php -r`/script + wp-load.php, and the previously
+      documented gotchas still bite: wp_set_current_user(admin) +
+      kses_remove_filters() (else script/style escape to text) AND wp_slash()
+      (else the JS regex backslashes are eaten); the update script asserts
+      all three survived, plus the address swap, before reporting OK.
+      Pre-change content backed up to /tmp/bsd-backup/ in the container and
+      to the session scratchpad; WP revisions also cover rollback. Verified
+      live: one gtag tag, zero references to the foreign AW-18292295114 ID,
+      zero old-address references, both ld+json blocks present, title/meta
+      correct, form + attribution endpoints intact, no console errors. The
+      lead form itself was NOT test-submitted — a real submission creates a
+      live CRM contact and fires the client's lead-notification texts; the
+      form markup/JS are unchanged from the previously verified version.
+      USER-SIDE follow-ups: update the Google Ads RSAs + sitelinks that still
+      say "moving sale"/"up to 50% off" (still blocked on the Google OAuth
+      app publish + reconnecting BSD's Google account), update the Google
+      Business Profile address, and confirm showroom hours didn't change with
+      the move (carried over as Mon-Sat 10-6, Sun 12-5).
 - [ ] Stripe live activation + entitlement flip (after 12–14, so real
       limits land everywhere in one pass)
 - [ ] Outreach module build (dev-mode) — go-live gated on Meta App
