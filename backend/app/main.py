@@ -1,4 +1,6 @@
 import logging
+import sys
+import traceback
 
 from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -273,7 +275,16 @@ def health():
 def _migrate():
     # Bring any database (fresh or existing) up to the current schema via
     # Alembic — the single source of truth for schema, in dev and prod alike.
-    upgrade_to_head()
+    try:
+        upgrade_to_head()
+    except Exception:
+        # Print to stderr before re-raising: this runs inside a startup event,
+        # where uvicorn exits 3 and the traceback never surfaces. The desktop
+        # shell shows a tail of stderr in its crash dialog, so writing here is
+        # what turns "exited (code 3)" into something diagnosable.
+        traceback.print_exc()
+        sys.stderr.flush()
+        raise
 
 
 @app.on_event("startup")
