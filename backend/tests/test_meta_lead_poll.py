@@ -163,3 +163,94 @@ def test_poll_failure_is_contained_and_retries_on_interval(pl_org, api, monkeypa
         assert (utcnow() - cfg.last_polled_at.replace(tzinfo=dt.timezone.utc)
                 if cfg.last_polled_at.tzinfo is None
                 else utcnow() - cfg.last_polled_at).total_seconds() < 60
+        # ...and the reason is PERSISTED, not just logged: this failure ran
+        # for three weeks in production with no surface in the product.
+        assert "Cannot call API for app X" in cfg.last_poll_error
+
+
+def test_disconnected_client_reports_instead_of_silently_polling_nothing(
+    pl_org, api, monkeypatch
+):
+    """A revoked Meta connection used to make _poll_page return 0 — identical
+    to a healthy page with no new leads, so a client could stop delivering
+    leads entirely and look fine."""
+    monkeypatch.setattr(meta_lead_poll, "_get", lambda url, params: {"data": []})
+    _reset_cursor(minutes_ago=10)
+    with SessionLocal() as db:
+        conn = db.execute(
+            select(PlatformConnection).where(
+                PlatformConnection.client_id == pl_org["client"]
+            )
+        ).scalar_one()
+        conn.status = "disconnected"
+        db.commit()
+    try:
+        with SessionLocal() as db:
+            assert meta_lead_poll.run_due(db) == 0
+        with SessionLocal() as db:
+            cfg = db.execute(
+                select(LeadFormConfig).where(LeadFormConfig.external_key == PAGE)
+            ).scalar_one()
+            assert "not connected" in (cfg.last_poll_error or "")
+    finally:
+        with SessionLocal() as db:
+            conn = db.execute(
+                select(PlatformConnection).where(
+                    PlatformConnection.client_id == pl_org["client"]
+                )
+            ).scalar_one()
+            conn.status = "active"
+            db.commit()
+
+
+def test_successful_poll_clears_the_error_and_stamps_arrival(
+    pl_org, api, fake_graph, monkeypatch
+):
+    """Recovery is self-clearing, and last_lead_at records that a lead really
+    ARRIVED — a poll succeeding against a page with no new leads is not the
+    same as the route working."""
+    with SessionLocal() as db:
+        cfg = db.execute(
+            select(LeadFormConfig).where(LeadFormConfig.external_key == PAGE)
+        ).scalar_one()
+        cfg.last_poll_error = "stale failure from an earlier tick"
+        # Cleared so the arrival assertion below can't pass on an earlier
+        # test's stamp.
+        cfg.last_lead_at = None
+        db.commit()
+    # A lead id this module hasn't ingested yet — dedupe means a repeat of
+    # LEAD001 would come back "updated", which correctly does NOT count as a
+    # fresh arrival.
+    def _get(url, params):
+        if url.endswith("/me/accounts"):
+            return {"data": [{"id": PAGE, "access_token": "ptok"}]}
+        if url.endswith("/leadgen_forms"):
+            return {"data": [{"id": "form1", "status": "ACTIVE"}]}
+        if url.endswith("/form1/leads"):
+            return {
+                "data": [{"id": "LEAD_ARRIVAL", "created_time": "2026-07-24T12:00:00+0000"}]
+            }
+        raise AssertionError(f"unexpected Graph url {url}")
+
+    monkeypatch.setattr(meta_lead_poll, "_get", _get)
+    monkeypatch.setattr(
+        meta_leadgen,
+        "fetch_lead",
+        lambda token, leadgen_id: {
+            "field_data": [
+                {"name": "full_name", "values": ["Arrival Lead"]},
+                {"name": "phone_number", "values": ["+14805550099"]},
+                {"name": "email", "values": ["arrival.lead@example.com"]},
+            ]
+        },
+    )
+    monkeypatch.setattr(conn_svc, "get_access_token", lambda conn: "user-tok")
+    _reset_cursor(minutes_ago=10)
+    with SessionLocal() as db:
+        assert meta_lead_poll.run_due(db) == 1
+    with SessionLocal() as db:
+        cfg = db.execute(
+            select(LeadFormConfig).where(LeadFormConfig.external_key == PAGE)
+        ).scalar_one()
+        assert cfg.last_poll_error is None
+        assert cfg.last_lead_at is not None

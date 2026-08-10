@@ -3659,14 +3659,20 @@ def test_resume_completed_parks_awaiting_at_new_reply_step(
 
 
 def test_failed_notification_retries_then_succeeds_and_caps(
-    sc_org, api, twilio_creds_ok, monkeypatch
+    ln_org, api, twilio_creds_ok, monkeypatch
 ):
     """A transiently failing team notification is retried by the scheduler
     pass until it sends; a successful pair is never re-sent; a permanently
-    failing pair stops at NOTIFY_MAX_ATTEMPTS total attempts."""
+    failing pair stops at NOTIFY_MAX_ATTEMPTS total attempts.
+
+    Uses the dedicated ln_org (not the module-scoped sc_org) because the retry
+    pass now picks the org's healthiest account rather than re-pinning to the
+    one that failed — with sc_org's accumulated sendblue/bluebubbles accounts
+    that would make "which provider does the retry use" test-order dependent.
+    """
     from app.services import lead_notify
 
-    acct = _mk_account(sc_org, api, from_number="+14805550733")
+    acct = _mk_account(ln_org, api, from_number="+14805550733")
 
     outcomes = {"fail_times": 2, "calls": 0}
 
@@ -3732,6 +3738,86 @@ def test_failed_notification_retries_then_succeeds_and_caps(
         ).scalars().all()
         assert len(attempts) == lead_notify.NOTIFY_MAX_ATTEMPTS
         assert total_retries == lead_notify.NOTIFY_MAX_ATTEMPTS - 1
+    finally:
+        db.close()
+
+
+def test_notification_fails_over_to_a_healthy_provider(
+    ln_org, api, twilio_creds_ok, monkeypatch
+):
+    """An org whose PREFERRED (BlueBubbles) account is unreachable still gets
+    its lead alerts, through the next active account.
+
+    This is the 2026-08 production failure: both iMessage relays were down but
+    their accounts stayed status=active, so every alert was pinned to a dead
+    provider — 102 failures in 30 days — while a healthy number sat unused on
+    the same org.
+    """
+    from app.services import lead_notify
+    from app.models.sms_outreach import SmsAccount
+
+    bb = _mk_account(
+        ln_org,
+        api,
+        name="bb",
+        provider="bluebubbles",
+        relay_url="https://relay.invalid",
+        auth_token="bb-server-password",
+        from_number="+14805550811",
+        account_sid=None,
+    )
+    _mk_account(ln_org, api, name="tw", from_number="+14805550812")
+
+    def _dead_relay(*a, **kw):
+        raise gateway.SmsProviderError("BlueBubbles HTTP 502")
+
+    monkeypatch.setattr(gateway, "_bluebubbles_send", _dead_relay)
+    sent = []
+    monkeypatch.setattr(
+        gateway,
+        "_twilio_send",
+        lambda account, to, body: (sent.append((account.from_number, to)), ("SM_ok", None, None))[1],
+    )
+
+    _enable_notifications(api, ln_org, ["+14805559991"])
+    r = api.post(
+        "/api/track/lead",
+        json={
+            "client_id": ln_org["client"],
+            "session_key": "failover-sess-1",
+            "first_name": "Failover",
+            "last_name": "Lead",
+            "phone": "4805551234",
+        },
+    )
+    assert r.status_code == 201, r.text
+
+    db = SessionLocal()
+    try:
+        rows = (
+            db.execute(
+                select(SmsMessage)
+                .where(
+                    SmsMessage.organization_id == ln_org["org"],
+                    SmsMessage.kind == "notification",
+                )
+                .order_by(SmsMessage.created_at)
+            )
+            .scalars()
+            .all()
+        )
+        # The dead preferred account is attempted and ledgered as failed, then
+        # the healthy one actually delivers — the alert is NOT lost.
+        assert [row.status for row in rows] == ["failed", "sent"]
+        assert rows[0].from_number == "+14805550811"
+        assert rows[1].from_number == "+14805550812"
+        assert sent == [("+14805550812", "+14805559991")]
+
+        # And the demotion holds: the next alert skips the dead relay entirely
+        # rather than burning an attempt on it once per lead.
+        order = lead_notify.candidate_accounts(db, ln_org["org"])
+        assert order[0].provider == "twilio"
+        assert db.get(SmsAccount, bb["id"]).status == "active"  # not force-errored
     finally:
         db.close()
 

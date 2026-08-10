@@ -1218,6 +1218,11 @@ class LeadFormConfigOut(BaseModel):
     # bundled backend, so a URL built there is useless the moment somebody
     # pastes it into a third-party form tool.
     webhook_url: Optional[str] = None
+    # Ingestion health, so a route that has quietly stopped delivering is
+    # visible in the product rather than only in the container log.
+    last_lead_at: Optional[dt.datetime] = None
+    last_polled_at: Optional[dt.datetime] = None
+    last_poll_error: Optional[str] = None
 
 
 class ConversionDispatchOut(BaseModel):

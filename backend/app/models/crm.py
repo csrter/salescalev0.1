@@ -360,6 +360,18 @@ class LeadFormConfig(Base):
     last_polled_at: Mapped[Optional[dt.datetime]] = mapped_column(
         DateTime(timezone=True)
     )
+    # Why the last poll didn't work (NULL = the last poll was fine). Polling
+    # is best-effort by design, so a failure only ever reached the container
+    # log — which is how Meta lead ingestion sat broken for three weeks in
+    # production without a single surface in the product saying so. Persisted
+    # here it becomes something the client's CRM-setup card can show.
+    last_poll_error: Mapped[Optional[str]] = mapped_column(String(300))
+    # When a lead last actually ARRIVED through this route, by any path
+    # (webhook or poll) — the honest "is this working" signal, since a poll
+    # can succeed all day against a page that simply has no new leads.
+    last_lead_at: Mapped[Optional[dt.datetime]] = mapped_column(
+        DateTime(timezone=True)
+    )
     created_at: Mapped[dt.datetime] = created_at_column()
 
 

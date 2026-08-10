@@ -207,6 +207,7 @@ def _ingest_meta_lead(db: Session, value: dict) -> dict:
         },
     )
     if created:
+        config.last_lead_at = utcnow()
         push_contact_update(db, client, contact, event="lead.created")
         lead_notify.notify_new_lead(db, client, contact)
         lead_autoenroll.auto_enroll_new_lead(db, client, contact)
@@ -328,6 +329,7 @@ def google_lead_form_webhook(
             )
         )
     if created:
+        config.last_lead_at = utcnow()
         push_contact_update(db, client, contact, event="lead.created")
         lead_notify.notify_new_lead(db, client, contact)
         lead_autoenroll.auto_enroll_new_lead(db, client, contact)
@@ -589,6 +591,7 @@ async def landing_form_webhook(
             )
         )
     if created:
+        config.last_lead_at = utcnow()
         push_contact_update(db, client, contact, event="lead.created")
         lead_notify.notify_new_lead(db, client, contact)
         lead_autoenroll.auto_enroll_new_lead(db, client, contact)

@@ -87,13 +87,19 @@ def run_due(db: Session) -> int:
             else _aware(cfg.last_polled_at) - OVERLAP
         )
         try:
+            # last_lead_at is stamped by _ingest_meta_lead itself (shared with
+            # the webhook path), so both routes report arrival identically.
             created += _poll_page(db, cfg, since)
+            cfg.last_poll_error = None
         except Exception as e:
             # Includes the app-unpublished/no-role Graph refusal — retry next
-            # interval; the webhook path (if alive) is unaffected.
+            # interval; the webhook path (if alive) is unaffected. Persisted
+            # (not just logged) so the client's CRM-setup card can say why
+            # leads stopped arriving instead of failing silently for weeks.
             log.warning(
                 "meta lead poll failed for page %s: %s", cfg.external_key, e
             )
+            cfg.last_poll_error = str(e)[:300]
         # Stamp even on failure so a broken page retries on the interval
         # instead of hot-looping every tick.
         cfg.last_polled_at = now
@@ -114,7 +120,12 @@ def _poll_page(db: Session, cfg: LeadFormConfig, since: dt.datetime) -> int:
         )
     ).scalar_one_or_none()
     if conn is None:
-        return 0
+        # Raised, not a silent 0: a client whose Meta connection was revoked
+        # looks exactly like a healthy page with no new leads otherwise, which
+        # is precisely how a disconnected client sat un-polled unnoticed.
+        raise RuntimeError(
+            "Meta is not connected for this client — reconnect it in Integrations"
+        )
     user_token = conn_svc.get_access_token(conn)
     pages = _get(
         f"{GRAPH_BASE}/me/accounts",

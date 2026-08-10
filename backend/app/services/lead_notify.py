@@ -177,6 +177,83 @@ def _recipient_phones(org: Organization, client: Client) -> list:
     return phones
 
 
+# An account whose most recent notification attempt failed this recently is
+# tried LAST rather than dropped: a dead relay costs one wasted attempt per
+# cooldown instead of one per lead, and the account promotes itself back the
+# moment a probe succeeds. Deliberately not a status flip — a 502 relay means
+# "unreachable right now", not "these credentials are wrong", and flipping
+# SmsAccount.status parks every campaign enrollment on that account too.
+UNHEALTHY_COOLDOWN_MINUTES = 30
+
+
+def candidate_accounts(db: Session, organization_id: str) -> list:
+    """Active SMS accounts in send-preference order for an ops alert.
+
+    BlueBubbles leads (a real iMessage from a personal number reads as a human
+    ping, not a shortcode blast), then everything else oldest-first — but any
+    account that just failed a notification is demoted behind the healthy ones.
+    Returning a LIST rather than one account is what makes the caller able to
+    fail over: an org with a dead iMessage relay and a live Telnyx number
+    should still get its lead alerts.
+    """
+    accounts = (
+        db.execute(
+            select(SmsAccount)
+            .where(
+                SmsAccount.organization_id == organization_id,
+                SmsAccount.status == SMS_ACCOUNT_ACTIVE,
+            )
+            .order_by(SmsAccount.created_at)
+        )
+        .scalars()
+        .all()
+    )
+    if len(accounts) < 2:
+        return list(accounts)
+
+    cutoff = utcnow() - dt.timedelta(minutes=UNHEALTHY_COOLDOWN_MINUTES)
+    unhealthy = set()
+    for account in accounts:
+        last = db.execute(
+            select(SmsMessage.status)
+            .where(
+                SmsMessage.kind == SMS_KIND_NOTIFICATION,
+                SmsMessage.direction == SMS_DIR_OUT,
+                SmsMessage.account_id == account.id,
+                SmsMessage.created_at >= cutoff,
+            )
+            .order_by(SmsMessage.created_at.desc())
+            .limit(1)
+        ).scalar_one_or_none()
+        if last == SMS_MSG_FAILED:
+            unhealthy.add(account.id)
+
+    def rank(account) -> tuple:
+        return (
+            1 if account.id in unhealthy else 0,
+            0 if account.provider == _PROVIDER_BLUEBUBBLES else 1,
+        )
+
+    return sorted(accounts, key=rank)
+
+
+def _send_with_failover(db: Session, accounts: list, phone: str, body: str):
+    """Try each candidate until one actually sends. Returns the account that
+    sent (so the caller can pin the rest of a multi-recipient alert to it and
+    not re-probe a dead provider), or None if every candidate failed."""
+    for account in accounts:
+        result, _row = sms_send.send_notification(db, account, phone, body)
+        if result == sms_send.SENT:
+            return account
+        log.info(
+            "lead notification to %s did not send via %s (%s)",
+            phone,
+            account.provider,
+            result,
+        )
+    return None
+
+
 def notify_new_lead(db: Session, client: Client, contact: Contact) -> None:
     """Best-effort side effect of lead creation — never commits or rolls back
     the session itself (the caller's own commit, right after this returns,
@@ -190,27 +267,8 @@ def notify_new_lead(db: Session, client: Client, contact: Contact) -> None:
         phones = _recipient_phones(org, client)
         if not phones:
             return
-        account = db.execute(
-            select(SmsAccount)
-            .where(
-                SmsAccount.organization_id == client.organization_id,
-                SmsAccount.status == SMS_ACCOUNT_ACTIVE,
-                SmsAccount.provider == _PROVIDER_BLUEBUBBLES,
-            )
-            .order_by(SmsAccount.created_at)
-            .limit(1)
-        ).scalar_one_or_none()
-        if account is None:
-            account = db.execute(
-                select(SmsAccount)
-                .where(
-                    SmsAccount.organization_id == client.organization_id,
-                    SmsAccount.status == SMS_ACCOUNT_ACTIVE,
-                )
-                .order_by(SmsAccount.created_at)
-                .limit(1)
-            ).scalar_one_or_none()
-        if account is None:
+        accounts = candidate_accounts(db, client.organization_id)
+        if not accounts:
             log.info(
                 "lead notification skipped for org=%s: no active SMS account",
                 client.organization_id,
@@ -218,14 +276,16 @@ def notify_new_lead(db: Session, client: Client, contact: Contact) -> None:
             return
         body = render_notification_body(db, resolve_template(org, client), client, contact)
         for phone in phones:
-            result, _row = sms_send.send_notification(db, account, phone, body)
-            if result != sms_send.SENT:
-                log.info(
-                    "lead notification to %s did not send (%s), org=%s",
+            sender = _send_with_failover(db, accounts, phone, body)
+            if sender is None:
+                log.warning(
+                    "lead notification to %s failed on every account, org=%s",
                     phone,
-                    result,
                     client.organization_id,
                 )
+                continue
+            # Pin the remaining recipients to the account that just worked.
+            accounts = [sender] + [a for a in accounts if a.id != sender.id]
     except Exception:
         log.exception(
             "lead notification failed for org=%s, contact=%s",
@@ -299,11 +359,19 @@ def retry_failed(db: Session, limit: int = 20) -> int:
         )
         if attempts >= NOTIFY_MAX_ATTEMPTS:
             continue
-        account = db.get(SmsAccount, m.account_id)
-        if account is None or account.status != SMS_ACCOUNT_ACTIVE:
+        # Deliberately NOT pinned to m.account_id: the original attempt failed,
+        # and retrying the same dead provider three more times is how 100+
+        # alerts died on an unreachable iMessage relay while a healthy Telnyx
+        # number sat unused on the same org.
+        accounts = candidate_accounts(db, m.organization_id)
+        if not accounts:
             continue
+        # One account per tick (not the full failover fan-out): that keeps the
+        # deliberate ~60s backoff and the NOTIFY_MAX_ATTEMPTS budget intact,
+        # while candidate_accounts' demotion means this tick's pick is a
+        # DIFFERENT, healthier provider than the one that just failed.
         try:
-            sms_send.send_notification(db, account, m.to_number, m.body)
+            sms_send.send_notification(db, accounts[0], m.to_number, m.body)
         except Exception:
             log.exception("notification retry errored for message %s", m.id)
             continue

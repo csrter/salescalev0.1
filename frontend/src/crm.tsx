@@ -3391,22 +3391,79 @@ function CriteriaEditor({
   );
 }
 
+type LeadFormConfigRow = {
+  platform: string;
+  external_key: string;
+  enabled: boolean;
+  webhook_url?: string | null;
+  last_lead_at?: string | null;
+  last_polled_at?: string | null;
+  last_poll_error?: string | null;
+};
+
+const ROUTE_LABELS: Record<string, string> = {
+  meta: "Meta Instant Forms",
+  google: "Google lead forms",
+  landing_page: "Landing-page webhook",
+};
+
+/** Per-route "are leads actually arriving" strip.
+ *
+ * Meta ingestion sat broken for three weeks in production — the app-level
+ * Graph refusal was caught and logged by the polling fallback, exactly as
+ * designed, and therefore visible nowhere in the product. A configured route
+ * has to be able to say it is not delivering. */
+function IngestionHealth({ configs }: { configs: LeadFormConfigRow[] }) {
+  return (
+    <div className="crm-ingest-health">
+      {configs.map((c) => {
+        const broken = !!c.last_poll_error;
+        return (
+          <div className="crm-ingest-row" key={c.platform}>
+            <div className="crm-ingest-head">
+              <span className="crm-ingest-name">
+                {ROUTE_LABELS[c.platform] ?? c.platform}
+              </span>
+              {!c.enabled ? (
+                <Badge tone="neutral">Off</Badge>
+              ) : broken ? (
+                <Badge tone="danger">Not delivering</Badge>
+              ) : c.last_lead_at ? (
+                <Badge tone="ok">Receiving</Badge>
+              ) : (
+                <Badge tone="neutral">No leads yet</Badge>
+              )}
+            </div>
+            <p className="crm-muted">
+              {c.last_lead_at ? (
+                <Timestamp iso={c.last_lead_at} prefix="Last lead " />
+              ) : (
+                "No lead has arrived through this route yet."
+              )}
+              {c.platform === "meta" && c.last_polled_at && (
+                <>
+                  {" · "}
+                  <Timestamp iso={c.last_polled_at} prefix="checked " />
+                </>
+              )}
+            </p>
+            {broken && <Alert tone="danger">{c.last_poll_error}</Alert>}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function LeadFormRouting({ clientId }: { clientId: string }) {
   const toast = useToast();
-  const [configs, setConfigs] = useState<
-    {
-      platform: string;
-      external_key: string;
-      enabled: boolean;
-      webhook_url?: string | null;
-    }[]
-  >([]);
+  const [configs, setConfigs] = useState<LeadFormConfigRow[]>([]);
   const [pageId, setPageId] = useState("");
   const [googleKey, setGoogleKey] = useState("");
   const [landingBusy, setLandingBusy] = useState(false);
 
   const load = useCallback(() => {
-    api<{ platform: string; external_key: string; enabled: boolean }[]>(
+    api<LeadFormConfigRow[]>(
       `/api/clients/${clientId}/lead-forms`
     )
       .then((cs) => {
@@ -3509,15 +3566,7 @@ function LeadFormRouting({ clientId }: { clientId: string }) {
         key above. Meta leads arrive via the app-level leadgen webhook and are
         routed here by Page ID.
       </Alert>
-      {configs.length > 0 && (
-        <p className="crm-muted">
-          Configured:{" "}
-          {configs
-            .filter((c) => c.platform !== "landing_page")
-            .map((c) => `${c.platform} (${c.external_key})`)
-            .join(", ")}
-        </p>
-      )}
+      {configs.length > 0 && <IngestionHealth configs={configs} />}
 
       <h5 className="crm-subhead crm-subhead--sm" style={{ marginTop: 24 }}>
         Generic landing-page form webhook

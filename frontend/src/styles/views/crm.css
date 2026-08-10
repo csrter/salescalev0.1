@@ -535,6 +535,35 @@
   word-break: break-all;
 }
 
+/* Per-route lead-ingestion health — a spec-sheet row per configured route. */
+.crm-ingest-health {
+  display: flex;
+  flex-direction: column;
+  border-top: 1px solid var(--border);
+}
+
+.crm-ingest-row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-3) 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.crm-ingest-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.crm-ingest-name {
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-caps);
+  color: var(--ink-muted);
+}
+
 /* ---- Phase 14: custom fields ------------------------------------------ */
 
 .crm-section-head {
