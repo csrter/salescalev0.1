@@ -2468,6 +2468,16 @@ export const resumeCompletedSms = (id: string, dryRun: boolean) =>
     method: "POST",
     body: JSON.stringify({ dry_run: dryRun }),
   });
+/** Clear a campaign's errored enrollments and re-queue them at the next send
+ * window — recovery after a provider outage. dryRun=true returns counts only. */
+export const retrySmsErrors = (id: string, dryRun: boolean) =>
+  api<{
+    queued: number;
+    skipped: { contact_id: string; reason: string }[];
+  }>(`${SO}/campaigns/${id}/retry-errors`, {
+    method: "POST",
+    body: JSON.stringify({ dry_run: dryRun }),
+  });
 export const unenrollSms = (campaignId: string, enrollmentId: string) =>
   api(`${SO}/campaigns/${campaignId}/enrollments/${enrollmentId}`, { method: "DELETE" });
 export const previewSmsStep = (

@@ -1034,6 +1034,30 @@ def resume_completed(
     return result
 
 
+@router.post("/campaigns/{campaign_id}/retry-errors")
+def retry_errors(
+    campaign_id: str,
+    body: CatchUpIn,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_admin),
+    scope: TenantScope = Depends(get_scope),
+):
+    """Clear this campaign's errored enrollments and re-queue them at the next
+    valid send window — recovery after a provider/account outage stranded the
+    audience. Admin-only with a dry-run confirm, same posture as
+    catch-up-replies; opted-out/replied/manual exits are never resurrected and
+    the consent gate re-checks per lead here and again at send time."""
+    campaign = _scoped_get(db, scope, SmsCampaign, campaign_id)
+    org = db.get(Organization, scope.organization_id)
+    if not body.dry_run:
+        # Re-queuing implies future sends — same monthly-quota gate as enroll.
+        entitlements.enforce_can_send_sms(db, org)
+    result = sms_campaigns.retry_errored(db, campaign, dry_run=body.dry_run)
+    if not body.dry_run:
+        db.commit()
+    return result
+
+
 @router.get("/campaigns/{campaign_id}/enrollments")
 def list_enrollments(
     campaign_id: str,

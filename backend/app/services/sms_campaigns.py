@@ -41,7 +41,7 @@ import logging
 import re
 from typing import List, Optional
 
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session
 
 from ..models.base import utcnow
@@ -672,6 +672,87 @@ def _revive_errored(db: Session, campaign: SmsCampaign) -> int:
         e.ended_at = None
         e.next_run_at = when
     return len(errored)
+
+
+def retry_errored(
+    db: Session, campaign: SmsCampaign, *, dry_run: bool = False
+) -> dict:
+    """Clear this campaign's errored enrollments and re-queue them — the
+    "the provider was broken, put the audience back" action.
+
+    _revive_errored above does the same reset, but only as a side effect of
+    reconnecting an ACCOUNT, and only for that account's active campaigns.
+    That leaves the common case unreachable: an outage stranded one
+    campaign's audience, the account has since been fixed (or the campaign
+    repointed at a working one), and there is no way to say "retry these".
+    This is that action, scoped to one campaign and triggered deliberately.
+
+    Also covers enrollments that exited with exit_reason="failed" — a send
+    that failed hard enough to end the enrollment is an error the admin
+    means to retry, and it looks identical to the user ("errored"). Exits
+    for opted_out / replied / manual are NEVER resurrected: those are
+    decisions, not failures, and re-texting someone who opted out is the one
+    unrecoverable mistake here.
+
+    Deliberately NOT included: the render failsafe exits (render_empty /
+    render_error / too_long). Those are deterministic template bugs — the
+    same template against the same contact fails identically — so retrying
+    them churns the queue instead of recovering anyone. Fix the template and
+    re-enroll if those need to move.
+
+    Consent/suppression is re-checked per lead at queue time (and again by
+    the gateway at send time), so a lead who sent STOP during the outage is
+    skipped rather than retried. Scheduled at the campaign's next valid send
+    window, never immediately-past-quiet-hours. Idempotent: retried
+    enrollments are ACTIVE, so a second run finds nothing.
+
+    Returns {queued, skipped: [{contact_id, reason}]} — the same receipt
+    shape as catch_up_past_replies/resume_completed, so the confirm UI can
+    show real counts from a dry run before anything moves.
+    """
+    candidates = (
+        db.execute(
+            select(SmsEnrollment).where(
+                SmsEnrollment.campaign_id == campaign.id,
+                or_(
+                    SmsEnrollment.status == SMS_ENROLL_ERROR,
+                    and_(
+                        SmsEnrollment.status == SMS_ENROLL_EXITED,
+                        SmsEnrollment.exit_reason == "failed",
+                    ),
+                ),
+            )
+        )
+        .scalars()
+        .all()
+    )
+    if not candidates:
+        return {"queued": 0, "skipped": []}
+
+    now = utcnow()
+    when = _next_valid_send_time(now, campaign) or now
+    queued = 0
+    skipped: List[dict] = []
+    for e in candidates:
+        contact = db.get(Contact, e.contact_id)
+        if contact is None:
+            skipped.append({"contact_id": e.contact_id, "reason": "not_found"})
+            continue
+        ok, reason = sms_consent.sendable(db, contact)
+        if not ok:
+            skipped.append({"contact_id": e.contact_id, "reason": reason})
+            continue
+        queued += 1
+        if dry_run:
+            continue
+        e.status = SMS_ENROLL_ACTIVE
+        e.exit_reason = None
+        e.ended_at = None
+        # Retry the step that failed — current_position was never advanced
+        # past it, since advancing only happens after a successful send.
+        e.awaiting_reply_since = None
+        e.next_run_at = when
+    return {"queued": queued, "skipped": skipped}
 
 
 def rearm_account(db: Session, account_id: str) -> int:

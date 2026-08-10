@@ -21,6 +21,7 @@ import {
   catchUpSmsReplies,
   composeSms,
   resumeCompletedSms,
+  retrySmsErrors,
   createSmsAccount,
   createSmsCampaign,
   deleteSmsAccount,
@@ -2138,6 +2139,36 @@ function AudienceTab({
     }
   };
 
+  // Enrollments stranded in error by a provider/account outage. Same
+  // dry-run-then-confirm posture as the two above: the count shown is real,
+  // and nothing moves until the admin says so.
+  const [retry, setRetry] = useState<{ queued: number } | null>(null);
+  const [retryConfirm, setRetryConfirm] = useState(false);
+  const [retryBusy, setRetryBusy] = useState(false);
+  useEffect(() => {
+    retrySmsErrors(campaign.id, true)
+      .then((r) => setRetry(r.queued > 0 ? r : null))
+      .catch(() => {});
+  }, [campaign.id, campaign.enrolled, campaign.steps_count]);
+
+  const runRetry = async () => {
+    setRetryBusy(true);
+    try {
+      const r = await retrySmsErrors(campaign.id, false);
+      onToast(
+        `Re-queued ${r.queued} errored ${r.queued === 1 ? "lead" : "leads"}`,
+        "ok",
+      );
+      setRetryConfirm(false);
+      setRetry(null);
+      refresh();
+    } catch (e) {
+      onToast(e instanceof Error ? e.message : "Retry failed", "error");
+    } finally {
+      setRetryBusy(false);
+    }
+  };
+
   const unenroll = (e: SmsEnrollment) => {
     unenrollSms(campaign.id, e.id)
       .then(() => {
@@ -2227,6 +2258,39 @@ function AudienceTab({
           Enroll contacts
         </Button>
       </div>
+      {retry !== null && retry.queued > 0 && (
+        <Alert
+          tone="warn"
+          title={`${int(retry.queued)} ${retry.queued === 1 ? "lead" : "leads"} stopped on a send error`}
+        >
+          A send failure ended these enrollments, usually a provider or mailbox
+          outage rather than anything about the lead. Retrying puts them back at
+          the step that failed, scheduled for the next open send window.
+          Consent and STOP are re-checked per lead, so anyone who opted out
+          during the outage stays out.
+          <div className="sms-catchup-actions">
+            {retryConfirm ? (
+              <>
+                <Button variant="primary" size="sm" busy={retryBusy} onClick={runRetry}>
+                  Retry {int(retry.queued)} {retry.queued === 1 ? "lead" : "leads"}
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  disabled={retryBusy}
+                  onClick={() => setRetryConfirm(false)}
+                >
+                  Cancel
+                </Button>
+              </>
+            ) : (
+              <Button variant="ghost" size="sm" onClick={() => setRetryConfirm(true)}>
+                Clear errors and retry…
+              </Button>
+            )}
+          </div>
+        </Alert>
+      )}
       {resume !== null && resume.queued + resume.awaiting > 0 && (
         <Alert
           tone="info"

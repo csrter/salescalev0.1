@@ -3546,6 +3546,114 @@ def test_completed_lead_reply_reopens_on_branch_match_only(
     assert e.status == "completed"  # cleanly re-completed after the parting send
 
 
+def test_retry_errors_requeues_failed_sends_and_respects_consent(
+    sc_org, api, twilio_creds_ok, monkeypatch
+):
+    """A provider outage strands the audience in status=error. retry-errors
+    puts them back at the step that failed, skipping anyone who opted out
+    during the outage, and is idempotent."""
+    acct = _mk_account(sc_org, api, from_number="+14805550744")
+    camp = _mk_campaign(sc_org, api, acct["id"], **_ALWAYS)
+    doomed = _mk_contact(sc_org, api, mobile_phone="4805557401", first="Dee")
+    quitter = _mk_contact(sc_org, api, mobile_phone="4805557402", first="Quinn")
+    _set_steps(sc_org, api, camp["id"], [{"position": 1, "body": "Hi {{first_name}}"}])
+    assert _activate(sc_org, api, camp["id"]).status_code == 200
+    _enroll(sc_org, api, camp["id"], [doomed, quitter])
+
+    # The provider is broken: every send fails hard.
+    monkeypatch.setattr(
+        gateway, "_twilio_send",
+        lambda account, to, body: (_ for _ in ()).throw(
+            gateway.SmsProviderError("provider exploded")
+        ),
+    )
+    _tick()
+    for cid in (doomed, quitter):
+        assert _get_enrollment(camp["id"], cid).status == "error"
+
+    # Provider fixed; one lead opted out while it was down.
+    sent = []
+    monkeypatch.setattr(
+        gateway, "_twilio_send",
+        lambda account, to, body: (sent.append(to), ("SM_retry", None, None))[1],
+    )
+    assert api.patch(
+        f"/api/crm/contacts/{quitter}",
+        json={"sms_opt_in": False},
+        headers=sc_org["headers"],
+    ).status_code == 200
+
+    dry = api.post(
+        f"/api/sms/campaigns/{camp['id']}/retry-errors",
+        json={"dry_run": True},
+        headers=sc_org["headers"],
+    ).json()
+    assert dry["queued"] == 1
+    assert any(s["reason"] == "no_consent" for s in dry["skipped"])
+    # Dry run mutates nothing.
+    assert _get_enrollment(camp["id"], doomed).status == "error"
+
+    real = api.post(
+        f"/api/sms/campaigns/{camp['id']}/retry-errors",
+        json={"dry_run": False},
+        headers=sc_org["headers"],
+    ).json()
+    assert real["queued"] == 1
+    e = _get_enrollment(camp["id"], doomed)
+    assert e.status == "active" and e.current_position == 1
+    assert e.next_run_at is not None
+    # The opted-out lead is left errored, never resurrected.
+    assert _get_enrollment(camp["id"], quitter).status == "error"
+
+    _force_due(e.id)
+    _tick()
+    assert sent == ["+14805557401"]
+
+    # Idempotent: nothing eligible is left (the opted-out one still skips).
+    again = api.post(
+        f"/api/sms/campaigns/{camp['id']}/retry-errors",
+        json={"dry_run": False},
+        headers=sc_org["headers"],
+    ).json()
+    assert again["queued"] == 0
+
+
+def test_retry_errors_never_resurrects_an_opt_out_exit(
+    sc_org, api, twilio_creds_ok, captured_sends
+):
+    """An enrollment that EXITED because the lead sent STOP is a decision,
+    not a failure — retry-errors must not touch it."""
+    acct = _mk_account(sc_org, api, from_number="+14805550745")
+    camp = _mk_campaign(sc_org, api, acct["id"], **_ALWAYS)
+    gone = _mk_contact(sc_org, api, mobile_phone="4805557403", first="Gus")
+    _set_steps(sc_org, api, camp["id"], [{"position": 1, "body": "Hi"}])
+    assert _activate(sc_org, api, camp["id"]).status_code == 200
+    _enroll(sc_org, api, camp["id"], [gone])
+    _tick()
+
+    db = SessionLocal()
+    try:
+        e = db.execute(
+            select(SmsEnrollment).where(
+                SmsEnrollment.campaign_id == camp["id"],
+                SmsEnrollment.contact_id == gone,
+            )
+        ).scalar_one()
+        e.status = "exited"
+        e.exit_reason = "opted_out"
+        db.commit()
+    finally:
+        db.close()
+
+    out = api.post(
+        f"/api/sms/campaigns/{camp['id']}/retry-errors",
+        json={"dry_run": False},
+        headers=sc_org["headers"],
+    ).json()
+    assert out["queued"] == 0
+    assert _get_enrollment(camp["id"], gone).exit_reason == "opted_out"
+
+
 def test_resume_completed_sends_new_parting_step(
     sc_org, api, twilio_creds_ok, captured_sends
 ):
