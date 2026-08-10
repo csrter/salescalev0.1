@@ -3373,6 +3373,15 @@ live activation + the entitlement flip, the Outreach module build
       exit untouched, all calls 200). DEPLOYED to production 2026-08-10 —
       code only, NO migration, so the desktop app is not crash-exposed by
       this one; it simply won't show the button until its next rebuild.
+      DESKTOP REBUILT same day: PyInstaller backend + frontend + DMG (148MB,
+      backend binary hash-matched into the app bundle, "retry-errors"
+      verified inside the packaged app.asar), installed to /Applications and
+      launch-verified — own backend bound :8000, /api/health 200, and the new
+      route answering 401 rather than 404 on the PACKAGED backend (the
+      runtime proof the frozen binary carries retry_errored, since `strings`
+      can't see into the compressed archive). Repo-root DMG copy refreshed
+      sha-identical. NOTE the app must be QUIT before reinstalling — a live
+      instance keeps :8000 and the replacement then talks to the old backend.
 - [ ] Stripe live activation + entitlement flip (after 12–14, so real
       limits land everywhere in one pass)
 - [ ] Outreach module build (dev-mode) — go-live gated on Meta App
