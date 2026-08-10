@@ -3250,6 +3250,72 @@ live activation + the entitlement flip, the Outreach module build
       against Google's limits (0 over), plus pinning guidance (pin ONE headline
       slot only) and the rating-claim caveat (prefer the Seller Ratings
       extension over an in-text 4.9 claim).
+- [x] Telnyx SMS provider (2026-07-31, 16aa23b — undocumented until now):
+      fourth provider alongside twilio/sendblue/bluebubbles on the same adapter
+      seam (_telnyx_send / _verify_telnyx, tokened-URL webhooks mirroring
+      Sendblue's posture, Telnyx failure vocabulary in _apply_status,
+      account_sid placeholder + messaging_service_sid carrying the Messaging
+      Profile id). No engine/schema/migration change. Tests 654 -> 663.
+- [x] Lead-notification failover + visible lead-ingestion health (2026-08-09,
+      e9aad5d): two prod failures, both silent by design, found by inspecting
+      production rather than by a report.
+      (1) NOTIFICATIONS — 102 of ~200 alerts failed in 30 days.
+      lead_notify.notify_new_lead hard-preferred the org's BlueBubbles account
+      for as long as its DB status said "active", but a 502 from an unreachable
+      relay never flips that status (correctly: it means "down right now", not
+      "bad credentials", and flipping it parks every campaign enrollment on the
+      account). BOTH relays have been down — imessage-relay.salescale.lol and
+      imsg.atlasreach.io each 502, loopback 12345 not even listening — so every
+      alert was pinned to a dead provider while a healthy Telnyx number AND a
+      healthy Sendblue number sat unused on the same org (both probe ok;
+      twilio's creds are separately bad). retry_failed then re-tried the SAME
+      dead account for all four attempts. Fix: lead_notify.candidate_accounts()
+      returns active accounts in preference order — BlueBubbles still leads,
+      but an account whose last notification attempt failed within
+      UNHEALTHY_COOLDOWN_MINUTES (30) is demoted behind healthy ones, so a dead
+      relay costs one wasted attempt per cooldown instead of one per lead and
+      promotes itself back the moment a probe succeeds (deliberately NOT a
+      status flip). notify_new_lead fails over per recipient and pins the rest
+      of a multi-number alert to whichever account actually sent; retry_failed
+      picks the healthiest candidate instead of the original account, still ONE
+      account per tick so the deliberate ~60s backoff and NOTIFY_MAX_ATTEMPTS
+      budget hold. Verified in prod against the real dead relay with only the
+      healthy providers' final network hop stubbed and the session rolled back:
+      recipient 1 burned one BlueBubbles attempt then delivered via Sendblue,
+      recipient 2 went straight to Sendblue. NOTE the 102 historical failures
+      are all outside the 6h retry window, so nothing auto-refires — re-sending
+      2-day-old lead alerts would be noise, not recovery.
+      (2) META LEAD FLOW — zero Instant Form leads since 2026-07-20. The Graph
+      API refuses the app for the connecting user ("Cannot call API for app
+      1044566034716833 on behalf of user 1001543376035495" — token itself is
+      valid; debug_token returns the same refusal), which blocks the webhook
+      AND the polling fallback; the unblock is Meta-console work (app roles /
+      publish / Data Use Checkup), NOT code. Separately, Paganelli's meta
+      PlatformConnection is `disconnected` — and _poll_page returned a silent 0
+      for that, indistinguishable from a healthy page with no new leads. The
+      product bug was that none of this was visible anywhere: polling is
+      best-effort, so the refusal only ever reached the container log. Added
+      lead_form_configs.last_poll_error + last_lead_at (migration c3f7a1e58d94,
+      additive nullable); the poller persists why it failed and clears it on
+      recovery; a missing connection now raises instead of returning 0;
+      last_lead_at is stamped by the shared ingest paths (meta webhook+poll,
+      google, landing_page) so "a lead really ARRIVED" is reported identically
+      per route — a poll succeeding against a page with no leads is not the
+      same as the route working. Frontend: per-route health strip in the
+      client's CRM setup (Receiving / Not delivering / No leads yet + last
+      arrival + the failure reason), Schematic mono/hairline/badge styling
+      verified live. Tests 663 -> 666. DEPLOYED to production 2026-08-09:
+      migration c3f7a1e58d94 applied to the live Supabase DB (alembic current =
+      c3f7a1e58d94 head), backend+frontend rebuilt/recreated, /api/health 200,
+      both prod configs now reporting their real distinct errors.
+      REMAINING user-side: (a) Meta app 1044566034716833 — check App Roles (the
+      connecting FB user must be admin/developer/tester), Data Use Checkup, and
+      any restriction banner, then publish + App Review for leads_retrieval,
+      and reconnect Paganelli's Meta in Integrations; the poller starts
+      delivering on its own the moment access returns. (b) Both BlueBubbles
+      relays are down — see [[salescale-imessage-tunnel-recovery]] for the
+      stale-port-12345 recovery; until then ops alerts ride Sendblue, which is
+      working.
 - [ ] Stripe live activation + entitlement flip (after 12–14, so real
       limits land everywhere in one pass)
 - [ ] Outreach module build (dev-mode) — go-live gated on Meta App
