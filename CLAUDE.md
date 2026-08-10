@@ -3348,6 +3348,31 @@ live activation + the entitlement flip, the Outreach module build
       crash-loops at boot the moment anyone opens it. Also worth knowing:
       a stray local process on :8000 silently hijacks the desktop app, so
       kill any verification backend before launching it (hit again here).
+- [x] SMS: clear a campaign's errors and retry (2026-08-10): a provider
+      outage ends every enrollment it touches in status=error, and the only
+      recovery was reconnecting the ACCOUNT (_revive_errored re-arming its
+      active campaigns as a side effect). That left the common case
+      unreachable — the outage stranded ONE campaign's audience, the account
+      has since been fixed or the campaign repointed, and nothing could say
+      "retry these". Prod had 857 stuck exactly that way, 850 in ppf/tint
+      alone. services/sms_campaigns.retry_errored(campaign, dry_run) returns
+      them to ACTIVE at the step that failed (current_position never advanced
+      past it — advancing only happens after a successful send), scheduled at
+      the campaign's next valid send window. Safeties mirror
+      catch_up_past_replies/resume_completed: opted_out/replied/manual exits
+      are NEVER resurrected (decisions, not failures — re-texting a STOP is
+      the one unrecoverable mistake here); consent + suppression re-checked
+      per lead at queue time AND by the gateway at send time, so a lead who
+      opted out DURING the outage is skipped; dry_run drives a real-count
+      confirm; idempotent. Deliberately EXCLUDES the render failsafe exits
+      (render_empty/render_error/too_long) — deterministic template bugs
+      re-fail identically, so retrying churns instead of recovering. POST
+      /api/sms/campaigns/{id}/retry-errors (require_admin, quota-gated like
+      enroll) + a warn Alert in the campaign Audience tab. Tests 666 → 668.
+      Verified live on alt2 (3 errored → active "just now", seeded opted-out
+      exit untouched, all calls 200). DEPLOYED to production 2026-08-10 —
+      code only, NO migration, so the desktop app is not crash-exposed by
+      this one; it simply won't show the button until its next rebuild.
 - [ ] Stripe live activation + entitlement flip (after 12–14, so real
       limits land everywhere in one pass)
 - [ ] Outreach module build (dev-mode) — go-live gated on Meta App
