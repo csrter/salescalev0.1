@@ -3316,6 +3316,38 @@ live activation + the entitlement flip, the Outreach module build
       relays are down — see [[salescale-imessage-tunnel-recovery]] for the
       stale-port-12345 recovery; until then ops alerts ride Sendblue, which is
       working.
+- [x] Desktop app repair, take 3 + the failure made legible (2026-08-10):
+      the installed desktop app's backend exited code 3, output ending at
+      "Will assume transactional DDL", traceback swallowed. CAUSE, and it was
+      a process failure not a code one: the previous session deployed
+      migration c3f7a1e58d94 to production WITHOUT rebuilding the desktop app
+      in lockstep, which every prior deploy had done. The packaged backend
+      ships a frozen copy of alembic/versions and points at the same live
+      Supabase DB the web deploy migrates, so the DB sat at a revision the
+      Jul-27 bundle had never heard of and upgrade_to_head() raised
+      CommandError "Can't locate revision identified by 'c3f7a1e58d94'" from
+      inside a startup event, where uvicorn exits 3 and the traceback goes
+      nowhere. Note `strings` on the PyInstaller binary CANNOT confirm which
+      revisions a build contains (the archive is compressed — every revision
+      id, including ones the build definitely has, greps to 0); reproduce
+      instead by pointing the current alembic at a versions/ dir with the
+      revision removed, which produced the identical truncation point and
+      exit code. FIXES: (1) rebuilt the desktop app (PyInstaller backend +
+      frontend + DMG 148MB, binary hash-matched into the app bundle,
+      installed to /Applications, launch-verified — backend bound :8000,
+      /api/health 200, routes auth-gated, UI rendering against live data).
+      (2) Because this class has now read as an unexplained crash THREE
+      times, migrations.py translates "Can't locate revision" into what it
+      actually means ("App build is older than the database: … Update the
+      app.") and logs every other migration failure, and main.py prints the
+      traceback to stderr before re-raising so the Electron crash dialog's
+      stderr tail finally has something to show. Verified by running the
+      real upgrade against a deliberately stale versions/ dir.
+      STANDING RULE this incident re-establishes: a migration deployed to
+      the web MUST be followed by a desktop rebuild, or the installed app
+      crash-loops at boot the moment anyone opens it. Also worth knowing:
+      a stray local process on :8000 silently hijacks the desktop app, so
+      kill any verification backend before launching it (hit again here).
 - [ ] Stripe live activation + entitlement flip (after 12–14, so real
       limits land everywhere in one pass)
 - [ ] Outreach module build (dev-mode) — go-live gated on Meta App
