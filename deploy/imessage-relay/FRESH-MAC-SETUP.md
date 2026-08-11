@@ -199,6 +199,23 @@ launchctl list | grep bluebubbles-tunnel
 
 Porkbun → `imsg2.atlasreach.io` → **A** → `2.25.75.95`.
 
+**`atlasreach.io` has a wildcard `*` record pointing at WordPress.com**, so
+every subdomain already resolves — to the wrong place. Verified: a
+deliberately nonexistent name returns the same `192.0.79.166 / 192.0.79.152`
+as `imsg2` does today. The existing `imsg.atlasreach.io` only works because
+it has an explicit record overriding the wildcard.
+
+The trap is that DNS *looks* configured: the name resolves and even answers
+HTTP, from WordPress. Don't check with `dig +short` alone — check the value:
+
+```bash
+dig +short imsg2.atlasreach.io A     # must be 2.25.75.95, NOT 192.0.79.x
+```
+
+An explicit A record beats the wildcard. Wait for it to actually flip before
+step 10, or Traefik will request a certificate for a name still pointed
+elsewhere.
+
 ## 10. [VPS] Traefik route
 
 A file-provider route in `/docker/traefik/dynamic/` pointing
