@@ -82,19 +82,61 @@ Also in System Settings:
 - **Lock Screen** → "Require password after screen saver begins" → **Never**.
 - **General → Software Update → Automatic Updates** → turn everything off.
 
-## 5. [MAC] Dedicated Apple ID + iMessage
+## 5. [MAC + IPHONE] Dedicated Apple ID, and sending FROM your carrier number
 
-Sign **Messages** into an Apple ID created for this purpose — never a personal
-one, and **not the same Apple ID as any other BlueBubbles Mac** (two Macs on
-one Apple ID both receive every inbound and both fire their webhook, so every
-reply gets ingested twice).
+The goal: outbound shows your outreach line (a Tello number here), in blue to
+iMessage users and green over SMS to everyone else. That takes an iPhone
+holding the SIM, not just the Mac.
 
-Messages → Settings → iMessage → confirm it activates and shows the handle
-you expect. Note that handle — it's Salescale's "iMessage number".
+**The constraint that dictates everything:** a phone number can be registered
+to exactly ONE Apple ID for iMessage at a time. So the number must live on
+the same dedicated Apple ID the sender Mac uses. Use a line bought for
+outreach — moving a personal number here removes it from your personal
+iMessage, and signing the Mac into a personal Apple ID also collides with any
+other BlueBubbles Mac on that ID (both receive every inbound and both fire
+their webhook, so every reply is ingested twice).
 
-Optional, only if you also want green-bubble SMS: pair an iPhone with a
-**voice+SMS** line via Settings → Messages → Text Message Forwarding. A
-data-only eSIM cannot do this.
+**5a. Create the Apple ID** at appleid.apple.com — for this purpose only.
+Automated bulk messaging is against Apple's iMessage ToS, and the realistic
+consequence is the ID getting flagged; keep the blast radius replaceable.
+
+**5b. Register the number, on the iPhone holding the SIM.** Only *Messages*
+needs the dedicated ID — iCloud, photos and the rest can stay personal:
+
+- Settings → Messages → **Send & Receive → Apple ID → Sign Out**, then sign
+  in with the dedicated ID.
+- Settings → Messages → **iMessage ON**. Activation sends a silent SMS to
+  Apple and can take several minutes. On an MVNO like Tello it sometimes
+  needs a nudge: confirm the line can send a normal text, then toggle
+  airplane mode on/off. Do not continue while it says "Waiting for
+  activation".
+- Send & Receive → confirm the **phone number is listed and ticked** under
+  "You can be reached by".
+
+**5c. Point the Mac at that number.** Messages on the Mac, signed into the
+**same** dedicated Apple ID:
+
+- Messages → Settings → iMessage → tick the phone number under "You can be
+  reached at".
+- **Start new conversations from → the phone number.** This is the setting
+  that makes outbound show the Tello number instead of the Apple ID email.
+  Miss it and every first touch arrives from an unknown address.
+
+**5d. Text Message Forwarding — this is what reaches non-iMessage numbers.**
+On the iPhone: Settings → Messages → **Text Message Forwarding** → enable the
+sender Mac, and type the code it displays.
+
+Do not treat this as optional. Sampling a live Salescale audience, only 2 of
+26 prospects were iMessage-registered; the other 24 were plain cell numbers
+reachable only as green-bubble SMS. Without forwarding you reach roughly 8%
+of a cold list.
+
+The toggle only appears when both devices are signed into the same Apple ID
+for Messages and iMessage is active. The iPhone must stay **powered on and
+online** for SMS to keep flowing — it is the actual radio. Leave it on a
+charger, turn off Low Power Mode, and turn off automatic iOS updates so a
+3am restart doesn't strand the SMS leg. A data-only eSIM cannot do any of
+this; the line needs voice+SMS.
 
 ## 6. [MAC] BlueBubbles + Private API
 
@@ -182,9 +224,15 @@ SMS → Accounts → Connect a number → provider **BlueBubbles**:
 |---|---|
 | Relay URL | `https://imsg2.atlasreach.io` |
 | Server password | from step 6 |
-| iMessage number | the handle from step 5 |
+| iMessage number | the **carrier number** from step 5 (E.164, e.g. `+1602...`) |
 | Min / max seconds between sends | leave **20 / 45** |
 | Send as SMS only | **OFF** (that flag is only for the dead-iMessage EC2 box) |
+
+Connect this as a **new** account rather than editing the existing
+BlueBubbles one: that row points at the old relay with `force_sms` on, and
+`(organization, from_number)` is uniquely indexed, so a new number is a new
+row. Retire the old account afterward so lead notifications stop burning a
+failed attempt on a dead relay before failing over.
 
 Then copy the account's **inbound webhook URL** from its card and paste it
 into BlueBubbles' webhook settings on the Mac. Inbound is required — without
@@ -196,14 +244,25 @@ it STOP replies never reach us.
 - [ ] `server/info` → `private_api: true`, `helper_connected: true`
 - [ ] `curl https://imsg2.atlasreach.io/api/v1/ping` → **401** "Missing server
       password" (proves DNS + TLS + tunnel + BlueBubbles are all alive)
-- [ ] A real send from Salescale **arrives on a test phone**
+- [ ] A real send from Salescale **arrives on a test phone**, and the
+      recipient sees it **from the Tello number** (not the Apple ID email —
+      that means step 5c was missed)
+- [ ] **Both legs, separately.** Send to an iPhone (expect blue) AND to a
+      known non-iMessage number such as an Android handset (expect green).
+      The SMS leg is the one that silently doesn't exist if Text Message
+      Forwarding didn't take.
 - [ ] The device agrees — not just the API:
       ```bash
       sqlite3 ~/Library/Messages/chat.db \
         "select service,error,is_sent from message where is_from_me=1 order by date desc limit 5;"
       ```
-      want `error=0` and `is_sent=1`. This query is what exposed the EC2
-      failure; the API said fine while 434 sends were dead.
+      want `error=0` and `is_sent=1`, with `service` showing **iMessage** for
+      the blue one and **SMS** for the green one. This query is what exposed
+      the EC2 failure; the API said fine while 434 sends were dead.
+- [ ] Power the **iPhone** off, send to a non-iMessage number, and confirm it
+      fails rather than silently vanishing — that is the failure mode to
+      recognise later, and it tells you the SMS leg genuinely depends on that
+      phone staying up.
 - [ ] Inbound: text the Mac's handle → appears in Salescale's Messages tab
 - [ ] `killall BlueBubbles` → watchdog relaunches within ~60s
 - [ ] **Reboot** → auto-logs in, BlueBubbles up, tunnel up, ping still 401
