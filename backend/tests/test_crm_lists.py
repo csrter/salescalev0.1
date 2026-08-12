@@ -381,6 +381,70 @@ def test_enroll_by_list_sms(lc_org, api, monkeypatch):
     assert by_contact[c3]["source_detail"] is None
 
 
+def test_sms_enroll_accepts_a_list_from_another_client(lc_org, api, monkeypatch):
+    """A campaign scoped to one client can enroll another client's list.
+
+    Campaign.client_id drives auto-enroll of that client's INCOMING leads; it
+    was never an audience restriction, and the enroll picker now surfaces every
+    client's lists, so this pins the contract that UI depends on. Isolation is
+    still org-level: TenantScope resolves the list, so a list belonging to
+    another organization 404s regardless of client.
+    """
+    from app.services import sms_send as gateway
+
+    monkeypatch.setattr(gateway, "verify_credentials", lambda account: (True, "ok"))
+    other_client = api.post(
+        "/api/clients", json={"name": "Second Client"}, headers=lc_org["headers"]
+    ).json()["id"]
+    acct = api.post(
+        "/api/sms/accounts",
+        json={
+            "name": "Cross Client Line",
+            "account_sid": "ACtestaccountsid00000002",
+            "auth_token": "sms-cross-client-token-01234",
+            "from_number": "+14805550198",
+            "daily_send_cap": 200,
+        },
+        headers=lc_org["headers"],
+    ).json()
+    camp = api.post(
+        "/api/sms/campaigns",
+        json={
+            "name": "Cross Client Campaign",
+            "account_id": acct["id"],
+            "client_id": other_client,
+            "send_window_start": 0,
+            "send_window_end": 24,
+            "send_days": [0, 1, 2, 3, 4, 5, 6],
+        },
+        headers=lc_org["headers"],
+    ).json()
+
+    # List and contacts belong to lc_org's FIRST client, not the campaign's.
+    lst = _mk_list(lc_org, api, name="Other Client List")
+    contact = _mk_contact(
+        lc_org, api, first="Crossed", mobile_phone="4805557201", sms_opt_in=True
+    )
+    api.post(
+        f"/api/crm/lists/{lst['id']}/contacts",
+        json={"contact_ids": [contact]},
+        headers=lc_org["headers"],
+    )
+
+    r = api.post(
+        f"/api/sms/campaigns/{camp['id']}/enroll",
+        json={"list_id": lst["id"]},
+        headers=lc_org["headers"],
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["enrolled"] == 1
+    rows = api.get(
+        f"/api/sms/campaigns/{camp['id']}/enrollments", headers=lc_org["headers"]
+    ).json()
+    assert [e["contact_id"] for e in rows] == [contact]
+    assert rows[0]["source_detail"] == "Other Client List"
+
+
 # --- CSV import into a list ---------------------------------------------------
 
 

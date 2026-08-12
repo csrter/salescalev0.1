@@ -3382,6 +3382,36 @@ live activation + the entitlement flip, the Outreach module build
       can't see into the compressed archive). Repo-root DMG copy refreshed
       sha-identical. NOTE the app must be QUIT before reinstalling — a live
       instance keeps :8000 and the replacement then talks to the old backend.
+- [x] SMS enroll picker reaches client CRMs, not just the house CRM
+      (2026-08-12): a client's contact lists could not be enrolled into an SMS
+      campaign from the UI. The BACKEND was never house-only — /enroll has
+      accepted any org-scoped list_id/client_id since the enroll-by-list
+      feature, and test_crm_lists' lc_org fixture already exercised a real
+      client — but the frontend's EnrollDialog called useHouseContacts/
+      useHouseContactLists, which resolve the house client and nothing else,
+      so only house lists were ever offered. Generalized both hooks to
+      useCrmContacts(active, clientId) / useCrmContactLists(active, clientId)
+      (null = house, preserving old behavior) and gave the enroll dialog a
+      "Contacts from" select over house + every client, defaulting to the
+      campaign's own client_id when it is client-scoped. Switching source
+      clears the pending list/selection (they belong to the old client) and
+      relabels the Audience option, search placeholder, and empty state. Same
+      one-line generalization applied to the step PreviewDialog (previews now
+      render against the audience the campaign actually sends to) and, for
+      consistency inside the module, ComposeSmsDialog's 1:1 recipient picker,
+      which had the same house-only limitation. Frontend-only — no schema, no
+      new endpoints, no migration. Tests 669 (one added: a campaign scoped to
+      client A enrolling client B's list, pinning that campaign.client_id
+      drives auto-enroll of incoming leads and is NOT an audience restriction
+      — the contract the new picker relies on; org-level isolation still comes
+      from TenantScope resolving the list). Verified live on alt2: created a
+      client-scoped list of 3 opted-in Paganelli leads, and through the real
+      UI the picker listed it as "Paganelli spring promo (3)", enrolled all 3,
+      and the Audience tab attributed them "List · Paganelli spring promo";
+      re-opening the dialog on a Paganelli-scoped campaign defaulted to
+      Paganelli. Zero console errors; seed data removed afterward. NOT
+      deployed. Follow-up: the email module's EnrollDialog has the identical
+      house-only limitation and the same two hooks to generalize.
 - [ ] Stripe live activation + entitlement flip (after 12–14, so real
       limits land everywhere in one pass)
 - [ ] Outreach module build (dev-mode) — go-live gated on Meta App

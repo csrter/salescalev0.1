@@ -177,17 +177,21 @@ const TOKENS_HINT = (
 
 const SMS_SEGMENT_LEN = 160;
 
-/** Resolve the org's house-CRM client id once, then load its contacts. Used
- * by the enroll and preview pickers — imports and prospecting land in the
- * house CRM, so that's where a campaign audience comes from. */
-function useHouseContacts(active: boolean) {
+/** Load a CRM client's contacts for the enroll/preview/compose pickers.
+ * `clientId` null means the org's own house CRM (where prospecting and Lead
+ * Finder imports land) — pass a real client id to pull that client's leads
+ * instead, which is what a client-scoped campaign enrolls. */
+function useCrmContacts(active: boolean, clientId: string | null = null) {
   const [contacts, setContacts] = useState<SmsPickContact[] | null>(null);
   useEffect(() => {
     if (!active) return;
     let alive = true;
     setContacts(null);
-    getHouseClient()
-      .then((r) => listSmsCrmContactsForClient(r.client_id))
+    const resolved = clientId
+      ? Promise.resolve(clientId)
+      : getHouseClient().then((r) => r.client_id);
+    resolved
+      .then((id) => listSmsCrmContactsForClient(id))
       .then((rows) => {
         if (alive) setContacts(rows);
       })
@@ -197,20 +201,25 @@ function useHouseContacts(active: boolean) {
     return () => {
       alive = false;
     };
-  }, [active]);
+  }, [active, clientId]);
   return contacts;
 }
 
-/** House-CRM contact lists for the enroll picker's "Audience" select — lists
- * a `list_id` enroll (the whole list, server-side) instead of picking
- * individual contacts. */
-function useHouseContactLists(active: boolean) {
+/** Contact lists for the enroll picker's "Audience" select — enrolling by
+ * `list_id` hands the whole list to the server instead of picking individual
+ * contacts. Lists are client-scoped, so this follows the same client as
+ * useCrmContacts above. */
+function useCrmContactLists(active: boolean, clientId: string | null = null) {
   const [lists, setLists] = useState<ContactList[]>([]);
   useEffect(() => {
     if (!active) return;
     let alive = true;
-    getHouseClient()
-      .then((r) => listContactLists(r.client_id))
+    setLists([]);
+    const resolved = clientId
+      ? Promise.resolve(clientId)
+      : getHouseClient().then((r) => r.client_id);
+    resolved
+      .then((id) => listContactLists(id))
       .then((rows) => {
         if (alive) setLists(rows);
       })
@@ -220,7 +229,7 @@ function useHouseContactLists(active: boolean) {
     return () => {
       alive = false;
     };
-  }, [active]);
+  }, [active, clientId]);
   return lists;
 }
 
@@ -1303,6 +1312,7 @@ function CampaignEditor({
           {preview && (
             <PreviewDialog
               campaignId={detail.id}
+              campaignClientId={detail.client_id ?? null}
               position={preview.position}
               isReplyStep={steps[preview.position]?.trigger === "reply"}
               onClose={() => setPreview(null)}
@@ -1312,6 +1322,7 @@ function CampaignEditor({
           {enrolling && (
             <EnrollDialog
               campaignId={detail.id}
+              campaignClientId={detail.client_id ?? null}
               onClose={() => setEnrolling(false)}
               onDone={() => {
                 setEnrolling(false);
@@ -1948,17 +1959,21 @@ function StepRow({
 
 function PreviewDialog({
   campaignId,
+  campaignClientId,
   position,
   isReplyStep,
   onClose,
 }: {
   campaignId: string;
+  campaignClientId: string | null;
   position: number;
   isReplyStep: boolean;
   onClose: () => void;
 }) {
   const toast = useToast();
-  const contacts = useHouseContacts(true);
+  // Preview against the audience this campaign actually sends to: its own
+  // client's leads when it is client-scoped, the house CRM otherwise.
+  const contacts = useCrmContacts(true, campaignClientId);
   const [contactId, setContactId] = useState("");
   const [sampleReply, setSampleReply] = useState("");
   const [rendered, setRendered] = useState<Awaited<
@@ -2387,21 +2402,43 @@ function SKIP_SUMMARY(
 
 function EnrollDialog({
   campaignId,
+  campaignClientId,
   onClose,
   onDone,
 }: {
   campaignId: string;
+  campaignClientId: string | null;
   onClose: () => void;
   onDone: () => void;
 }) {
   const toast = useToast();
-  const contacts = useHouseContacts(true);
-  const lists = useHouseContactLists(true);
+  const [clients, setClients] = useState<Client[]>([]);
+  // "" = the agency's own house CRM. A client-scoped campaign opens on its own
+  // client, which is nearly always the audience you came here for, but the
+  // picker stays switchable — the server accepts any list in the org.
+  const [sourceClientId, setSourceClientId] = useState(campaignClientId ?? "");
+  const contacts = useCrmContacts(true, sourceClientId || null);
+  const lists = useCrmContactLists(true, sourceClientId || null);
   const [listId, setListId] = useState("");
   const [search, setSearch] = useState("");
   const [picked, setPicked] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
   const [receipt, setReceipt] = useState<SmsEnrollReceipt | null>(null);
+
+  useEffect(() => {
+    listClients()
+      .then(setClients)
+      .catch(() => setClients([]));
+  }, []);
+
+  // Lists and contacts both belong to the source client, so a leftover
+  // selection from the previous one would enroll the wrong audience.
+  const changeSource = (id: string) => {
+    setSourceClientId(id);
+    setListId("");
+    setPicked(new Set());
+    setSearch("");
+  };
 
   const filtered = useMemo(() => {
     const list = contacts ?? [];
@@ -2414,6 +2451,9 @@ function EnrollDialog({
     );
   }, [contacts, search]);
 
+  const sourceLabel = sourceClientId
+    ? clients.find((c) => c.id === sourceClientId)?.name ?? "this client"
+    : "house CRM";
   const selectedList = lists.find((l) => l.id === listId) ?? null;
   const allShownSelected =
     filtered.length > 0 && filtered.every((c) => picked.has(c.id));
@@ -2545,6 +2585,22 @@ function EnrollDialog({
       }
     >
       <div className="sms-form">
+        <Field label="Contacts from">
+          <select
+            className="select"
+            aria-label="Contacts from"
+            value={sourceClientId}
+            onChange={(e) => changeSource(e.target.value)}
+          >
+            <option value="">My agency (house CRM)</option>
+            {clients.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.name}
+              </option>
+            ))}
+          </select>
+        </Field>
+
         <Field label="Audience">
           <select
             className="select"
@@ -2552,20 +2608,26 @@ function EnrollDialog({
             value={listId}
             onChange={(e) => setListId(e.target.value)}
           >
-            <option value="">All contacts (house CRM)</option>
+            <option value="">All contacts ({sourceLabel})</option>
             {lists.map((l) => (
               <option key={l.id} value={l.id}>
                 {l.name} ({l.member_count})
               </option>
             ))}
           </select>
+          {lists.length === 0 && (
+            <p className="sms-hint">
+              No lists in {sourceLabel} yet — build one in CRM → Lists, or from
+              the lead list's bulk bar, then it appears here.
+            </p>
+          )}
         </Field>
 
         {!listId && (
           <>
             <input
               className="input"
-              placeholder="Search house-CRM contacts…"
+              placeholder={`Search ${sourceLabel} contacts…`}
               aria-label="Search contacts"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
@@ -2581,8 +2643,9 @@ function EnrollDialog({
               <SkeletonText lines={6} />
             ) : filtered.length === 0 ? (
               <EmptyState title="No contacts">
-                Import leads into the house CRM (Lead Finder or CSV) to build an
-                audience.
+                {sourceClientId
+                  ? `No leads in ${sourceLabel}'s CRM yet.`
+                  : "Import leads into the house CRM (Lead Finder or CSV) to build an audience."}
               </EmptyState>
             ) : (
               <>
@@ -2903,11 +2966,19 @@ function ComposeSmsDialog({
   onSent: (contactId: string) => void;
 }) {
   const toast = useToast();
-  const contacts = useHouseContacts(true);
+  const [clients, setClients] = useState<Client[]>([]);
+  const [sourceClientId, setSourceClientId] = useState("");
+  const contacts = useCrmContacts(true, sourceClientId || null);
   const [accountId, setAccountId] = useState(accounts[0]?.id ?? "");
   const [contactId, setContactId] = useState("");
   const [body, setBody] = useState("");
   const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    listClients()
+      .then(setClients)
+      .catch(() => setClients([]));
+  }, []);
 
   const send = async () => {
     if (!accountId || !contactId || !body.trim()) {
@@ -2954,7 +3025,23 @@ function ComposeSmsDialog({
             ))}
           </select>
         </Field>
-        <Field label="To (house-CRM contact)">
+        <Field label="Contacts from">
+          <select
+            value={sourceClientId}
+            onChange={(e) => {
+              setSourceClientId(e.target.value);
+              setContactId("");
+            }}
+          >
+            <option value="">My agency (house CRM)</option>
+            {clients.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.name}
+              </option>
+            ))}
+          </select>
+        </Field>
+        <Field label="To">
           <select value={contactId} onChange={(e) => setContactId(e.target.value)}>
             <option value="">Choose a contact…</option>
             {(contacts ?? []).map((c) => (
