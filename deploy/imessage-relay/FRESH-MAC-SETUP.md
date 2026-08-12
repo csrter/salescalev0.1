@@ -228,10 +228,28 @@ this step for you** once DNS resolves.
 Install from this directory:
 
 - `com.bluebubbles.server.plist` → `~/Library/LaunchAgents/` (KeepAlive; belt
-  and braces alongside the app's own auto-start)
-- `imsg-watchdog.sh` + `com.salescale.imsgwatchdog.plist` → covers both
+  and braces alongside the app's own auto-start), then
+  `launchctl load -w ~/Library/LaunchAgents/com.bluebubbles.server.plist`
+- `imsg-watchdog.sh` → `/usr/local/bin/` (`chmod +x`) +
+  `com.salescale.imsgwatchdog.plist` → `~/Library/LaunchAgents/`. Covers both
   "local API stopped answering" and "local API fine but the public relay is
-  dead (stale tunnel socket)"
+  dead (stale tunnel socket)".
+
+  **Point it at THIS Mac before loading it.** Its defaults are the EC2 box's
+  hostname and system-domain tunnel label; left alone on a second Mac it
+  health-checks someone else's relay and kickstarts this one every 60s
+  forever. Either edit the config block at the top of the script or create
+  `/usr/local/etc/imsg-watchdog.conf`:
+
+  ```
+  RELAY_URL=https://imsg2.atlasreach.io
+  TUNNEL_LABEL=com.salescale.bluebubbles-tunnel
+  TUNNEL_DOMAIN=gui
+  ```
+
+  `TUNNEL_DOMAIN=gui` because step 8 installs the tunnel as a
+  `~/Library/LaunchAgents` job. Verify with a deliberate break —
+  `killall BlueBubbles`, then watch `/tmp/imsg-watchdog.log`.
 
 ## 12. [APP] Connect in Salescale
 

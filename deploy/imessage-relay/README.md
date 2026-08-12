@@ -105,6 +105,8 @@ someone screen-shares in. This happened live on 2026-07-23.
 | `FRESH-MAC-SETUP.md` | — | **Start here for a new sender Mac.** Ordered do-it checklist from erase to verified send; this README holds the rationale. |
 | `Caddyfile` | Relay VPS | Public HTTPS termination + reverse proxy to the tunnel's loopback port. |
 | `com.salescale.bluebubbles-tunnel.plist` | **The Mac** (launchd) | Keeps the reverse SSH tunnel open. **Use this one on macOS.** |
+| `com.bluebubbles.server.plist` | **The Mac** (launchd, user domain) | Relaunches BlueBubbles Server if it crashes, and starts it at login. |
+| `imsg-watchdog.sh` + `com.salescale.imsgwatchdog.plist` | **The Mac** (launchd, 60s) | Self-heal: kickstarts BlueBubbles when the local API stops answering, kickstarts the tunnel when the local API is fine but the public relay is dead. Per-Mac config at the top of the script — set `RELAY_URL` / `TUNNEL_LABEL` / `TUNNEL_DOMAIN` on a second machine. |
 | `autossh-bluebubbles.service` | A Linux host (systemd) | Same tunnel, systemd form. Reference only — macOS doesn't use systemd. Only relevant if you ever run the tunnel from a Linux box instead of the Mac directly. |
 | `firewall.sh` | Relay VPS | ufw rules restricting 443 to Salescale's backend IP; iptables fallback commented at the bottom. |
 

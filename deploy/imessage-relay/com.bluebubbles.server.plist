@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Runs on THE MAC, in the user (GUI) domain:
+      cp com.bluebubbles.server.plist ~/Library/LaunchAgents/
+      launchctl load -w ~/Library/LaunchAgents/com.bluebubbles.server.plist
+
+  Why this exists even though BlueBubbles has its own auto-start setting:
+  on the EC2 relay that setting was off and a reboot left the app dead, so
+  the relay answered nothing until someone screen-shared in. Belt and
+  braces — enable the app's auto-start AND install this.
+
+  KeepAlive is deliberately conditional (Crashed / non-zero exit) rather
+  than `true`: a clean quit by a human at the keyboard should stay quit,
+  a crash should come straight back. The 60s watchdog
+  (com.salescale.imsgwatchdog) is what covers "process alive but the API
+  stopped answering", which KeepAlive cannot see.
+
+  This is a user LaunchAgent, not a LaunchDaemon, on purpose — BlueBubbles
+  drives Messages.app and only works inside a logged-in GUI session. That
+  is also why auto-login (and no FileVault) is non-negotiable on a sender
+  Mac; see FRESH-MAC-SETUP.md steps 1 and 4.
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.bluebubbles.server</string>
+
+	<key>AssociatedBundleIdentifiers</key>
+	<array>
+		<string>com.BlueBubbles.BlueBubbles-Server</string>
+	</array>
+
+	<key>Program</key>
+	<string>/Applications/BlueBubbles.app/Contents/MacOS/BlueBubbles</string>
+
+	<key>RunAtLoad</key>
+	<true/>
+
+	<key>KeepAlive</key>
+	<dict>
+		<key>SuccessfulExit</key>
+		<false/>
+		<key>Crashed</key>
+		<true/>
+	</dict>
+
+	<key>ThrottleInterval</key>
+	<integer>30</integer>
+</dict>
+</plist>
