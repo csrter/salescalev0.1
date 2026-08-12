@@ -3409,9 +3409,21 @@ live activation + the entitlement flip, the Outreach module build
       UI the picker listed it as "Paganelli spring promo (3)", enrolled all 3,
       and the Audience tab attributed them "List · Paganelli spring promo";
       re-opening the dialog on a Paganelli-scoped campaign defaulted to
-      Paganelli. Zero console errors; seed data removed afterward. NOT
-      deployed. Follow-up: the email module's EnrollDialog has the identical
-      house-only limitation and the same two hooks to generalize.
+      Paganelli. Zero console errors; seed data removed afterward.
+      DEPLOYED to production 2026-08-12 (c69b43b), web + desktop: git archive
+      → VPS, frontend image rebuilt/recreated (backend untouched — the only
+      backend change was a test), /api/health 200, app 200, "My agency (house
+      CRM)" confirmed in the served sms_outreach chunk, zero nginx/backend
+      errors. Desktop DMG rebuilt REUSING the Aug-10 PyInstaller backend
+      binary (git log confirmed zero backend/app changes since it was built,
+      so no re-freeze needed — and no migration here, so the older bundle
+      could not hit the stale-revision boot crash); 148MB, backend binary
+      sha-identical in the app bundle, new chunk verified inside app.asar,
+      installed to /Applications and launch-verified (own backend bound
+      :8000, health 200, /api/sms/campaigns 401). Repo-root DMG copy
+      refreshed sha-identical. Follow-up: the email module's EnrollDialog has
+      the identical house-only limitation and the same two hooks to
+      generalize.
 - [ ] Stripe live activation + entitlement flip (after 12–14, so real
       limits land everywhere in one pass)
 - [ ] Outreach module build (dev-mode) — go-live gated on Meta App
