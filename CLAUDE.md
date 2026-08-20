@@ -3684,6 +3684,63 @@ live activation + the entitlement flip, the Outreach module build
       day's send ceiling. Counting attempts instead is the honest reading of
       a "daily send cap", but it would also halt a badly-misconfigured
       account for the rest of the day.
+- [x] Outage recovery — BlueBubbles relay downtime (2026-08-20, prod ops,
+      NO code change): the second Mac's relay had been intermittently down
+      (old host imsg.atlasreach.io still 502s; nothing points at it now). The
+      account campaigns actually use (5f499095, +16232967782) is on
+      imsg2.atlasreach.io and was healthy again by session start — private_api
+      + helper_connected true, iMessage AND SMS both working. All five SMS
+      accounts probe OK except twilio (bad creds, already status=error).
+      RECOVERED: (1) one stranded q3 rentals lead — Mariotti Exotic Car
+      Rentals answered "Yes how can we help?" and the reply-step pitch died on
+      "BlueBubbles is unreachable". Read the chat back off the DEVICE first to
+      rule out a delivered-but-unconfirmed timeout (it was genuinely never
+      sent — the ambiguous-failure rescue probe only looks back 5 min, so an
+      hour-old failure needs a manual read-back), then retry_errored →
+      delivered. (2) 43 of 107 active BSD auto leads had NEVER received their
+      opener — every attempt failed during the Mac's bad spell (502 → 500
+      "Failed to find all handles" → 22) yet the enrollments sat at position 2,
+      queued to send the day-2 "following up" as first-ever contact. Rewound
+      current_position 2 → 1 (process_enrollment picks first step >=
+      current_position, so this is the whole fix) and queued for 15:00 UTC =
+      08:00 America/Phoenix — NOT immediately: it was 07:17 local and roughly
+      half the batch is AZ/CA, so a 43-text blast would have crossed the TCPA
+      8am floor. The campaign's 24/7 toggle would not have stopped it; that
+      toggle is justified for answering an inbound lead immediately, not for a
+      1–13-day-old batch. 5s stagger because that account has spacing 0/0 and
+      43 sends in one tick from one Apple ID is the flagging pattern. RESULT:
+      42/43 sent and all 42 CONFIRMED by the verify pass (verified_at set —
+      BlueBubbles reports success at hand-off, so the raw count is provisional
+      until then). Snapshot of all 43 kept at scratchpad/bsd_rewind_snapshot.json.
+      ONE straggler, not an outage artifact: Stacey Peyer +13109917865 has a
+      STALE iMessage registration — Apple's IDS lookup returns available:true
+      so routing picks iMessage, but the send returns error 22 and the device's
+      iMessage thread shows error 22 while its SMS thread shows a clean
+      error 0. Rewound to position 1 to retry the opener rather than send a
+      follow-up it never earned. There is no per-contact SMS override (the send
+      path resolves service live and does NOT read contacts.imessage_capable —
+      that column is checker/segmentation only), so account-level
+      bluebubbles_force_sms is the only lever; left alone since iMessage
+      genuinely works from that relay.
+      LEFT UNDONE, DELIBERATELY: (a) 12 Best Spas Direct lead alerts (Aug 7–19)
+      never reached the client's number +16024878655 — user was asked, did not
+      decide, nothing sent. Structural cause worth fixing: BlueBubbles is the
+      ONLY provider that can reach it because Sendblue 400s it ("contact must
+      be verified") and Telnyx 40010/10039s it ("only pre-verified
+      destinations") — both are in trial/sandbox mode, so the failover chain
+      has no path whenever BlueBubbles blips. One lead (Ervin Sloboda, Aug 7)
+      reached NOBODY; the org ops number got the other 11. (b) BSD auto has
+      exit_on_reply=False and ZERO reply steps, so replies to those 42 openers
+      get no automated response AND the day-2 follow-up sends regardless of
+      what the lead said — including "not interested". (c) Paused/archived
+      backlog untouched (ppf/tint 850 errored, ppf/vinyl 782 parked + 68
+      errored, exotics2 345 parked, plus 22 + 5 unanswered replies in those two)
+      — parked because the campaigns are paused, not because of the outage.
+      (d) Four q3 rentals prospects replied after the sequence ran out of steps
+      (Forza: "Send the leads and we can discuss after"); no step 3 exists, so
+      nothing will ever answer them. (e) ~42% of that account's sends over 3
+      days failed error 22; lookups resolve correctly now, so those were the
+      Mac defaulting to iMessage while availability lookups were failing.
 - [ ] Stripe live activation + entitlement flip (after 12–14, so real
       limits land everywhere in one pass)
 - [ ] Outreach module build (dev-mode) — go-live gated on Meta App
