@@ -3549,6 +3549,141 @@ live activation + the entitlement flip, the Outreach module build
       cancel endpoint scopes by hand rather than scope.get_or_404, which
       asserts obj.client_id — EnrichmentJob is org-scoped with no client, the
       same trap that 500'd the client-scoped summary earlier. Tests 677 → 678.
+- [x] SMS tracking accuracy + speed (2026-08-20, three-Opus-agent audit →
+      engine rewrite by the primary session + a metrics/UI agent against a
+      pinned contract, then live-verified on prod): migration e8c5a2d71f43
+      adds sms_messages.delivered_at/failed_at (WHEN a transition happened —
+      only the status string was stored, so time-to-delivery was
+      unmeasurable), last_checked_at/check_attempts (the re-poll cursor), an
+      ix_sms_messages_verify_scan index, and ix_sms_messages_campaign_id
+      (every campaign-scoped stat filtered on an unindexed column).
+      (1) VERIFICATION IS NOW RE-POLLABLE — the headline change. The
+      BlueBubbles pass was one-shot at MIN_AGE=4min and HAD to be: the relay
+      can report error=0 on a send that later flips to failed, so reading
+      early would retire a dead send as successful, permanently, with no
+      re-check possible (verified_at was the only cursor). The two outcomes
+      are not equally trustworthy at the same age, so they now terminalize on
+      DIFFERENT clocks: FIRST_CHECK_AGE=45s + RECHECK_INTERVAL=60s +
+      MAX_CHECKS=8, where a nonzero error is trusted on first sight, while a
+      success stays provisional (recorded, re-polled) until
+      CONFIRM_SUCCESS_AGE=4min. Net: dead sends are caught ~4x faster with a
+      STRONGER success guarantee than before. Measured live in prod: first
+      look at 63s (45s + one tick) vs the old 240s floor; successes confirm at
+      ~251s as designed. Also moved OFF the email tick (which does IMAP sync
+      and mailbox reprobes first and can block for minutes) onto its own
+      _sms_verify_scheduler loop, settings.sms_verify_tick_seconds=30, floor
+      10s — the interval is now a dial that affects nothing else. Sizing: 25
+      lookups/account/tick ≈ 0.8 req/s against the ~4 req/s per-Apple-ID relay
+      ceiling measured in services/imessage_check.py.
+      (2) MONOTONIC STATUS LADDER (models/sms_outreach.advance_status) —
+      status is ONE destructive column and receipts arrive out of order as a
+      matter of course (Sendblue emits DELIVERED and READ separately,
+      providers retry, the verify pass reads back minutes later). A late
+      'delivered' after a 'read' used to downgrade the row, dropping the read
+      out of analytics entirely (by_day keys on status=='read'); a late
+      failure after a confirmed delivery could rewind an enrollment that had
+      already succeeded and RE-TEXT the lead. Every writer (webhooks + verify)
+      now goes through the ladder; proof-of-arrival still overrides an earlier
+      failure guess, and doing so clears the stale error_code/failed_at.
+      (3) WEBHOOK CORRECTNESS: lookups scoped to the account AND to outbound
+      rows (inbound rows carry a provider_sid too, and read_at means the
+      OPPOSITE thing on them — a lead's own delivery receipt was stamping
+      their reply as read and clearing it from the operator's unread list, the
+      same bug independently fixed on the BlueBubbles updated-message branch,
+      which never checked isFromMe); .first() instead of .scalar_one_or_none()
+      so a duplicate provider_sid (reachable via the duplicate-send rescue
+      probe) can't 500 the webhook into an infinite provider-retry loop that
+      loses every later receipt; inbound is now IDEMPOTENT by provider_sid
+      (a retried webhook duplicated the row AND re-ran handle_reply, which
+      re-schedules the reply step and texts the lead again — note sessions are
+      autoflush=False, so the guard flushes first); _contacts_for_number is
+      ordered so a number shared by two contacts attributes deterministically.
+      Status vocabulary extended: Twilio undelivered (carrier rejection —
+      distinct cause, own detail line) / canceled, Telnyx delivery_unconfirmed
+      (recorded as neither success nor failure), plus error_detail from the
+      webhook, which previously left webhook failures as a bare number in the
+      failure breakdown.
+      (4) VERIFY-PASS BUG FIXES: a relay 401/5xx no longer looks identical to
+      "unknown guid" — it raises RelayUnavailable and leaves the row alone
+      (a rotated password used to stamp verified_at on a whole batch with no
+      outcome recorded and no way to re-check, the exact opposite of the
+      module's purpose); the relay's `error` is coerced via _as_int (it has
+      been observed as a numeric STRING, and a bare == 0 read a DELIVERED
+      message as failed and re-sent it); dateRead/service are captured (the
+      send path never recorded a service, so green-bubble downgrades were
+      invisible to channel_health); the requeue no longer rewinds blindly —
+      it checks whether a LATER step already reached the lead (rewinding
+      re-sends a message they already got and un-parks a conversation
+      legitimately awaiting reply), and jitters next_run_at so a batch of
+      device failures doesn't come due at one instant and contend for the
+      account's single spacing slot.
+      (5) SEND PATH: provider_sid is stored as `sid or None` (an empty guid
+      satisfied IS NOT NULL and was polled forever against a URL with no id);
+      the per-send /server/info capability probe is cached 10min per
+      (relay, credential) — it re-probed on EVERY send for an answer that is a
+      property of that Mac's install, spending relay budget shared with the
+      poller (tests that assert probe behavior clear it via
+      sms_send.reset_method_cache, wired as an autouse fixture);
+      channel_health's `sent` was the last exclusive-sent counter in the
+      codebase (a healthy fast-receipt account reported sent: 0) and its
+      failure ratio now divides by attempts, not the raw sample.
+      (6) METRICS HONESTY (agent, api/sms_outreach.py + frontend): the
+      analytics range selector previously applied ONLY to the chart — the
+      eight headline KPIs and the whole by-campaign table were all-time under
+      a control that said "7 days"; `since` now threads through totals,
+      by_campaign and accounts (message counts are "sent in the window",
+      enrollment figures are a cohort, so numerator and denominator stay over
+      one population). Added per-lead reply/opt-out rates — the
+      message-denominated originals divide people by messages and deflate by
+      roughly the step count, so the 5% opt-out red line under-fired by ~an
+      order of magnitude on exactly the long campaigns most at risk (the
+      banner now reads off per-lead). failure_rate_7d divides by attempts
+      instead of successes (50 sent + 50 failed read "100%"; a fully dead
+      number read as nothing at all). delivery_rate/read_rate return null
+      rather than a confident 0.0% when no provider in play can emit that
+      receipt (delivery_rate is structurally ~0 on green-bubble BlueBubbles,
+      read_rate always 0 on Twilio/Telnyx) — an actual observation always
+      overrides the capability table. New: `unconfirmed` bucket (sent +
+      verified_at IS NULL — the honest "we never got an answer" state),
+      median/p90 time-to-delivery and median time-to-reply, by_day delivered
+      bucketed on delivered_at (a bar stopped mutating retroactively) plus a
+      SQL date predicate (it used to load a campaign's entire outbound history
+      per dashboard load), and inbound_webhook_stale surfaced as a danger
+      alert — a TCPA STOP-capture failure the backend already detected and the
+      UI silently discarded.
+      Tests 679 → 714 (test_sms_tracking.py + 6 re-poll cases in
+      test_sms_verify.py + the agent's test_sms_stats.py). NOTE conftest now
+      pins RESEND_API_KEY/SMTP_* empty — a populated backend/.env had the
+      suite handing REAL mail to Resend on every invite/2FA/reset test (found
+      when two email tests failed only in a tree that has a .env; the suite
+      also got 40% faster once it stopped making that network call).
+      LIVE-VERIFICATION CATCH the mocked tests missed: the dashboard's
+      "Response & timing" panel rendered "—" forever because latency was
+      computed per-campaign but the panel reads `totals` — a median cannot be
+      summed from per-campaign medians, so the helpers were generalized to
+      accept an id list and totals now measures across every campaign in
+      scope. Also corrected my own backfill script mid-flight: it originally
+      copied created_at into delivered_at for 465 historical rows, which would
+      assert every past message was delivered in ZERO seconds and poison the
+      very metric the column was added to make trustworthy — it now only
+      retires aged-out unconfirmed sends, and pre-upgrade rows stay out of the
+      latency sample. DEPLOYED to production 2026-08-20 (6011745 + 34b5f0c):
+      migration applied to the live Supabase DB (alembic current =
+      e8c5a2d71f43 head), backend+frontend rebuilt, /api/health ok, zero boot
+      errors, both new indexes confirmed present. Post-deploy prod behavior
+      audited read-only rather than assumed: the re-poll loop is live (rows
+      carrying fresh last_checked_at), and a 141-send burst was checked for a
+      retry storm before being cleared — every repeat was a genuine
+      failed→retry pair (all error 22, "recipient not reachable on iMessage",
+      now carrying human-readable detail instead of a bare number), max 2
+      sends of any one step against the cap of 3, and the paused-campaign
+      sends in the window predated the deploy.
+      FLAGGED, NOT CHANGED (needs the user's call — it changes live sending,
+      not tracking): a verified failure currently falls OUT of
+      _COUNTED_SENT_STATUSES, so a device outage retroactively RAISES that
+      day's send ceiling. Counting attempts instead is the honest reading of
+      a "daily send cap", but it would also halt a badly-misconfigured
+      account for the rest of the day.
 - [ ] Stripe live activation + entitlement flip (after 12–14, so real
       limits land everywhere in one pass)
 - [ ] Outreach module build (dev-mode) — go-live gated on Meta App
