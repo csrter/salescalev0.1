@@ -1,15 +1,19 @@
 """Backfill SMS tracking state for rows that predate the tracking upgrade.
 
-Two jobs, both idempotent and safe to re-run:
+WHAT THIS DELIBERATELY DOES NOT DO: backfill delivered_at/failed_at on
+historical rows. Those columns are new, so pre-upgrade rows carry a terminal
+status with no moment attached, and the only timestamp available is
+created_at — the SEND instant. Copying it across would assert that every
+historical message was delivered in zero seconds, which would poison exactly
+the latency metrics the column was added to make trustworthy. Leaving them
+NULL keeps those rows out of the latency sample (the metrics simply start
+accumulating from the upgrade forward, and by_day already falls back to the
+send day for legacy rows), which is the honest answer to "how fast was this
+delivered?" when the truth is "we never recorded it".
 
-1. TIMESTAMPS. delivered_at/failed_at didn't exist, so historical rows carry a
-   terminal status with no moment attached. Their created_at is the send
-   instant and is the only evidence available, so it's copied across — which
-   makes the new latency metrics report ~0 for old rows rather than dropping
-   them. Only rows whose status already says delivered/read/failed are
-   touched, and only when the timestamp is still NULL.
+One job, idempotent and safe to re-run:
 
-2. STUCK 'sent' ROWS. The old verification pass was one-shot with a hard 24h
+   STUCK 'sent' ROWS. The old verification pass was one-shot with a hard 24h
    window: if the relay was unreachable while a row aged out, it exited the
    query forever, still reading as a successful send. Prod has ~475 of these.
    The relay can no longer answer for them (BlueBubbles prunes, and the guids
@@ -30,17 +34,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from sqlalchemy import and_, or_, select, update  # noqa: E402
+from sqlalchemy import select, update  # noqa: E402
 
 from app.db import SessionLocal  # noqa: E402
 from app.models.base import utcnow  # noqa: E402
-from app.models.sms_outreach import (  # noqa: E402
-    SMS_MSG_DELIVERED,
-    SMS_MSG_FAILED,
-    SMS_MSG_READ,
-    SMS_MSG_SENT,
-    SmsMessage,
-)
+from app.models.sms_outreach import SMS_MSG_SENT, SmsMessage  # noqa: E402
 from app.services.sms_verify import MAX_AGE, MAX_CHECKS  # noqa: E402
 
 
@@ -54,13 +52,6 @@ def main() -> int:
     def count(*where) -> int:
         return len(db.execute(select(SmsMessage.id).where(*where)).all())
 
-    delivered_missing = count(
-        SmsMessage.status.in_((SMS_MSG_DELIVERED, SMS_MSG_READ)),
-        SmsMessage.delivered_at.is_(None),
-    )
-    failed_missing = count(
-        SmsMessage.status == SMS_MSG_FAILED, SmsMessage.failed_at.is_(None)
-    )
     stuck = count(
         SmsMessage.direction == "out",
         SmsMessage.status == SMS_MSG_SENT,
@@ -69,27 +60,14 @@ def main() -> int:
         SmsMessage.check_attempts < MAX_CHECKS,
     )
 
-    print(f"delivered/read rows missing delivered_at : {delivered_missing}")
-    print(f"failed rows missing failed_at            : {failed_missing}")
-    print(f"aged-out unconfirmed 'sent' rows         : {stuck}")
+    print(f"aged-out unconfirmed 'sent' rows to retire: {stuck}")
+    print("(delivered_at/failed_at are deliberately NOT backfilled — see the "
+          "module docstring)")
 
     if not args.write:
         print("\nDry run — re-run with --write to apply.")
         return 0
 
-    db.execute(
-        update(SmsMessage)
-        .where(
-            SmsMessage.status.in_((SMS_MSG_DELIVERED, SMS_MSG_READ)),
-            SmsMessage.delivered_at.is_(None),
-        )
-        .values(delivered_at=SmsMessage.created_at)
-    )
-    db.execute(
-        update(SmsMessage)
-        .where(SmsMessage.status == SMS_MSG_FAILED, SmsMessage.failed_at.is_(None))
-        .values(failed_at=SmsMessage.created_at)
-    )
     # Stop re-polling rows the relay can no longer answer for. verified_at
     # stays NULL on purpose: "we never got an answer" is the honest state.
     db.execute(
