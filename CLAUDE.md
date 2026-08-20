@@ -3951,6 +3951,53 @@ live activation + the entitlement flip, the Outreach module build
       (~$0.003 Telnyx / ~$0.008 Twilio). The skip rule above means only
       non-iMessage numbers are ever looked up.
 
+- [x] SMS reply latency — reply steps get their own scheduler loop
+      (2026-08-20): user reported reply responses landing later than the
+      configured 4 minutes. Measured in prod over 49 reply sends before
+      touching anything: median 48s of lag ON TOP of the configured wait, p90
+      126s — a 4-minute step delivering at 4:05-6:00. ROOT CAUSE: SMS campaign
+      sends rode the shared 60s email tick (main.py _email_outreach_scheduler,
+      item (d)), so a response that came due one second after a tick was not
+      even LOOKED at for another full minute. Watching the tick live confirmed
+      it: tick gaps of 63s and enrollments sitting due for up to 64s before
+      being picked up. This is the same reasoning that already moved
+      sms_verify onto its own loop; it had never been applied to the far more
+      time-sensitive campaign sends. FIX: new _sms_campaign_scheduler loop
+      owning sms_campaigns.run_due. Rather than a fixed fast interval it
+      sleeps until the next enrollment is actually DUE — new
+      sms_campaigns.seconds_until_next_due(db), an index-only probe of
+      ix_sms_enrollments_next_run_at (0.17ms, verified by EXPLAIN ANALYZE on
+      prod's 4,034 enrollments) — so an idle org still costs one query per
+      sms_campaign_tick_seconds (30) while a response due in 7s is sent in
+      ~7s. Already-overdue work earns the fast path ONLY when the tick made
+      progress, so an enrollment that keeps throwing can't spin the loop at
+      its 2s floor. DELIBERATELY NOT MOVED: lead_notify.retry_failed stays on
+      the 60s tick — its "one retry per pair per tick" IS its backoff between
+      attempts at a flaky device, so the faster loop would machine-gun a
+      broken Apple ID (the exact thing that pacing exists to prevent). Cold
+      drip pacing is unchanged: those are spaced by the gateway's per-account
+      min-send throttle, decided from the DB before any provider call.
+      Documented a now-load-bearing INVARIANT next to scheduler_db_pool_size:
+      peak scheduler connection demand IS the loop count (each loop holds at
+      most one session), so pool_size+max_overflow (5) must stay >= the number
+      of loops (now 5) — at parity it can never exhaust, but a 6th loop added
+      without raising it would block on checkout and silently add latency to
+      every tick. Tests 727 -> 728 (the new probe's contract, incl. None-vs-0
+      meaning idle-vs-work-waiting; NOTE the probe is global like the
+      scheduler, so the test parks every other enrollment and restores them —
+      it failed in-file but passed alone until it did). DEPLOYED to production
+      2026-08-20 (bd91e85) — backend only, NO migration (alembic stays
+      e2b7d4f1a9c6), health green, zero boot errors. No desktop rebuild
+      needed: desktop_mode runs no schedulers, so the change is inert there,
+      and with no migration the installed app has no stale-revision exposure.
+      VERIFIED LIVE against real traffic after the deploy: worst observed
+      due-wait 0s (was 64s), and three real reply sends landed at 4.02m /
+      4.02m / 4.17m against a 4-minute step (lag 1-10s vs the 48s median
+      before). Worth knowing for future forensics: the 12-22 min "outliers"
+      in the before-data were NOT engine lag — they were the previous
+      session's own manual branch remediation (3 leads re-opened and fired
+      together at 18:36), which is why they clustered in one second.
+
 - [ ] Stripe live activation + entitlement flip (after 12–14, so real
       limits land everywhere in one pass)
 - [ ] Outreach module build (dev-mode) — go-live gated on Meta App
