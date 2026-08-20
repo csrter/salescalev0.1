@@ -821,6 +821,10 @@ class ContactOutTeam(ContactOutPublic):
     sms_opt_in: bool = False
     sms_opt_in_at: Optional[dt.datetime] = None
     sms_opt_in_source: Optional[str] = None
+    # iMessage reachability of the contact's number (None = never checked)
+    # — team-only routing signal, decides blue-bubble vs green-bubble SMS.
+    imessage_capable: Optional[bool] = None
+    imessage_checked_at: Optional[dt.datetime] = None
     # AI research field answers (key -> {"value","confidence","source_url",
     # "researched_at"}) — agency workflow data, never in the client portal.
     research: Optional[Dict[str, Any]] = None
@@ -1072,6 +1076,21 @@ class VerifyContactsIn(BaseModel):
     """Phase 12: bulk email verification of a manually selected contact set."""
 
     contact_ids: List[str] = Field(min_length=1, max_length=500)
+
+
+class ImessageCheckIn(BaseModel):
+    """Bulk iMessage-capability lookup. Unlike the other bulk contact
+    actions this one is paced and runs in the background, so the normal
+    case is the WHOLE CRM: omit contact_ids (or send null) to sweep every
+    contact in the org. An explicit selection keeps the same 500 cap as
+    the other bulk endpoints, since those are resolved one get_or_404 at
+    a time. `force` re-checks contacts whose verdict is still fresh."""
+
+    contact_ids: Optional[List[str]] = Field(default=None, max_length=500)
+    # Scope a whole-CRM sweep to one client, so the count the UI shows and
+    # the set actually checked are the same population.
+    client_id: Optional[str] = None
+    force: bool = False
 
 
 class QualificationIn(BaseModel):

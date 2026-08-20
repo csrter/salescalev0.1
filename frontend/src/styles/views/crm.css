@@ -909,6 +909,14 @@
   font-size: var(--text-sm);
   color: var(--ink-soft);
 }
+/* Explanatory line under a status readout — quieter than .crm-enrich-line,
+   used by the iMessage coverage card to say what the number means. */
+.crm-enrich-sub {
+  margin: 0;
+  font-size: var(--text-xs);
+  color: var(--ink-faint);
+  max-width: 62ch;
+}
 .crm-enrich-history {
   margin: 0;
   padding: 0;

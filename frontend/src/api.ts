@@ -1474,6 +1474,41 @@ export const enrichContacts = (contactIds: string[]) =>
     body: JSON.stringify({ contact_ids: contactIds }),
   });
 
+/** Look up which leads' phone numbers are registered on iMessage, so an
+ * audience can be split into blue-bubble reachable vs SMS-only before a
+ * campaign runs. Sends nothing to the contact — it's Apple's availability
+ * lookup through the org's BlueBubbles relay. Omit contactIds to sweep the
+ * whole CRM; progress shows in the Enrichment status card. */
+export const imessageCheck = (opts: {
+  contactIds?: string[];
+  /** Scope a whole-CRM sweep to one client — must match the population the
+   * caller counted, or the button promises one number and checks another. */
+  clientId?: string;
+  force?: boolean;
+} = {}) =>
+  api<{ queued: number | "all" }>("/api/crm/contacts/imessage-check", {
+    method: "POST",
+    body: JSON.stringify({
+      contact_ids: opts.contactIds ?? null,
+      client_id: opts.clientId ?? null,
+      force: opts.force ?? false,
+    }),
+  });
+
+export interface ImessageSummary {
+  total: number;
+  with_number: number;
+  checked: number;
+  imessage: number;
+  sms_only: number;
+  unchecked: number;
+}
+
+export const imessageSummary = (clientId?: string) =>
+  api<ImessageSummary>(
+    `/api/crm/contacts/imessage-summary${clientId ? `?client_id=${clientId}` : ""}`,
+  );
+
 /** One enrichment run's progress record (the CRM status card). `status`
  * "interrupted" is server-derived: a running job whose heartbeat went
  * quiet (backend restarted mid-run). */

@@ -45,6 +45,9 @@ import {
   runResearch,
   updateContact,
   enrichContacts,
+  imessageCheck,
+  imessageSummary,
+  type ImessageSummary,
   getEnrichmentJobs,
   type EnrichmentJob,
   verifyContacts,
@@ -135,6 +138,10 @@ interface ContactRow {
   // workflow, never a client-portal field).
   verification_status?: VerificationStatus | null;
   verified_at?: string | null;
+  // iMessage reachability of the lead's number (team payloads only).
+  // undefined/null = never checked — NOT the same as "not on iMessage".
+  imessage_capable?: boolean | null;
+  imessage_checked_at?: string | null;
   qualification?: Record<string, boolean> | null;
   custom_fields?: CustomValues | null;
   attribution?: {
@@ -223,6 +230,19 @@ function VerificationBadge({ contact }: { contact?: ContactRow | null }) {
     <Badge tone={status}>
       {status === "unverified" ? "unverified email" : `email ${status}`}
     </Badge>
+  );
+}
+
+/** iMessage reachability of the lead's number. Three states, and the
+ * distinction matters: "not checked" is not "not on iMessage" — a failed
+ * relay lookup is never recorded, so an unchecked lead may well be blue. */
+function ImessageBadge({ contact }: { contact?: ContactRow | null }) {
+  const capable = contact?.imessage_capable;
+  if (capable == null) return <Badge tone="neutral">not checked</Badge>;
+  return capable ? (
+    <Badge tone="ok">iMessage</Badge>
+  ) : (
+    <Badge tone="warn">SMS only</Badge>
   );
 }
 
@@ -393,6 +413,14 @@ export function CrmView({
       />
 
       {isTeam && <EnrichmentStatusCard active={active} />}
+      {isTeam && (
+        <ImessageCoverageCard
+          clientId={clientId}
+          active={active}
+          toast={toast}
+          onChecked={refresh}
+        />
+      )}
 
       <LeadList
         contacts={contacts}
@@ -863,6 +891,107 @@ const ENRICH_STATUS_TONE: Record<EnrichmentJob["status"], "ok" | "warn" | "dange
   interrupted: "warn",
 };
 
+
+/** iMessage reachability across the CRM: how much of the audience is
+ * blue-bubble reachable, and the one-click sweep of every lead. This is
+ * the whole-CRM entry point — the lead-list bulk bar only ever checks the
+ * rows you selected. Team-only. */
+function ImessageCoverageCard({
+  clientId,
+  active = true,
+  toast,
+  onChecked,
+}: {
+  clientId?: string;
+  active?: boolean;
+  toast: (msg: string, tone?: "ok" | "error") => void;
+  /** Called when new verdicts have landed, so the lead list's iMessage
+   * column refetches — otherwise the card reads 100% while every row still
+   * says "not checked" until the next navigation. */
+  onChecked?: () => void;
+}) {
+  const [summary, setSummary] = useState<ImessageSummary | null>(null);
+  const [busy, setBusy] = useState(false);
+  const checkedRef = useRef<number | null>(null);
+
+  const load = useCallback(() => {
+    imessageSummary(clientId)
+      .then((next) => {
+        setSummary(next);
+        // Only nudge the list when the count actually moved — a plain poll
+        // must not spin the whole CRM view.
+        if (checkedRef.current !== null && next.checked > checkedRef.current) {
+          onChecked?.();
+        }
+        checkedRef.current = next.checked;
+      })
+      .catch(() => {});
+  }, [clientId, onChecked]);
+
+  useEffect(load, [load]);
+  useEffect(() => {
+    window.addEventListener(ENRICH_QUEUED_EVENT, load);
+    return () => window.removeEventListener(ENRICH_QUEUED_EVENT, load);
+  }, [load]);
+  // Refresh while the view is visible so verdicts land as the paced sweep
+  // works through the list; a hidden (kept-mounted) tab never polls.
+  useEffect(() => {
+    if (!active || !summary || summary.unchecked === 0) return;
+    const t = setInterval(load, 10000);
+    return () => clearInterval(t);
+  }, [active, summary, load]);
+
+  if (!summary || summary.with_number === 0) return null;
+
+  const pct =
+    summary.with_number > 0
+      ? Math.round((summary.checked / summary.with_number) * 100)
+      : 0;
+
+  const runAll = () => {
+    setBusy(true);
+    imessageCheck({ clientId })
+      .then(() => {
+        toast(
+          "Checking every lead with a phone number. Lookups are paced at one per second, so this runs in the background.",
+          "ok",
+        );
+        window.dispatchEvent(new Event(ENRICH_QUEUED_EVENT));
+      })
+      .catch((e) => toast((e as Error).message, "error"))
+      .finally(() => setBusy(false));
+  };
+
+  return (
+    <div className="glass-card crm-enrich-card">
+      <div className="crm-enrich-head">
+        <h4 className="crm-subhead crm-subhead--sm">iMessage coverage</h4>
+        <span className="crm-enrich-pct">{pct}%</span>
+        <Badge tone={summary.unchecked === 0 ? "ok" : "neutral"}>
+          {summary.checked} of {summary.with_number} checked
+        </Badge>
+      </div>
+      <div className="crm-enrich-bar" role="progressbar" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100}>
+        <div className="crm-enrich-bar-fill" style={{ transform: `scaleX(${pct / 100})` }} />
+      </div>
+      <p className="crm-enrich-line">
+        {summary.imessage} reachable on iMessage · {summary.sms_only} SMS only
+        {summary.unchecked > 0 && ` · ${summary.unchecked} not checked yet`}
+      </p>
+      <p className="crm-enrich-sub">
+        Decides whether a BlueBubbles send lands as a blue iMessage or has to
+        go out as green-bubble SMS through the host Mac's Text Message
+        Forwarding. Checking sends nothing to the lead.
+      </p>
+      {summary.unchecked > 0 && (
+        <Button variant="ghost" size="sm" onClick={runAll} disabled={busy}>
+          Check all {summary.unchecked} unchecked
+        </Button>
+      )}
+    </div>
+  );
+}
+
 /** Enrichment status: whether a run is processing right now, live progress
  * with a pace-based ETA, and recent history. Polls while a job is running;
  * renders nothing until the org has ever enriched. */
@@ -994,6 +1123,7 @@ function LeadList({
   const [sysCols, setSysCols] = useState<string[]>([]);
   const [filters, setFilters] = useState<CfFilter[]>([]);
   const [verifFilter, setVerifFilter] = useState<string>("");
+  const [imsgFilter, setImsgFilter] = useState<string>("");
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [confirmingBulk, setConfirmingBulk] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -1078,6 +1208,14 @@ function LeadList({
     let out = contacts;
     if (verifFilter)
       out = out.filter((c) => (c.verification_status ?? "unverified") === verifFilter);
+    if (imsgFilter)
+      out = out.filter((c) =>
+        imsgFilter === "unchecked"
+          ? c.imessage_capable == null
+          : imsgFilter === "imessage"
+            ? c.imessage_capable === true
+            : c.imessage_capable === false,
+      );
     if (debouncedFilters.length === 0) return out;
     return out.filter((c) =>
       debouncedFilters.every((f) => {
@@ -1085,7 +1223,7 @@ function LeadList({
         return d ? matchesFilter(c, d, f) : true;
       })
     );
-  }, [contacts, debouncedFilters, defByKey, verifFilter]);
+  }, [contacts, debouncedFilters, defByKey, verifFilter, imsgFilter]);
 
   // --- bulk selection (admin-only) ---
   const visibleIds = useMemo(() => rows.map((r) => r.id), [rows]);
@@ -1220,6 +1358,14 @@ function LeadList({
             render: (c) => <VerificationBadge contact={c} />,
             sortValue: (c) => c.verification_status ?? "",
           } satisfies Column<ContactRow>,
+          {
+            key: "imessage",
+            header: "iMessage",
+            render: (c) => <ImessageBadge contact={c} />,
+            // unchecked sorts last — the actionable rows group together
+            sortValue: (c) =>
+              c.imessage_capable == null ? 2 : c.imessage_capable ? 0 : 1,
+          } satisfies Column<ContactRow>,
         ]
       : []),
     {
@@ -1272,6 +1418,19 @@ function LeadList({
               <option value="invalid">Invalid</option>
               <option value="unknown">Unknown</option>
               <option value="unverified">Unverified</option>
+            </select>
+          )}
+          {isTeam && (
+            <select
+              className="crm-verif-filter"
+              aria-label="Filter by iMessage reachability"
+              value={imsgFilter}
+              onChange={(e) => setImsgFilter(e.target.value)}
+            >
+              <option value="">All numbers</option>
+              <option value="imessage">iMessage</option>
+              <option value="sms">SMS only</option>
+              <option value="unchecked">Not checked</option>
             </select>
           )}
           {pickableDefs.length > 0 && (
@@ -1437,6 +1596,23 @@ function LeadList({
                   }}
                 >
                   Enrich contact info
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => {
+                    imessageCheck({ contactIds: [...selected] })
+                      .then((r) => {
+                        toast(
+                          `iMessage check queued for ${r.queued} lead${r.queued === 1 ? "" : "s"} — lookups are paced, progress in the status card above`,
+                          "ok",
+                        );
+                        window.dispatchEvent(new Event(ENRICH_QUEUED_EVENT));
+                      })
+                      .catch((e) => toast((e as Error).message, "error"));
+                  }}
+                >
+                  Check iMessage
                 </Button>
                 <Button
                   variant="danger-outline"

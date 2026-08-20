@@ -77,6 +77,7 @@ from ..schemas import (
     DealOut,
     DealUpdateIn,
     QualificationIn,
+    ImessageCheckIn,
     ResearchFieldIn,
     ResearchFieldOut,
     ResearchFieldPatch,
@@ -90,6 +91,7 @@ from ..services import crm as crm_svc
 from ..services import custom_fields as custom_fields_svc
 from ..services import email_verification
 from ..services import entitlements, external_sync, metrics
+from ..services import imessage_check
 from ..services import lead_finder as lead_finder_svc
 from ..services import research as research_svc
 from ..services import sms_consent
@@ -584,6 +586,26 @@ def bulk_update_contacts(
         raise HTTPException(400, str(e))
     db.commit()
     return {"updated": len(contacts), "skipped": len(body.contact_ids) - len(contacts)}
+
+
+@router.get("/contacts/imessage-summary")
+def imessage_summary(
+    client_id: Optional[str] = None,
+    user: User = Depends(require_team),
+    scope: TenantScope = Depends(get_scope),
+    db: Session = Depends(get_db),
+):
+    """How much of the CRM is blue-bubble reachable.
+
+    MUST stay above GET /contacts/{contact_id} — FastAPI matches routes in
+    registration order, so a literal path declared after the catch-all is
+    swallowed by it and 404s as "no contact with id imessage-summary"."""
+    if client_id:
+        # NOT scope.get_or_404 — that asserts obj.client_id, which a Client
+        # row doesn't have (AttributeError -> 500). _client_for is this
+        # module's client-scoping helper for exactly that reason.
+        _client_for(db, scope, client_id)
+    return imessage_check.summary(db, scope.organization_id, client_id)
 
 
 @router.get("/contacts/{contact_id}")
@@ -1321,6 +1343,46 @@ def enrich_contacts_bulk(
         [c.id for c in contacts],
     )
     return {"queued": len(contacts)}
+
+
+@router.post("/contacts/imessage-check")
+def imessage_check_bulk(
+    body: ImessageCheckIn,
+    background: BackgroundTasks,
+    user: User = Depends(require_team),
+    scope: TenantScope = Depends(get_scope),
+    db: Session = Depends(get_db),
+):
+    """Look up which of the given contacts' numbers are registered on
+    iMessage, so an audience can be split into blue-bubble reachable vs
+    SMS-only BEFORE a campaign runs. Sends nothing to the contact — this is
+    Apple's IDS availability lookup through the org's BlueBubbles relay.
+
+    Background because the lookups are deliberately paced (see
+    services/imessage_check); the caller polls /enrich/jobs like every other
+    bulk pass. An empty contact_ids means the org's whole CRM."""
+    account = imessage_check.resolve_account(db, scope.organization_id)
+    if account is None:
+        raise HTTPException(
+            400,
+            "No active BlueBubbles account. iMessage lookups run through a "
+            "BlueBubbles relay — connect one in SMS \u2192 Accounts.",
+        )
+    if body.contact_ids:
+        contacts = [scope.get_or_404(db, Contact, cid) for cid in body.contact_ids]
+        ids = [c.id for c in contacts]
+    else:
+        ids = None
+    if body.client_id:
+        _client_for(db, scope, body.client_id)
+    background.add_task(
+        imessage_check.run_check,
+        scope.organization_id,
+        ids,
+        client_id=body.client_id,
+        force=body.force,
+    )
+    return {"queued": len(ids) if ids is not None else "all"}
 
 
 # Heartbeat threshold for declaring a running job interrupted: one contact's

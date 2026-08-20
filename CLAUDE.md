@@ -3424,6 +3424,65 @@ live activation + the entitlement flip, the Outreach module build
       refreshed sha-identical. Follow-up: the email module's EnrollDialog has
       the identical house-only limitation and the same two hooks to
       generalize.
+- [x] iMessage capability check (2026-08-19): a bulk "which of my leads are
+      reachable on iMessage?" pass, so an audience can be split into
+      blue-bubble vs green-bubble-SMS BEFORE a campaign runs instead of one
+      failed send at a time. Contacts gained imessage_capable (nullable
+      Boolean) + imessage_checked_at (migration d6b4c9e2a17f, additive);
+      NULL means never checked, which is deliberately distinct from False.
+      services/imessage_check.py drives Apple's IDS lookup through the org's
+      BlueBubbles relay (/api/v1/handle/availability/imessage — the same call
+      sms_send._bluebubbles_resolve_service already makes per send; it SENDS
+      NOTHING to the contact). Three rules the module exists to enforce:
+      (1) a FAILED lookup writes nothing — the send path defaults
+      optimistically to iMessage on a blip because refusing to send is worse
+      than trying, but a stored label has the opposite trade-off and one wrong
+      verdict silently misroutes a whole segment; (2) lookups are PACED at
+      1/sec (CHECK_SPACING_SECONDS) — same reasoning as the send-spacing
+      throttle, since this runs through one Mac and one Apple ID and bursts
+      are what get an ID rate-limited; (3) verdicts cache for
+      RECHECK_AFTER_DAYS=30 and identical numbers are looked up once
+      (Apple's answer is a property of the NUMBER, not the CRM row).
+      MAX_PER_RUN=3000. Progress reuses the existing EnrichmentJob row with
+      phase="imessage", so the CRM's status card shows it with no new
+      plumbing. API: POST /api/crm/contacts/imessage-check (require_team,
+      background; contact_ids for a selection, or omit for a whole-CRM sweep
+      optionally scoped by client_id) + GET /contacts/imessage-summary.
+      Frontend: an "iMessage coverage" card in the CRM (whole-CRM entry
+      point, progress bar, iMessage/SMS-only/unchecked counts), a "Check
+      iMessage" bulk-bar action for a selection, an iMessage column
+      (iMessage / SMS only / not checked) and a matching filter.
+      TWO BUGS CAUGHT IN LIVE VERIFICATION, both invisible to unit tests as
+      first written: GET /contacts/imessage-summary was registered AFTER
+      GET /contacts/{contact_id}, so FastAPI's in-order matching let the
+      catch-all swallow it (404 "no contact with id imessage-summary") — it
+      now sits above that route with a comment saying why; and the endpoint
+      used scope.get_or_404(db, Client, ...), which asserts obj.client_id —
+      an attribute a Client row does not have — so any client-scoped call
+      500'd. _client_for is this module's client-scoping helper for exactly
+      that reason. Both are now regression-tested. A third fix came from
+      watching the UI: the coverage card counted one client's leads while
+      its button swept the whole org (promised 5, checked 27), so client_id
+      threads through the request; and the lead-list column stayed "not
+      checked" after a run until the card began nudging the list to refetch
+      when the checked count moves. Also hardened: decrypt_secret("") raises
+      InvalidToken (which stringifies to ""), so an account with no stored
+      password now raises a readable "reconnect the account" error instead
+      of an opaque failure — that same gap had made one test pass vacuously.
+      Tests 669 → 676 (test_imessage_check.py, own imc_org fixture — NOTE the
+      signup email must be unique suite-wide; test_imessage_outreach.py
+      already claims owner@imessageco.com and the collision errored 19 of its
+      tests). Verified live on alt2 against THIS Mac's real relay end to end:
+      card → button → paced background run → real Apple lookups → verdicts
+      persisted → column and card both updated, zero current console errors.
+      Real finding from that run: all 27 checked leads (incl. the exotic-
+      rental import) are SMS-only, i.e. a BlueBubbles campaign against that
+      audience is entirely green-bubble via Text Message Forwarding. Positive
+      path confirmed separately against handles the Mac already knows are
+      iMessage (5/5 true). Known quirk: the org's OWN numbers report
+      available=false — Apple doesn't report your own aliases as available to
+      you. NOT DEPLOYED — carries a migration, so web + desktop must ship in
+      lockstep.
 - [ ] Stripe live activation + entitlement flip (after 12–14, so real
       limits land everywhere in one pass)
 - [ ] Outreach module build (dev-mode) — go-live gated on Meta App

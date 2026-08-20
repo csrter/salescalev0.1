@@ -149,6 +149,17 @@ class Contact(Base):
         DateTime(timezone=True)
     )
     sms_opt_in_source: Mapped[Optional[str]] = mapped_column(String(100))
+    # iMessage capability of the contact's SMS number (mobile_phone, else
+    # phone), as reported by the org's BlueBubbles relay's Apple IDS lookup.
+    # None = never checked. True = blue-bubble reachable; False = plain
+    # cellular/landline, so a BlueBubbles send would have to go out as
+    # green-bubble SMS via the host Mac's Text Message Forwarding. Written
+    # only by services/imessage_check.py; a lookup FAILURE never writes
+    # (stays None) so a transient relay blip can't mislabel an audience.
+    imessage_capable: Mapped[Optional[bool]] = mapped_column(Boolean)
+    imessage_checked_at: Mapped[Optional[dt.datetime]] = mapped_column(
+        DateTime(timezone=True)
+    )
     # AI research fields (Claygent-lite): key -> {"value", "confidence",
     # "source_url", "researched_at"}, keyed by ResearchFieldDef.key. Written
     # via services/research.py only; reassign-whole-dict on write (same JSON-
@@ -183,6 +194,8 @@ RESERVED_CONTACT_FIELD_KEYS: frozenset[str] = frozenset(
         "sms_opt_in",
         "sms_opt_in_at",
         "sms_opt_in_source",
+        "imessage_capable",
+        "imessage_checked_at",
         "qualification",
         "qualified",
         "qualified_at",
