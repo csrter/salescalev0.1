@@ -3998,6 +3998,60 @@ live activation + the entitlement flip, the Outreach module build
       session's own manual branch remediation (3 leads re-opened and fired
       together at 18:36), which is why they clustered in one second.
 
+- [x] SMS: stop auto-replying once the branch response has been sent
+      (2026-08-20): user — "after the pitch is sent there should be no more
+      replies after their response." This was a real defect, not just a
+      preference: nothing stopped an enrollment RE-OPENING from COMPLETED on
+      every later keyword match (handle_reply's completed branch), so the
+      sequence kept talking. Prod evidence: epoxy tx sent "My apologies! Have
+      a great day!" 17 times across 9 leads, and 8 leads were pitched AND then
+      sent the parting message on top when they answered the pitch. New rule:
+      once a reply step sends a matched BRANCH response — the pitch, the
+      parting message, the real answer — that enrollment stops answering
+      (both the active reply-step scheduling and the completed re-open path
+      skip it). The reply is still received, recorded and attributed
+      (ledger row + last_reply_at), so the team reads it in Messages and reply
+      stats stay honest; the sequence just never speaks again. THE LOAD-BEARING
+      NUANCE: the step's generic DEFAULT body deliberately does NOT count as
+      the answer. In prod the pitch is frequently delivered by the re-open
+      path — the lead's first text matches nothing, gets the placeholder
+      ("Thanks for getting back to me!"), and the branch fires on their next
+      message (3 of q3 epoxy's 5 default-sends were exactly this). Treating
+      the default as terminal would have silently killed those pitches.
+      Migration a7d2f4b8e315 (both additive): sms_enrollments.branch_sent_at
+      (when the real answer went out; NULL = not yet) + sms_campaigns.
+      stop_after_branch (default true, server_default true) so a deliberately
+      multi-turn campaign can opt out. Threaded through SmsCampaignIn/Patch
+      (PATCH applies fields generically, so no endpoint change), _campaign_out,
+      and the enrollment serializer. Frontend: a Config Switch ("Hand off to a
+      human after a branch response") next to the compliance-footer toggle,
+      and an "answered" Badge in the campaign Audience tab. NOTE q3 rentals is
+      structurally immune — its reply step has NO branches (its pitch IS the
+      default body), so it could never re-open; its one apparent duplicate was
+      a genuine failed-send retry by the verify pass (failed 13:56 -> delivered
+      14:07), which also retroactively explains the last session's unexplained
+      "12.4m lag" outlier. Tests 728 -> 731 (branch response is terminal and
+      the follow-up gets silence while still being recorded; the default does
+      NOT close the door and the branch still fires on the next message;
+      stop_after_branch=false preserves multi-turn). DEPLOYED to production
+      2026-08-20 (b8cf7fe), web + desktop: migration applied to the live
+      Supabase DB via the container-boot flow (alembic current = a7d2f4b8e315
+      head), /api/health 200, app 200, zero boot errors; desktop PyInstaller
+      backend + DMG (155MB, backend binary hash-matched into the app bundle,
+      the new revision confirmed inside the frozen archive via CArchiveReader),
+      installed to /Applications and launch-verified (own backend bound :8000,
+      health 200, routes auth-gated). Repo-root DMG copy refreshed
+      sha-identical. BACKFILL (the column defaults NULL, so every
+      already-pitched lead would otherwise have gotten one more branch message
+      the next time they texted a matching keyword): a prefix-match pass over
+      outbound reply-step messages marked 44 enrollments (epoxy tx 29, q3
+      epoxy 12, archived fl hvac 4) — dry-run first; the script refuses to
+      match a branch whose text is indistinguishable from the step's default,
+      or whose token-free prefix is under 12 chars, rather than guess. The
+      52-matches vs 44-writes gap IS the bug quantified: 8 leads matched both
+      the yes and no branch, i.e. were pitched and then sent the parting
+      message.
+
 - [ ] Stripe live activation + entitlement flip (after 12–14, so real
       limits land everywhere in one pass)
 - [ ] Outreach module build (dev-mode) — go-live gated on Meta App
