@@ -3891,6 +3891,66 @@ live activation + the entitlement flip, the Outreach module build
       landed correctly on the next tick (a yes pitch, and the `no` parting
       message to a lead who answered "No interested").
 
+- [x] iMessage checker also answers "can this number receive a text at all?"
+      (2026-08-20, migration e2b7d4f1a9c6): iMessage capability only
+      distinguishes blue bubble from green. A LANDLINE is neither — and Apple's
+      IDS lookup reports it identically to a mobile that simply isn't on
+      iMessage, so every SMS to it is a silent, billed failure that the checker
+      could not see. New services/line_lookup.py does a carrier-level lookup
+      through the org's OWN Telnyx or Twilio account (BYO, resolved from the
+      SmsAccount rows they already connected — Salescale never fronts a shared
+      lookup key; Telnyx preferred because its lookup is cheaper, Twilio
+      Lookup v2 line_type_intelligence as fallback; BlueBubbles/Sendblue have
+      no lookup API). contacts gained line_type / sms_capable / carrier_name /
+      line_checked_at, all nullable.
+      DESIGN RULES, each load-bearing: (1) the paid lookup is SKIPPED for
+      numbers already known iMessage-capable — those are provably live devices,
+      so paying a carrier to confirm is pure waste (line_lookup.should_skip);
+      (2) the line half has its OWN timestamp and its own _line_due, and the
+      sweep's scope is "either half is due" — without that, a contact
+      iMessage-checked last week would never reach its FIRST line lookup
+      because _due excluded it from todo entirely; (3) either half runs alone
+      (only Telnyx → deliverability only, only BlueBubbles → iMessage only, the
+      endpoint 400s only when neither is connected); (4) a failed lookup, OR a
+      provider verdict we don't recognise, records NO capability flag —
+      line_type may be "unknown" but sms_capable stays None, because
+      "we don't know" must never be stored as "cannot receive texts" (this was
+      a real bug in my first cut: `line_type in TEXTABLE` made unknown → False);
+      (5) ADVISORY ONLY — sms_consent remains the sole gate on whether a send
+      happens. A provider's say-so must not quietly drop leads from an audience.
+      VoIP counts as TEXTABLE on purpose (plenty of small businesses run
+      RingCentral/Google Voice numbers that do receive texts).
+      VERIFIED AGAINST THE LIVE TELNYX API before shipping, not just mocks:
+      six numbers whose real behaviour was already known from the send ledger —
+      five leads that had provably replied to a text, plus a known iMessage
+      cell — ALL returned "mobile". One caveat found the same way and recorded
+      in the module: a CPaaS DID (Telnyx's own sending number) comes back
+      "fixed line", so a business on RingCentral can be mislabelled
+      undeliverable; carrier_name is stored alongside so a human can check a
+      suspect verdict, and valid_number=false is mapped to its own "invalid"
+      type since it is unambiguous where carrier type is not.
+      Frontend: the lead-list iMessage cell shows an undeliverable verdict
+      ahead of the blue/green one (if the carrier says the line can't receive a
+      text, neither channel works and that's the fact that should drive
+      audience inclusion), sorts those rows first, and the filter gained
+      "Can't receive texts" / "Landline" — note "SMS only" now means
+      green-bubble-but-textable, deliberately excluding landlines. The checker
+      view's coverage card gained a second line for the deliverability counts,
+      hidden entirely until something has been looked up so an org with no
+      Telnyx/Twilio never sees an empty row. Tests 721 → 727. NOTE the
+      (org, from_number) unique index bit AGAIN while adding tests — enumerate
+      the file's claimed numbers programmatically; `grep -c` counts LINES, so a
+      "2" can be one mine + one theirs.
+      DEPLOYED 2026-08-20 (378af44) web + desktop: migration applied to the
+      live Supabase DB (alembic current = e2b7d4f1a9c6 head), health green,
+      zero boot errors, all four columns confirmed present, line_lookup
+      importable in the running container; desktop PyInstaller backend + DMG
+      (148MB, binary hash-matched, new revision confirmed in the frozen archive
+      via CArchiveReader), installed to /Applications and launch-verified.
+      COST NOTE: carrier lookups are billed per call on the org's own account
+      (~$0.003 Telnyx / ~$0.008 Twilio). The skip rule above means only
+      non-iMessage numbers are ever looked up.
+
 - [ ] Stripe live activation + entitlement flip (after 12–14, so real
       limits land everywhere in one pass)
 - [ ] Outreach module build (dev-mode) — go-live gated on Meta App
