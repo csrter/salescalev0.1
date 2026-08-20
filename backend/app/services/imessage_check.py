@@ -33,12 +33,12 @@ import time
 from typing import List, Optional
 
 import httpx
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from ..models.base import utcnow
 from ..models.core import Organization
-from ..models.crm import Contact
+from ..models.crm import Contact, ContactListMember
 from ..models.sms_outreach import SMS_ACCOUNT_ACTIVE, SmsAccount
 from ..security import decrypt_secret
 from . import sms_consent
@@ -117,12 +117,14 @@ def run_check(
     contact_ids: Optional[List[str]] = None,
     *,
     client_id: Optional[str] = None,
+    list_id: Optional[str] = None,
     force: bool = False,
 ) -> None:
     """Background pass: look up the given contacts and record iMessage
-    capability. With no contact_ids it sweeps a whole CRM — the org's, or
-    one client's when client_id is given, which must match whatever scope
-    the caller counted, or the UI promises "check 5" and checks 27.
+    capability. With no contact_ids it sweeps a whole population — the org,
+    one client's CRM (client_id), or one contact list (list_id). Whichever
+    scope the caller counted MUST be the scope passed here, or the UI
+    promises "check 5" and checks 27.
 
     Own session, per-contact commit — a crash mid-run keeps every verdict
     already written, and the EnrichmentJob row drives the CRM's existing
@@ -155,6 +157,14 @@ def run_check(
         q = select(Contact).where(Contact.organization_id == organization_id)
         if contact_ids:
             q = q.where(Contact.id.in_(contact_ids))
+        elif list_id:
+            q = q.where(
+                Contact.id.in_(
+                    select(ContactListMember.contact_id).where(
+                        ContactListMember.list_id == list_id
+                    )
+                )
+            )
         elif client_id:
             q = q.where(Contact.client_id == client_id)
         contacts = list(db.execute(q).scalars().all())
@@ -217,11 +227,25 @@ def run_check(
         db.close()
 
 
-def summary(db: Session, organization_id: str, client_id: Optional[str] = None) -> dict:
-    """Counts for the whole org (or one client): how much of the CRM is
-    blue-bubble reachable. Drives the 'X of Y checked' readout."""
+def summary(
+    db: Session,
+    organization_id: str,
+    client_id: Optional[str] = None,
+    list_id: Optional[str] = None,
+) -> dict:
+    """Counts for a population — the whole org, one client's CRM, or one
+    contact list. Drives the 'X of Y checked' readout, and must be able to
+    count exactly the scope run_check will sweep."""
     q = select(Contact).where(Contact.organization_id == organization_id)
-    if client_id:
+    if list_id:
+        q = q.where(
+            Contact.id.in_(
+                select(ContactListMember.contact_id).where(
+                    ContactListMember.list_id == list_id
+                )
+            )
+        )
+    elif client_id:
         q = q.where(Contact.client_id == client_id)
     rows = list(db.execute(q).scalars().all())
     with_number = [c for c in rows if sms_consent.contact_sms_number(c)]
@@ -234,3 +258,59 @@ def summary(db: Session, organization_id: str, client_id: Optional[str] = None) 
         "sms_only": sum(1 for c in checked if not c.imessage_capable),
         "unchecked": len(with_number) - len(checked),
     }
+
+
+def lists_coverage(
+    db: Session, organization_id: str, client_id: Optional[str] = None
+) -> list[dict]:
+    """Per-contact-list coverage for the checker view. One aggregate query
+    rather than a summary() call per list — an org with 30 lists would
+    otherwise fire 30 full contact scans to paint one table."""
+    from ..models.crm import ContactList
+
+    lq = select(ContactList).where(ContactList.organization_id == organization_id)
+    if client_id:
+        lq = lq.where(ContactList.client_id == client_id)
+    lists = list(db.execute(lq.order_by(ContactList.name)).scalars().all())
+    if not lists:
+        return []
+
+    # Members that have a usable number at all, bucketed by verdict. The
+    # "has a number" test mirrors sms_consent.contact_sms_number (mobile
+    # first, then phone) — anything without one is not checkable.
+    rows = db.execute(
+        select(
+            ContactListMember.list_id,
+            func.count(Contact.id),
+            func.count(Contact.id).filter(Contact.imessage_capable.is_(True)),
+            func.count(Contact.id).filter(Contact.imessage_capable.is_(False)),
+        )
+        .join(Contact, Contact.id == ContactListMember.contact_id)
+        .where(
+            ContactListMember.list_id.in_([lst.id for lst in lists]),
+            Contact.organization_id == organization_id,
+            (Contact.mobile_phone.isnot(None)) | (Contact.phone.isnot(None)),
+        )
+        .group_by(ContactListMember.list_id)
+    ).all()
+    by_list = {r[0]: r for r in rows}
+
+    out = []
+    for lst in lists:
+        r = by_list.get(lst.id)
+        with_number = r[1] if r else 0
+        imessage = r[2] if r else 0
+        sms_only = r[3] if r else 0
+        out.append(
+            {
+                "id": lst.id,
+                "name": lst.name,
+                "client_id": lst.client_id,
+                "with_number": with_number,
+                "checked": imessage + sms_only,
+                "imessage": imessage,
+                "sms_only": sms_only,
+                "unchecked": with_number - imessage - sms_only,
+            }
+        )
+    return out

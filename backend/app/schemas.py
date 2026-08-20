@@ -1087,9 +1087,11 @@ class ImessageCheckIn(BaseModel):
     a time. `force` re-checks contacts whose verdict is still fresh."""
 
     contact_ids: Optional[List[str]] = Field(default=None, max_length=500)
-    # Scope a whole-CRM sweep to one client, so the count the UI shows and
-    # the set actually checked are the same population.
+    # Scope a whole-CRM sweep to one client or one contact list, so the
+    # count the UI shows and the set actually checked are the same
+    # population. list_id wins when both are given.
     client_id: Optional[str] = None
+    list_id: Optional[str] = None
     force: bool = False
 
 

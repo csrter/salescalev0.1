@@ -3494,6 +3494,28 @@ live activation + the entitlement flip, the Outreach module build
       the PACKAGED backend (the runtime proof the frozen binary carries the
       module, since strings can't read the compressed archive). Repo-root DMG
       copy refreshed sha-identical.
+      SAME-DAY FOLLOW-UP (user-requested): promoted to its own top-level
+      "iMessage checker" nav item (Outreach section, team-only,
+      frontend/src/imessage.tsx, lazy-loaded like every other view) and
+      taught to check a CONTACT LIST rather than only a whole CRM. The list
+      is a first-class scope end to end — ImessageCheckIn.list_id, run_check
+      (list_id filters members via a ContactListMember subquery, and wins
+      over client_id), and summary(..., list_id) — because whatever the UI
+      COUNTS must be exactly what the sweep CHECKS, the same invariant that
+      already bit once when a card counted 5 and swept 27. New
+      GET /api/crm/imessage/lists returns per-list coverage in ONE aggregate
+      query (a summary() call per list would fire a full contact scan per row
+      to paint one table). The view: client/house scope picker, whole-CRM
+      coverage card, and a row per list with its own progress bar and
+      "Check N" button, plus live job progress polled off the shared
+      EnrichmentJob record (phase="imessage") only while the tab is visible.
+      Note the house-client id resolution in App.tsx now triggers for the
+      imessage tab too, not just crm. Tests 676 → 677 (list-scoped sweep
+      checks only members + /imessage/lists reports that list). Verified live
+      on alt2 against this Mac's real relay: nav item present under Outreach,
+      view lists both seeded lists, clicking "Check 3" on one list ran a
+      3-lead job and left the 2 non-members untouched, coverage refreshed to
+      "3 OF 3 CHECKED · 3 SMS only", all iMessage requests 200.
 - [ ] Stripe live activation + entitlement flip (after 12–14, so real
       limits land everywhere in one pass)
 - [ ] Outreach module build (dev-mode) — go-live gated on Meta App

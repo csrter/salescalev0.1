@@ -47,6 +47,7 @@ import {
   Send as LSend,
   Settings as LSettings,
   Shield as LShield,
+  Smartphone as LSmartphone,
   Sun as LSun,
   Table2 as LTable2,
   Trash2 as LTrash2,
@@ -89,6 +90,7 @@ export const LogOut = withDefaults(LLogOut, "LogOut");
 export const Mail = withDefaults(LMail, "Mail");
 export const Megaphone = withDefaults(LMegaphone, "Megaphone");
 export const MessageSquare = withDefaults(LMessageSquare, "MessageSquare");
+export const Smartphone = withDefaults(LSmartphone, "Smartphone");
 export const Moon = withDefaults(LMoon, "Moon");
 export const MoreHorizontal = withDefaults(LMoreHorizontal, "MoreHorizontal");
 export const Palette = withDefaults(LPalette, "Palette");

@@ -591,6 +591,7 @@ def bulk_update_contacts(
 @router.get("/contacts/imessage-summary")
 def imessage_summary(
     client_id: Optional[str] = None,
+    list_id: Optional[str] = None,
     user: User = Depends(require_team),
     scope: TenantScope = Depends(get_scope),
     db: Session = Depends(get_db),
@@ -605,7 +606,23 @@ def imessage_summary(
         # row doesn't have (AttributeError -> 500). _client_for is this
         # module's client-scoping helper for exactly that reason.
         _client_for(db, scope, client_id)
-    return imessage_check.summary(db, scope.organization_id, client_id)
+    if list_id:
+        scope.get_or_404(db, ContactList, list_id)
+    return imessage_check.summary(db, scope.organization_id, client_id, list_id)
+
+
+@router.get("/imessage/lists")
+def imessage_lists(
+    client_id: Optional[str] = None,
+    user: User = Depends(require_team),
+    scope: TenantScope = Depends(get_scope),
+    db: Session = Depends(get_db),
+):
+    """Per-contact-list iMessage coverage — the checker view's table, so a
+    list can be checked on its own rather than sweeping a whole CRM."""
+    if client_id:
+        _client_for(db, scope, client_id)
+    return {"lists": imessage_check.lists_coverage(db, scope.organization_id, client_id)}
 
 
 @router.get("/contacts/{contact_id}")
@@ -1375,11 +1392,14 @@ def imessage_check_bulk(
         ids = None
     if body.client_id:
         _client_for(db, scope, body.client_id)
+    if body.list_id:
+        scope.get_or_404(db, ContactList, body.list_id)
     background.add_task(
         imessage_check.run_check,
         scope.organization_id,
         ids,
         client_id=body.client_id,
+        list_id=body.list_id,
         force=body.force,
     )
     return {"queued": len(ids) if ids is not None else "all"}

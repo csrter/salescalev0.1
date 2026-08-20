@@ -78,6 +78,9 @@ const BrandingSettings = lazy(() =>
 const LeadFinderView = lazy(() =>
   import("./leadfinder").then((m) => ({ default: m.LeadFinderView })),
 );
+const ImessageView = lazy(() =>
+  import("./imessage").then((m) => ({ default: m.ImessageView })),
+);
 const OutreachView = lazy(() =>
   import("./outreach").then((m) => ({ default: m.OutreachView })),
 );
@@ -126,6 +129,7 @@ import {
   Send,
   Settings,
   Shield,
+  Smartphone,
   Sun,
   Table2,
   Users,
@@ -169,6 +173,7 @@ type Tab =
   | "clients"
   | "crm"
   | "leads"
+  | "imessage"
   | "outreach"
   | "email"
   | "sms"
@@ -185,6 +190,7 @@ const PAGE_TITLES: Record<Tab, string> = {
   clients: "Clients",
   crm: "CRM",
   leads: "Lead Finder",
+  imessage: "iMessage checker",
   outreach: "Outreach",
   email: "Email",
   sms: "SMS",
@@ -353,7 +359,7 @@ export default function App() {
   const [houseErr, setHouseErr] = useState<string | null>(null);
   const [houseBump, setHouseBump] = useState(0);
   useEffect(() => {
-    if (tab !== "crm" || !isTeamRole || houseId) return;
+    if ((tab !== "crm" && tab !== "imessage") || !isTeamRole || houseId) return;
     let alive = true;
     setHouseErr(null);
     getHouseClient()
@@ -447,6 +453,9 @@ export default function App() {
     { key: "outreach", label: "Outreach", icon: Send, section: "Outreach", show: isTeam && featureEnabled("ig_outreach") },
     { key: "email", label: "Email", icon: Mail, section: "Outreach", show: isTeam },
     { key: "sms", label: "SMS", icon: MessageSquare, section: "Outreach", show: isTeam },
+    // Segments an audience by iMessage reachability — it decides which SMS
+    // path a send takes, so it lives next to the channels it routes.
+    { key: "imessage", label: "iMessage checker", icon: Smartphone, section: "Outreach", show: isTeam },
     { key: "changes", label: "Pending changes", icon: GitBranch, section: "Activity", show: isTeam },
     { key: "audit", label: "Audit log", icon: Eye, section: "Activity", show: true },
     { key: "team", label: "Team", icon: Users, section: "Settings", show: isAdmin },
@@ -664,6 +673,16 @@ export default function App() {
                   <div className="view-host" hidden={tab !== "leads"}>
                     <Suspense fallback={<ViewFallback />}>
                       <LeadFinderView isAdmin={isAdmin} />
+                    </Suspense>
+                  </div>
+                )}
+                {isTeam && visited.has("imessage") && (
+                  <div className="view-host" hidden={tab !== "imessage"}>
+                    <Suspense fallback={<ViewFallback />}>
+                      <ImessageView
+                        active={tab === "imessage"}
+                        houseClientId={houseId ?? undefined}
+                      />
                     </Suspense>
                   </div>
                 )}

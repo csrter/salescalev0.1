@@ -269,3 +269,51 @@ def test_whole_crm_sweep_respects_the_client_scope(imc_org, monkeypatch):
     with SessionLocal() as db:
         assert db.get(Contact, mine).imessage_capable is True
         assert db.get(Contact, other).imessage_capable is None
+
+
+def test_list_scoped_sweep_and_coverage(api, imc_org, monkeypatch):
+    """A list is its own population: the sweep checks exactly its members,
+    and /imessage/lists reports that list's numbers."""
+    with SessionLocal() as db:
+        _account(db, imc_org, "relay5", "+14805550500")
+        inside = _contact(db, imc_org, "+14805550888").id
+        outside = _contact(db, imc_org, "+14805550999").id
+
+    lst = api.post(
+        "/api/crm/lists",
+        json={"client_id": imc_org["client_id"], "name": "iMessage Target List"},
+        headers=imc_org["headers"],
+    )
+    assert lst.status_code in (200, 201), lst.text
+    list_id = lst.json()["id"]
+    add = api.post(
+        f"/api/crm/lists/{list_id}/contacts",
+        json={"contact_ids": [inside]},
+        headers=imc_org["headers"],
+    )
+    assert add.status_code == 200, add.text
+
+    calls = []
+
+    def fake_get(url, **kw):
+        calls.append(kw.get("params", {}).get("address"))
+        return _available(True)
+
+    monkeypatch.setattr(imessage_check.httpx, "get", fake_get)
+    monkeypatch.setattr(imessage_check.time, "sleep", lambda s: None)
+    imessage_check.run_check(imc_org["org_id"], None, list_id=list_id)
+
+    assert calls == ["+14805550888"]
+    with SessionLocal() as db:
+        assert db.get(Contact, inside).imessage_capable is True
+        assert db.get(Contact, outside).imessage_capable is None
+
+    cov = api.get(
+        f"/api/crm/imessage/lists?client_id={imc_org['client_id']}",
+        headers=imc_org["headers"],
+    )
+    assert cov.status_code == 200, cov.text
+    row = next(l for l in cov.json()["lists"] if l["id"] == list_id)
+    assert row["with_number"] == 1
+    assert row["imessage"] == 1
+    assert row["unchecked"] == 0

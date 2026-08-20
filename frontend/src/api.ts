@@ -1481,9 +1481,11 @@ export const enrichContacts = (contactIds: string[]) =>
  * whole CRM; progress shows in the Enrichment status card. */
 export const imessageCheck = (opts: {
   contactIds?: string[];
-  /** Scope a whole-CRM sweep to one client — must match the population the
-   * caller counted, or the button promises one number and checks another. */
+  /** Scope a whole-CRM sweep to one client, or `listId` to one contact
+   * list — must match the population the caller counted, or the button
+   * promises one number and checks another. */
   clientId?: string;
+  listId?: string;
   force?: boolean;
 } = {}) =>
   api<{ queued: number | "all" }>("/api/crm/contacts/imessage-check", {
@@ -1491,9 +1493,27 @@ export const imessageCheck = (opts: {
     body: JSON.stringify({
       contact_ids: opts.contactIds ?? null,
       client_id: opts.clientId ?? null,
+      list_id: opts.listId ?? null,
       force: opts.force ?? false,
     }),
   });
+
+/** Per-contact-list iMessage coverage — the checker view's table. */
+export interface ImessageListCoverage {
+  id: string;
+  name: string;
+  client_id: string;
+  with_number: number;
+  checked: number;
+  imessage: number;
+  sms_only: number;
+  unchecked: number;
+}
+
+export const imessageLists = (clientId?: string) =>
+  api<{ lists: ImessageListCoverage[] }>(
+    `/api/crm/imessage/lists${clientId ? `?client_id=${clientId}` : ""}`,
+  );
 
 export interface ImessageSummary {
   total: number;
@@ -1504,10 +1524,15 @@ export interface ImessageSummary {
   unchecked: number;
 }
 
-export const imessageSummary = (clientId?: string) =>
-  api<ImessageSummary>(
-    `/api/crm/contacts/imessage-summary${clientId ? `?client_id=${clientId}` : ""}`,
+export const imessageSummary = (clientId?: string, listId?: string) => {
+  const q = new URLSearchParams();
+  if (clientId) q.set("client_id", clientId);
+  if (listId) q.set("list_id", listId);
+  const qs = q.toString();
+  return api<ImessageSummary>(
+    `/api/crm/contacts/imessage-summary${qs ? `?${qs}` : ""}`,
   );
+};
 
 /** One enrichment run's progress record (the CRM status card). `status`
  * "interrupted" is server-derived: a running job whose heartbeat went
@@ -1515,7 +1540,9 @@ export const imessageSummary = (clientId?: string) =>
 export interface EnrichmentJob {
   id: string;
   status: "running" | "completed" | "failed" | "interrupted";
-  phase: "enriching" | "verifying" | "done";
+  // "imessage" is the iMessage-capability sweep — it reuses this same
+  // job record so both passes share one progress surface.
+  phase: "enriching" | "verifying" | "done" | "imessage";
   total: number;
   processed: number;
   error: string | null;
