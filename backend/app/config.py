@@ -51,11 +51,26 @@ class Settings(BaseSettings):
     # and Meta lead polling. Floor of 10s enforced in main.py; the relay
     # budget, not the DB, is the binding constraint — see the scheduler.
     sms_verify_tick_seconds: int = 30
+    # Cadence ceiling for the SMS campaign send loop (main.py's own loop, NOT
+    # the email tick). The loop sleeps until the next enrollment is actually
+    # due and only falls back to this when nothing is scheduled, so this is
+    # the idle poll rate, not the latency a due send waits. A reply step's
+    # whole promise is "answer them N minutes after they text back", and the
+    # scheduler's granularity is the error bar on it.
+    sms_campaign_tick_seconds: int = 30
     email_sync_min_interval_seconds: int = 180
 
     # Dedicated connection pool for the background schedulers (see db.py's
     # SchedulerSessionLocal) — deliberately small; schedulers run one tick at
     # a time and must never compete with request-serving connections.
+    # INVARIANT: pool_size + max_overflow must be >= the number of scheduler
+    # loops in main.py (currently 5: IG outreach, email outreach, SMS
+    # campaigns, SMS verify, insights). Each loop holds at most one session
+    # at a time, so peak demand IS the loop count — at parity it can never
+    # exhaust, but a 6th loop added without raising this would block on
+    # checkout for pool_timeout and silently add latency to every tick.
+    # Raising it also spends from Supabase's session-mode client cap, which
+    # is shared with the request pool.
     scheduler_db_pool_size: int = 3
     scheduler_db_max_overflow: int = 2
 

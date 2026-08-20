@@ -330,11 +330,11 @@ async def _email_outreach_scheduler():
       (c) polls each connected mailbox's INBOX for replies/bounces
           (email_outreach_sync.sync_due, per-account floor via
           email_sync_min_interval_seconds),
-      (d) fires due SMS campaign enrollment steps (sms_campaigns.run_due) —
-          the SMS module shares this loop rather than running its own; its
-          reply/opt-out exits happen synchronously in the inbound Twilio
-          webhook instead of a sync tick, so there's nothing else for it to
-          do here.
+      (d) retries recently failed lead-notification texts
+          (lead_notify.retry_failed), whose once-per-tick pacing is exactly
+          the ~60s backoff it wants.
+    SMS campaign sends deliberately do NOT ride this tick — see
+    _sms_campaign_scheduler for why.
     Same pattern as the IG scheduler. Disabled in tests (they drive run_due /
     sync_account / run_warmup_tick synchronously)."""
     if not _settings.email_outreach_scheduler_enabled or not _settings.run_schedulers():
@@ -343,7 +343,7 @@ async def _email_outreach_scheduler():
 
     from .db import SchedulerSessionLocal
     from .services import email_campaigns, email_outreach_sync, email_warmup
-    from .services import lead_notify, meta_lead_poll, sms_campaigns
+    from .services import lead_notify, meta_lead_poll
 
     log = logging.getLogger("salescale.email_outreach")
 
@@ -364,15 +364,20 @@ async def _email_outreach_scheduler():
         try:
             sms_db = SchedulerSessionLocal()
             try:
-                sms_campaigns.run_due(sms_db)
                 # Re-attempt recently failed team notification texts (lead
                 # alerts / relay forwards) — transient BlueBubbles/device
                 # errors must not silently cost an alert.
+                #
+                # This stays on the 60s tick ON PURPOSE. "One retry per pair
+                # per tick" IS its backoff between attempts at a flaky
+                # device, so moving it onto the faster SMS campaign loop
+                # below would machine-gun a broken Apple ID — the exact
+                # thing that pacing exists to prevent.
                 lead_notify.retry_failed(sms_db)
             finally:
                 sms_db.close()
         except Exception:
-            log.exception("sms campaign scheduler tick failed")
+            log.exception("sms notification retry tick failed")
         # Meta Instant Form polling fallback — its own isolated session: a
         # Graph outage (or the app-unpublished token refusal) must never
         # stall the send ticks above.
@@ -392,6 +397,68 @@ async def _email_outreach_scheduler():
                 await asyncio.get_event_loop().run_in_executor(None, _tick)
             except Exception:
                 log.exception("email outreach scheduler tick failed")
+
+    asyncio.create_task(_loop())
+
+
+@app.on_event("startup")
+async def _sms_campaign_scheduler():
+    """SMS campaign send loop — deliberately its OWN loop, not the shared
+    email tick.
+
+    A reply-triggered step promises "answer the lead N minutes after they
+    text back", so the scheduler's granularity is the error bar on that
+    promise. Riding the 60s email tick, a response that came due one second
+    after a tick was not even LOOKED at for another full minute — measured in
+    production as ~48s of median avoidable lag (worst case 64s) on top of the
+    configured wait, which is what made a 4-minute reply land at 5-6 minutes.
+
+    Rather than a fixed fast interval, the loop sleeps until the next
+    enrollment is actually due (clamped both ways): an idle org costs one
+    index-only probe per sms_campaign_tick_seconds, while a response due in
+    7s is sent in ~7s. Cold drip steps are unaffected in pace — they are
+    still spaced by the per-account min-send throttle in the gateway, which
+    is decided from the DB before any provider call.
+
+    Note lead_notify.retry_failed is NOT here (see _email_outreach_scheduler):
+    its once-per-tick cadence is its device backoff."""
+    if not _settings.email_outreach_scheduler_enabled or not _settings.run_schedulers():
+        return
+    import asyncio
+
+    from .db import SchedulerSessionLocal
+    from .services import sms_campaigns
+
+    log = logging.getLogger("salescale.sms_campaigns")
+    idle = max(5, _settings.sms_campaign_tick_seconds)
+    # Never spin tighter than this, whatever the queue says.
+    floor = 2.0
+
+    def _tick() -> float:
+        """Run one batch; return how long to sleep before the next."""
+        db = SchedulerSessionLocal()
+        try:
+            processed = sms_campaigns.run_due(db)
+            wait = sms_campaigns.seconds_until_next_due(db)
+        finally:
+            db.close()
+        if wait is None:
+            return idle
+        if wait <= 0:
+            # Still-overdue work earns the fast path only if this tick
+            # actually made progress. An enrollment that is due but keeps
+            # throwing would otherwise spin this loop at its floor forever.
+            return floor if processed else idle
+        return max(floor, min(idle, wait))
+
+    async def _loop():
+        while True:
+            try:
+                wait = await asyncio.get_event_loop().run_in_executor(None, _tick)
+            except Exception:
+                log.exception("sms campaign scheduler tick failed")
+                wait = idle
+            await asyncio.sleep(wait)
 
     asyncio.create_task(_loop())
 

@@ -4078,3 +4078,89 @@ def test_monthly_usage_meter_counts_delivered_and_read(api):
         db.commit()
         org = db.get(Organization, org_id)
         assert entitlements.sms_outreach_usage(db, org)["used"] == 3
+
+
+# --- scheduler cadence -------------------------------------------------------
+
+
+def test_seconds_until_next_due_drives_the_scheduler_sleep(
+    sc_org, api, twilio_creds_ok, captured_sends
+):
+    """The SMS loop sleeps until work is actually due rather than on a fixed
+    interval — a reply step's whole promise is "answer them N minutes after
+    they text back", so tick granularity is the error bar on that promise.
+    This pins the probe the loop steers by.
+
+    The probe is deliberately GLOBAL (so is the scheduler), so this parks
+    every other enrollment for the duration and restores them after —
+    otherwise it would be asserting on some other test's schedule.
+    """
+    import datetime as dt
+
+    acct = _mk_account(sc_org, api, from_number="+14805550142")
+    camp = _mk_campaign(sc_org, api, acct["id"], **_ALWAYS)
+    contact = _mk_contact(sc_org, api, mobile_phone="4805555042", first="Cadence")
+    _set_steps(
+        sc_org,
+        api,
+        camp["id"],
+        [
+            {"position": 1, "wait_days": 0, "body": "Hi {{first_name}}"},
+            {"position": 2, "wait_days": 5, "body": "Bump"},
+        ],
+    )
+    assert _activate(sc_org, api, camp["id"]).status_code == 200
+    _enroll(sc_org, api, camp["id"], [contact])
+    _tick()  # step 1 goes out; step 2 is now scheduled days away
+
+    e = _get_enrollment(camp["id"], contact)
+    db = SessionLocal()
+    parked = {}
+    try:
+        others = (
+            db.execute(
+                select(SmsEnrollment).where(
+                    SmsEnrollment.status == "active",
+                    SmsEnrollment.next_run_at.is_not(None),
+                    SmsEnrollment.id != e.id,
+                )
+            )
+            .scalars()
+            .all()
+        )
+        for o in others:
+            parked[o.id] = o.next_run_at
+            o.next_run_at = None
+        row = db.execute(
+            select(SmsEnrollment).where(SmsEnrollment.id == e.id)
+        ).scalar_one()
+
+        # Far-future work: the probe reports a long wait, so the loop idles
+        # instead of spinning.
+        row.next_run_at = utcnow() + dt.timedelta(minutes=30)
+        db.commit()
+        assert sms_campaigns.seconds_until_next_due(db) > 60
+
+        # Due in seconds: the loop must wake for it, not at a 60s boundary.
+        row.next_run_at = utcnow() + dt.timedelta(seconds=7)
+        db.commit()
+        wait = sms_campaigns.seconds_until_next_due(db)
+        assert 0 < wait <= 8
+
+        # Already overdue reads as non-positive — the loop's fast path.
+        row.next_run_at = utcnow() - dt.timedelta(seconds=5)
+        db.commit()
+        assert sms_campaigns.seconds_until_next_due(db) <= 0
+
+        # Nothing scheduled at all is None, NOT 0 — the two mean opposite
+        # things to the loop (idle vs. work is waiting right now).
+        row.next_run_at = None
+        db.commit()
+        assert sms_campaigns.seconds_until_next_due(db) is None
+    finally:
+        for eid, when in parked.items():
+            restored = db.get(SmsEnrollment, eid)
+            if restored is not None:
+                restored.next_run_at = when
+        db.commit()
+        db.close()

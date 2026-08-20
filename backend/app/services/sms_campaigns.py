@@ -1510,5 +1510,27 @@ def run_due(db: Session, limit: int = 200) -> int:
     return processed
 
 
+def seconds_until_next_due(db: Session) -> Optional[float]:
+    """Seconds until the earliest scheduled enrollment comes due; None when
+    nothing is scheduled at all. Zero or negative means work is already due.
+
+    This exists so the SMS scheduler can sleep until there is real work
+    instead of on a fixed interval. A reply-triggered step promises "answer
+    the lead N minutes after they text back", so the loop's granularity is
+    the error bar on that promise: every second of cadence shows up directly
+    as a late reply. Cheap to call — it is an index-only probe of
+    ix_sms_enrollments_next_run_at.
+    """
+    nxt = db.execute(
+        select(func.min(SmsEnrollment.next_run_at)).where(
+            SmsEnrollment.status == SMS_ENROLL_ACTIVE,
+            SmsEnrollment.next_run_at.is_not(None),
+        )
+    ).scalar()
+    if nxt is None:
+        return None
+    return (_aware(nxt) - utcnow()).total_seconds()
+
+
 def exit_manual(db: Session, enrollment: SmsEnrollment) -> None:
     _end(enrollment, SMS_ENROLL_EXITED, "manual")
