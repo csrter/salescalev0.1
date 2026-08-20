@@ -4164,3 +4164,141 @@ def test_seconds_until_next_due_drives_the_scheduler_sleep(
                 restored.next_run_at = when
         db.commit()
         db.close()
+
+
+# --- stop answering once the real answer has gone out ------------------------
+
+
+_TWO_BRANCHES = [
+    {"position": 1, "body": "Hey is this {{company}}?"},
+    {
+        "position": 2,
+        "trigger": "reply",
+        "wait_minutes": 0,
+        "body": "Thanks for getting back to me!",
+        "branches": [
+            {"label": "Yes", "keywords": ["yes"], "body": "Here is the pitch."},
+            {"label": "No", "keywords": ["not interested"], "body": "My apologies!"},
+        ],
+    },
+]
+
+
+def _reply_and_send(api, acct, number, body, sid):
+    """One inbound reply, then drain the engine so any scheduled response
+    actually goes out."""
+    assert _inbound_reply(api, acct, number, body, sid=sid).status_code == 200
+    _tick()
+
+
+def test_no_more_auto_replies_after_a_branch_response_is_sent(
+    sc_org, api, twilio_creds_ok, captured_sends
+):
+    """Once the substantive answer (a matched branch) has gone out, the lead's
+    next message gets silence — a human owns the conversation.
+
+    This is the production failure: the pitch went out, the lead answered
+    "Not interested", and the campaign sent the parting message on top of it.
+    Nothing stopped an enrollment re-opening from completed on every later
+    keyword match, so a lead could be pitched twice or pitched-then-parted."""
+    acct = _mk_account(sc_org, api, from_number="+14805550781")
+    camp = _mk_campaign(sc_org, api, acct["id"], **_ALWAYS)
+    contact = _mk_contact(sc_org, api, mobile_phone="4805557810", first="Pat")
+    _set_steps(sc_org, api, camp["id"], _TWO_BRANCHES)
+    assert _activate(sc_org, api, camp["id"]).status_code == 200
+    _enroll(sc_org, api, camp["id"], [contact])
+    _tick()  # step 1
+    assert len(captured_sends) == 1
+
+    # A matching reply gets the branch — the real answer.
+    _reply_and_send(api, acct, "+14805557810", "yes", "SM_sab_1")
+    assert len(captured_sends) == 2
+    assert "pitch" in captured_sends[-1]["body"]
+
+    e = _get_enrollment(camp["id"], contact)
+    assert e.branch_sent_at is not None
+    assert e.status == "completed"
+
+    # They answer the pitch. The old behavior re-opened and fired the "No"
+    # branch on top of it; now it stays silent.
+    _reply_and_send(api, acct, "+14805557810", "Not interested", "SM_sab_2")
+    assert len(captured_sends) == 2, captured_sends[-1]["body"]
+
+    # ...but the reply itself is still RECORDED — the team reads it in the
+    # inbox and reply stats stay honest. Silence is not blindness. (On a
+    # completed enrollment that means the ledger row plus last_reply_at;
+    # last_reply_body is the branch-matching input and the send clears it.)
+    e = _get_enrollment(camp["id"], contact)
+    assert e.replied_at is not None
+    assert e.last_reply_at is not None
+    db = SessionLocal()
+    try:
+        inbound = db.execute(
+            select(SmsMessage).where(
+                SmsMessage.contact_id == contact,
+                SmsMessage.direction == "in",
+                SmsMessage.body == "Not interested",
+            )
+        ).scalars().all()
+        assert len(inbound) == 1
+        assert inbound[0].campaign_id == camp["id"]
+    finally:
+        db.close()
+
+
+def test_default_body_does_not_close_the_door_on_the_branch(
+    sc_org, api, twilio_creds_ok, captured_sends
+):
+    """The step's generic default is a placeholder, NOT the answer — it must
+    not stop the real branch firing on the lead's next message.
+
+    In production the pitch was usually delivered exactly this way: the first
+    reply ("Can I help you with something?") matched nothing and got the
+    default, and the branch fired on the follow-up. Treating the default as
+    terminal would have silently killed the pitch."""
+    acct = _mk_account(sc_org, api, from_number="+14805550782")
+    camp = _mk_campaign(sc_org, api, acct["id"], **_ALWAYS)
+    contact = _mk_contact(sc_org, api, mobile_phone="4805557820", first="Sam")
+    _set_steps(sc_org, api, camp["id"], _TWO_BRANCHES)
+    assert _activate(sc_org, api, camp["id"]).status_code == 200
+    _enroll(sc_org, api, camp["id"], [contact])
+    _tick()
+    assert len(captured_sends) == 1
+
+    # No branch matches -> the generic default, and the door stays open.
+    _reply_and_send(api, acct, "+14805557820", "Can I help you with something?", "SM_sab_3")
+    assert len(captured_sends) == 2
+    assert "Thanks for getting back to me!" in captured_sends[-1]["body"]
+    assert _get_enrollment(camp["id"], contact).branch_sent_at is None
+
+    # Now they say something that DOES match — the pitch still goes out.
+    _reply_and_send(api, acct, "+14805557820", "yes", "SM_sab_4")
+    assert len(captured_sends) == 3
+    assert "pitch" in captured_sends[-1]["body"]
+    assert _get_enrollment(camp["id"], contact).branch_sent_at is not None
+
+    # And that one IS terminal.
+    _reply_and_send(api, acct, "+14805557820", "Not interested", "SM_sab_5")
+    assert len(captured_sends) == 3
+
+
+def test_stop_after_branch_off_keeps_the_multi_turn_behavior(
+    sc_org, api, twilio_creds_ok, captured_sends
+):
+    """A deliberately multi-turn campaign can opt out and keep answering."""
+    acct = _mk_account(sc_org, api, from_number="+14805550783")
+    camp = _mk_campaign(
+        sc_org, api, acct["id"], stop_after_branch=False, **_ALWAYS
+    )
+    assert camp["stop_after_branch"] is False
+    contact = _mk_contact(sc_org, api, mobile_phone="4805557830", first="Lee")
+    _set_steps(sc_org, api, camp["id"], _TWO_BRANCHES)
+    assert _activate(sc_org, api, camp["id"]).status_code == 200
+    _enroll(sc_org, api, camp["id"], [contact])
+    _tick()
+
+    _reply_and_send(api, acct, "+14805557830", "yes", "SM_sab_6")
+    assert len(captured_sends) == 2
+    _reply_and_send(api, acct, "+14805557830", "Not interested", "SM_sab_7")
+    assert len(captured_sends) == 3
+    assert "My apologies!" in captured_sends[-1]["body"]

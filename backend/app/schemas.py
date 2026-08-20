@@ -1692,6 +1692,7 @@ class SmsCampaignIn(BaseModel):
     daily_cap: int = Field(default=100, ge=1, le=100000)
     exit_on_reply: bool = True
     include_compliance_footer: bool = True
+    stop_after_branch: bool = True
     auto_enroll_new_leads: bool = False
 
     @field_validator("send_days")
@@ -1716,6 +1717,7 @@ class SmsCampaignPatch(BaseModel):
     daily_cap: Optional[int] = Field(default=None, ge=1, le=100000)
     exit_on_reply: Optional[bool] = None
     include_compliance_footer: Optional[bool] = None
+    stop_after_branch: Optional[bool] = None
     auto_enroll_new_leads: Optional[bool] = None
 
     @field_validator("send_days")

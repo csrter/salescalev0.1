@@ -239,6 +239,18 @@ class SmsCampaign(Base):
     # already-consenting contacts (e.g. past clients being followed up with).
     # STOP handling itself is unaffected either way — this only controls
     # whether the reminder text is shown.
+    # Once a reply step sends a matched BRANCH response — the pitch, the
+    # parting message, the substantive answer — the automated conversation is
+    # over and a human takes it from there. Without this an enrollment
+    # re-opens on every later keyword match, so a lead who keeps texting can
+    # be pitched twice, or pitched and then sent the parting message on top.
+    # The step's generic default body does NOT count as a branch: it is a
+    # placeholder that deliberately leaves the door open for the real branch
+    # to fire on the lead's next message. Off = a deliberately multi-turn
+    # campaign keeps answering.
+    stop_after_branch: Mapped[bool] = mapped_column(
+        Boolean, default=True, nullable=False, server_default=text("true")
+    )
     include_compliance_footer: Mapped[bool] = mapped_column(
         Boolean, default=True, nullable=False
     )
@@ -341,6 +353,13 @@ class SmsEnrollment(Base):
     # above stays the FIRST reply (the stats definition).
     last_reply_at: Mapped[Optional[dt.datetime]] = mapped_column(DateTime(timezone=True))
     last_reply_body: Mapped[Optional[str]] = mapped_column(Text)
+    # When a matched BRANCH response was sent (not the step's default body).
+    # With the campaign's stop_after_branch on, this is what makes the
+    # enrollment stop answering: no re-open from completed, no further
+    # reply-step scheduling. NULL means the real answer has not gone out yet.
+    branch_sent_at: Mapped[Optional[dt.datetime]] = mapped_column(
+        DateTime(timezone=True)
+    )
     enrolled_by: Mapped[Optional[str]] = mapped_column(String(36))
     # How the contact entered the campaign — "manual" | "list" | "client" |
     # "auto_new_lead" — with a human-readable detail (list name at enroll time,

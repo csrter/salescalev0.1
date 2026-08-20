@@ -1761,6 +1761,24 @@ function ConfigForm({
 
       <div className="sms-fieldset">
         <Switch
+          checked={detail.stop_after_branch}
+          onChange={(v) => onPatch({ stop_after_branch: v })}
+          label="Hand off to a human after a branch response"
+        />
+        <p className="sms-hint">
+          Once a reply step sends one of its <em>branch</em> responses — the
+          pitch, the parting message, the real answer — this campaign stops
+          replying to that lead automatically. Their later texts are still
+          received, attributed and shown in Messages; nobody just gets
+          answered by the sequence again. The step's default body doesn't
+          count as a branch, so a lead whose first text matched nothing can
+          still get the pitch on their next one. Turn this off only for a
+          campaign deliberately written as a multi-turn conversation.
+        </p>
+      </div>
+
+      <div className="sms-fieldset">
+        <Switch
           checked={detail.include_compliance_footer}
           onChange={(v) => onPatch({ include_compliance_footer: v })}
           label="Sender ID + opt-out footer on the first message"
@@ -2415,12 +2433,18 @@ function AudienceTab({
         e.status === "active" && e.awaiting_reply ? (
           <Badge tone="info">awaiting reply</Badge>
         ) : (
-          <Badge tone={e.status}>
-            {e.status}
-            {e.exit_reason ? ` (${e.exit_reason})` : ""}
-          </Badge>
+          <>
+            <Badge tone={e.status}>
+              {e.status}
+              {e.exit_reason ? ` (${e.exit_reason})` : ""}
+            </Badge>
+            {/* The real answer went out — the sequence won't text them
+                again, so the conversation is a human's from here. */}
+            {e.branch_sent_at ? <Badge tone="ok">answered</Badge> : null}
+          </>
         ),
-      sortValue: (e) => (e.awaiting_reply ? "awaiting" : e.status),
+      sortValue: (e) =>
+        e.awaiting_reply ? "awaiting" : e.branch_sent_at ? `${e.status} answered` : e.status,
     },
     { key: "step", header: "Step", align: "right", render: (e) => int(e.current_position) },
     {

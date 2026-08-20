@@ -911,6 +911,13 @@ def handle_reply(
     - Otherwise, exit_on_reply campaigns exit with reason "replied" (the
       pre-reply-step behavior, unchanged); campaigns with exit_on_reply off
       keep dripping as before.
+    - Once the enrollment has already sent a matched BRANCH response — the
+      pitch, the parting message — it stops answering entirely (the
+      campaign's stop_after_branch). The reply is still recorded and
+      attributed; the sequence just doesn't speak again. Without this an
+      enrollment re-opens on every later keyword match: production had one
+      campaign send its parting message 17 times across 9 leads, and leads
+      who were pitched then got the parting message on top.
 
     Returns {campaign_id, enrollment_id, step_id} for inbound-message
     attribution: the contact's most recent OUTBOUND campaign message is the
@@ -975,6 +982,11 @@ def handle_reply(
         e.replied_at = e.replied_at or now
         e.last_reply_at = now
         e.last_reply_body = reply_body
+        # The substantive answer has already gone out — a human owns this
+        # conversation now. Keep RECORDING what they say (the team reads it
+        # in the inbox and the stats stay honest); just stop answering.
+        if campaign.stop_after_branch and e.branch_sent_at is not None:
+            continue
         reply_step = next(
             (
                 s
@@ -1002,7 +1014,9 @@ def handle_reply(
     # match means no re-open: repeating the step's default body at a lead who
     # said something new would be a robotic re-pitch, and auto-responder
     # texts ("we're closed, we'll get back to you") deserve silence. Only
-    # clean completions re-open — exited/opted_out/manual stay terminal.
+    # clean completions re-open — exited/opted_out/manual stay terminal, and
+    # so is an enrollment that already sent its branch response (below): this
+    # path may deliver the answer, but only once.
     completed = (
         db.execute(
             select(SmsEnrollment).where(
@@ -1018,6 +1032,8 @@ def handle_reply(
     for e in completed:
         campaign = db.get(SmsCampaign, e.campaign_id)
         if campaign is None:
+            continue
+        if campaign.stop_after_branch and e.branch_sent_at is not None:
             continue
         reply_step = next(
             (
@@ -1345,8 +1361,9 @@ def process_enrollment(db: Session, enrollment: SmsEnrollment) -> None:
     # Reply steps pick a response branch from what the lead actually said;
     # no match (or no branches) sends the step's default body.
     branch_body: Optional[str] = None
+    branch_label: Optional[str] = None
     if (current.trigger or "schedule") == SMS_TRIGGER_REPLY:
-        branch_body, _branch_label = select_branch(
+        branch_body, branch_label = select_branch(
             db, org, current, branch_reply_text(db, enrollment, current)
         )
     body = render_full(
@@ -1407,6 +1424,14 @@ def process_enrollment(db: Session, enrollment: SmsEnrollment) -> None:
         # step waits for the lead's NEXT message.
         if (current.trigger or "schedule") == SMS_TRIGGER_REPLY:
             enrollment.last_reply_body = None
+            # A matched BRANCH is the substantive answer (the pitch, the
+            # parting message). Record that it went out so handle_reply can
+            # stop answering — see the campaign's stop_after_branch. The
+            # step's generic default body is deliberately NOT recorded: it's
+            # a placeholder, and the real branch should still be able to fire
+            # on the lead's next message.
+            if branch_label is not None:
+                enrollment.branch_sent_at = now
         nxt = next((s for s in steps if s.position > current.position), None)
         if nxt is None:
             _end(enrollment, SMS_ENROLL_COMPLETED)

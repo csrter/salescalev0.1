@@ -849,6 +849,7 @@ def _campaign_out(db: Session, c: SmsCampaign, *, full: bool = False) -> dict:
         "daily_cap": c.daily_cap,
         "exit_on_reply": c.exit_on_reply,
         "include_compliance_footer": c.include_compliance_footer,
+        "stop_after_branch": c.stop_after_branch,
         "auto_enroll_new_leads": c.auto_enroll_new_leads,
         "activated_at": c.activated_at.isoformat() if c.activated_at else None,
         "created_at": c.created_at.isoformat(),
@@ -924,6 +925,7 @@ def create_campaign(
         daily_cap=body.daily_cap,
         exit_on_reply=body.exit_on_reply,
         include_compliance_footer=body.include_compliance_footer,
+        stop_after_branch=body.stop_after_branch,
         auto_enroll_new_leads=body.auto_enroll_new_leads,
     )
     db.add(campaign)
@@ -1301,6 +1303,9 @@ def list_enrollments(
             "next_run_at": e.next_run_at.isoformat() if e.next_run_at else None,
             "replied_at": e.replied_at.isoformat() if e.replied_at else None,
             "awaiting_reply": e.awaiting_reply_since is not None,
+            "branch_sent_at": e.branch_sent_at.isoformat()
+            if e.branch_sent_at
+            else None,
             "last_reply_at": e.last_reply_at.isoformat() if e.last_reply_at else None,
             "last_reply_body": e.last_reply_body,
             "source": e.source,

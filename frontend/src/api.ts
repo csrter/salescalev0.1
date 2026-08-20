@@ -2420,6 +2420,7 @@ export interface SmsCampaignDetail extends SmsCampaign {
   daily_cap: number | null;
   exit_on_reply: boolean;
   include_compliance_footer: boolean;
+  stop_after_branch: boolean;
   /** Auto-enroll new leads for client_id into this campaign on arrival. */
   auto_enroll_new_leads: boolean;
   steps: SmsStep[];
@@ -2436,6 +2437,7 @@ export interface SmsCampaignBody {
   daily_cap?: number | null;
   exit_on_reply?: boolean;
   include_compliance_footer?: boolean;
+  stop_after_branch?: boolean;
   auto_enroll_new_leads?: boolean;
 }
 
@@ -2455,6 +2457,7 @@ export interface SmsEnrollment {
   replied_at: string | null;
   /** Parked at a reply-triggered step, waiting for the lead to text back. */
   awaiting_reply: boolean;
+  branch_sent_at: string | null;
   last_reply_at: string | null;
   last_reply_body: string | null;
   /** How the contact entered: "manual" | "list" | "client" | "auto_new_lead". */
