@@ -98,7 +98,7 @@ def meta_oauth_callback(
         platform=PLATFORM_META,
         access_token=access_token,
         expires_in_seconds=expires_in,
-        scopes=meta_api.META_SCOPES,
+        scopes=meta_api.current_scopes(),
         external_user_id=me.get("id"),
     )
 

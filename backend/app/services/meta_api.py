@@ -32,6 +32,16 @@ META_SCOPES = (
 )
 
 
+def current_scopes() -> str:
+    """META_SCOPES, unless the operator overrides via the META_SCOPES env
+    (settings.meta_scopes) — the escape hatch when Meta's OAuth dialog
+    rejects a scope the app can't request ("Invalid Scopes: ..."), which
+    otherwise blocks the whole connect flow. Dropping pages_manage_metadata
+    only loses the leadgen webhook auto-subscribe; the polling fallback and
+    ads read/write don't need it."""
+    return get_settings().meta_scopes.strip() or META_SCOPES
+
+
 class MetaAuthError(Exception):
     """Token invalid/expired/revoked — connection should be marked
     disconnected, never silently retried."""
@@ -82,7 +92,7 @@ def build_oauth_url(state: str) -> str:
         "client_id": creds.app_id,
         "redirect_uri": settings.meta_redirect_uri,
         "state": state,
-        "scope": META_SCOPES,
+        "scope": current_scopes(),
     }
     return (
         f"https://www.facebook.com/{settings.meta_api_version}/dialog/oauth?"

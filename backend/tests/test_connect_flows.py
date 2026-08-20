@@ -628,3 +628,23 @@ def test_google_token_endpoint_network_error_normalizes(monkeypatch):
     monkeypatch.setattr(httpx, "post", _down)
     with pytest.raises(google_ads_api.GoogleApiError):
         google_ads_api.exchange_code_for_tokens("code")
+
+
+def test_meta_scopes_env_override(monkeypatch):
+    """META_SCOPES env drops a scope the Meta app can't request (the
+    "Invalid Scopes" OAuth dialog) without a code change; empty keeps the
+    full default list."""
+    from app.config import get_settings
+
+    settings = get_settings()
+    assert meta_api.current_scopes() == meta_api.META_SCOPES
+
+    trimmed = meta_api.META_SCOPES.replace(",pages_manage_metadata", "")
+    monkeypatch.setattr(settings, "meta_scopes", trimmed)
+    assert meta_api.current_scopes() == trimmed
+    url = meta_api.build_oauth_url("state123")
+    assert "pages_manage_metadata" not in url
+    assert "leads_retrieval" in url
+
+    monkeypatch.setattr(settings, "meta_scopes", "")
+    assert meta_api.current_scopes() == meta_api.META_SCOPES
