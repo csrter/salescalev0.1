@@ -3481,8 +3481,19 @@ live activation + the entitlement flip, the Outreach module build
       path confirmed separately against handles the Mac already knows are
       iMessage (5/5 true). Known quirk: the org's OWN numbers report
       available=false — Apple doesn't report your own aliases as available to
-      you. NOT DEPLOYED — carries a migration, so web + desktop must ship in
-      lockstep.
+      you. DEPLOYED to production 2026-08-19 (d605dfd), web + desktop in
+      lockstep: git archive -> VPS, backend/frontend images rebuilt and
+      recreated, migration d6b4c9e2a17f applied to the live Supabase DB
+      through the container-boot flow (alembic current = d6b4c9e2a17f head),
+      /api/health 200, zero boot errors, both routes live + auth-gated (401),
+      app.salescale.lol 200 and the served crm chunk carries the coverage
+      card. Desktop: PyInstaller backend (59MB, hash-matched into the app
+      bundle) + frontend + DMG (148MB, the new UI verified inside app.asar),
+      installed to /Applications and launch-verified — own backend bound
+      :8000, health 200, and both new routes answering 401 rather than 404 on
+      the PACKAGED backend (the runtime proof the frozen binary carries the
+      module, since strings can't read the compressed archive). Repo-root DMG
+      copy refreshed sha-identical.
 - [ ] Stripe live activation + entitlement flip (after 12–14, so real
       limits land everywhere in one pass)
 - [ ] Outreach module build (dev-mode) — go-live gated on Meta App
