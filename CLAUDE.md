@@ -3516,6 +3516,14 @@ live activation + the entitlement flip, the Outreach module build
       view lists both seeded lists, clicking "Check 3" on one list ran a
       3-lead job and left the 2 non-members untouched, coverage refreshed to
       "3 OF 3 CHECKED · 3 SMS only", all iMessage requests 200.
+      DEPLOYED to production 2026-08-19 (b9b5ff6), web + desktop: backend/
+      frontend rebuilt and recreated on the VPS (no migration — alembic
+      stays d6b4c9e2a17f), /api/health 200, zero boot errors,
+      /api/crm/imessage/lists live + auth-gated, app.salescale.lol serving
+      its own imessage-*.js chunk; desktop PyInstaller backend + DMG (148MB,
+      binary hash-matched into the bundle, imessage chunk verified inside
+      app.asar), installed to /Applications and launch-verified (own backend
+      bound :8000, health 200, both routes 401 on the packaged backend).
 - [ ] Stripe live activation + entitlement flip (after 12–14, so real
       limits land everywhere in one pass)
 - [ ] Outreach module build (dev-mode) — go-live gated on Meta App
