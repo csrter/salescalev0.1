@@ -477,6 +477,55 @@ def select_branch(
     return matched["body"] or None, matched["label"]
 
 
+def branch_reply_text(
+    db: Session, enrollment: SmsEnrollment, step: SmsStep
+) -> Optional[str]:
+    """The reply the branch decision should actually be made on.
+
+    A lead rarely answers in exactly one text. "Hi yes" followed twenty
+    seconds later by "How can we help you?" is one answer plus small talk —
+    but last_reply_body is last-write-wins, and a reply step waits
+    wait_days/wait_minutes before sending, so the second message routinely
+    clobbers the decisive one before the send reads it. The lead then gets the
+    generic default instead of the branch they clearly qualified for.
+
+    So look at every inbound message received since this enrollment's last
+    outbound, NEWEST FIRST, and use the first one that actually matches a
+    branch. A later explicit signal still wins ("yes" then "actually no" →
+    no), while a message carrying no signal no longer erases an earlier one.
+    Falls back to last_reply_body when nothing matches, so AI branching still
+    classifies against what the lead said most recently.
+    """
+    latest = enrollment.last_reply_body
+    if not _branch_options(step):
+        return latest
+    last_out = db.execute(
+        select(SmsMessage)
+        .where(
+            SmsMessage.enrollment_id == enrollment.id,
+            SmsMessage.direction == SMS_DIR_OUT,
+        )
+        .order_by(SmsMessage.created_at.desc())
+        .limit(1)
+    ).scalar_one_or_none()
+    stmt = select(SmsMessage).where(
+        SmsMessage.contact_id == enrollment.contact_id,
+        SmsMessage.organization_id == enrollment.organization_id,
+        SmsMessage.direction == SMS_DIR_IN,
+    )
+    if last_out is not None:
+        stmt = stmt.where(SmsMessage.created_at >= last_out.created_at)
+    recent = (
+        db.execute(stmt.order_by(SmsMessage.created_at.desc()).limit(10))
+        .scalars()
+        .all()
+    )
+    for m in recent:
+        if match_branch_keywords(step, m.body or ""):
+            return m.body
+    return latest
+
+
 # --- enrollment -------------------------------------------------------------
 
 
@@ -1298,7 +1347,7 @@ def process_enrollment(db: Session, enrollment: SmsEnrollment) -> None:
     branch_body: Optional[str] = None
     if (current.trigger or "schedule") == SMS_TRIGGER_REPLY:
         branch_body, _branch_label = select_branch(
-            db, org, current, enrollment.last_reply_body
+            db, org, current, branch_reply_text(db, enrollment, current)
         )
     body = render_full(
         db, org, enrollment, current, contact=contact, body_template=branch_body

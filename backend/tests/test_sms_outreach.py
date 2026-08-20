@@ -2756,6 +2756,105 @@ def test_reply_step_waits_schedules_after_reply_and_branches(
     assert e.last_reply_body is None  # consumed by the send
 
 
+def test_followup_chit_chat_does_not_erase_the_branch_signal(
+    sc_org, api, twilio_creds_ok, captured_sends
+):
+    """A lead answering in two texts still gets the branch they qualified for.
+
+    Reproduces a live production failure: the lead replied "Hi yes ..." and then,
+    forty seconds later and still inside the step's wait window, "How can we help
+    you?". last_reply_body is last-write-wins, so the send read the second
+    message, matched nothing, and delivered the generic default instead of the
+    "yes" branch. The branch decision now looks at every reply received since
+    the last outbound, newest first.
+    """
+    acct = _mk_account(sc_org, api, from_number="+14805550941")
+    camp = _mk_campaign(sc_org, api, acct["id"], **_ALWAYS)
+    contact = _mk_contact(sc_org, api, mobile_phone="4805557941", first="Dale")
+    _set_steps(
+        sc_org, api, camp["id"],
+        [
+            {"position": 1, "body": "Hey is this {{first_name}}?"},
+            {
+                "position": 2,
+                "trigger": "reply",
+                "wait_minutes": 3,
+                "body": "Thanks for getting back to me!",
+                "branches": [
+                    {"label": "yes", "keywords": ["yes", "yeah"],
+                     "body": "Great — I run ads for shops like yours."},
+                    {"label": "no", "keywords": ["wrong number", "no"],
+                     "body": "My apologies! Have a great day!"},
+                ],
+            },
+        ],
+    )
+    assert _activate(sc_org, api, camp["id"]).status_code == 200
+    _enroll(sc_org, api, camp["id"], [contact])
+    _tick()
+    assert len(captured_sends) == 1
+
+    # The decisive answer...
+    assert _inbound_reply(
+        api, acct, "+14805557941", "Hi yes", sid="SM_two_part_1"
+    ).status_code == 200
+    # ...then small talk, before the 3-minute wait elapses. This is what used
+    # to overwrite the signal.
+    assert _inbound_reply(
+        api, acct, "+14805557941", "How can we help you?", sid="SM_two_part_2"
+    ).status_code == 200
+
+    e = _get_enrollment(camp["id"], contact)
+    # last_reply_body still tracks the LATEST reply — the Audience tab shows it
+    # and must not start lying about what the lead said most recently.
+    assert e.last_reply_body == "How can we help you?"
+
+    _force_due(e.id)
+    _tick()
+    assert len(captured_sends) == 2
+    assert "I run ads for shops like yours" in captured_sends[-1]["body"]
+
+
+def test_later_explicit_signal_still_overrides_an_earlier_one(
+    sc_org, api, twilio_creds_ok, captured_sends
+):
+    """The flip side of the fix: newest-first means a lead who says "yes" and
+    then changes their mind to "no" gets the no branch, not the stale yes."""
+    acct = _mk_account(sc_org, api, from_number="+14805550942")
+    camp = _mk_campaign(sc_org, api, acct["id"], **_ALWAYS)
+    contact = _mk_contact(sc_org, api, mobile_phone="4805557942", first="Sam")
+    _set_steps(
+        sc_org, api, camp["id"],
+        [
+            {"position": 1, "body": "Hey is this {{first_name}}?"},
+            {
+                "position": 2,
+                "trigger": "reply",
+                "wait_minutes": 3,
+                "body": "Thanks for getting back to me!",
+                "branches": [
+                    {"label": "yes", "keywords": ["yes"], "body": "Great news."},
+                    {"label": "no", "keywords": ["no thanks"],
+                     "body": "No worries at all."},
+                ],
+            },
+        ],
+    )
+    assert _activate(sc_org, api, camp["id"]).status_code == 200
+    _enroll(sc_org, api, camp["id"], [contact])
+    _tick()
+    assert _inbound_reply(
+        api, acct, "+14805557942", "yes", sid="SM_flip_1"
+    ).status_code == 200
+    assert _inbound_reply(
+        api, acct, "+14805557942", "actually no thanks", sid="SM_flip_2"
+    ).status_code == 200
+    e = _get_enrollment(camp["id"], contact)
+    _force_due(e.id)
+    _tick()
+    assert "No worries at all." in captured_sends[-1]["body"]
+
+
 def test_reply_step_default_body_when_no_branch_matches(
     sc_org, api, twilio_creds_ok, captured_sends
 ):
@@ -3049,7 +3148,7 @@ def test_rearm_never_force_fires_awaiting_reply(
     """Pause -> reactivate re-arms parked enrollments, but an enrollment
     awaiting a lead's reply must stay parked — re-arming it would force-send
     a reply step nobody replied to."""
-    acct = _mk_account(sc_org, api, from_number="+14805550714")
+    acct = _mk_account(sc_org, api, from_number="+14805550931")
     camp = _mk_campaign(sc_org, api, acct["id"], **_ALWAYS)
     contact = _mk_contact(sc_org, api, mobile_phone="4805557105")
     _set_steps(
@@ -3080,7 +3179,7 @@ def test_rearm_never_force_fires_awaiting_reply(
 
 
 def test_step_validation_rejects_branch_misuse(sc_org, api, twilio_creds_ok):
-    acct = _mk_account(sc_org, api, from_number="+14805550715")
+    acct = _mk_account(sc_org, api, from_number="+14805550932")
     camp = _mk_campaign(sc_org, api, acct["id"], **_ALWAYS)
     # branches on a schedule step -> 422 (pydantic model validator)
     r = api.put(
