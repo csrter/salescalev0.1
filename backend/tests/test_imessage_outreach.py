@@ -187,6 +187,17 @@ class _FakeResp:
         return self._payload
 
 
+@pytest.fixture(autouse=True)
+def _clear_bb_method_cache():
+    """The gateway caches each relay's Private-API capability for 10 minutes
+    (it is a property of that Mac's install, and the relay is rate-limited).
+    Tests that assert probe-derived behavior must start from a clean cache or
+    they inherit the previous test's fake server."""
+    gateway.reset_method_cache()
+    yield
+    gateway.reset_method_cache()
+
+
 def _bb_account():
     return SmsAccount(
         provider="bluebubbles",

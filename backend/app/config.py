@@ -45,6 +45,12 @@ class Settings(BaseSettings):
     # floor between IMAP polls (sync_due skips accounts synced more recently).
     email_outreach_scheduler_enabled: bool = True
     email_outreach_tick_seconds: int = 60
+    # How often BlueBubbles sends are re-read from the relay to learn their
+    # true outcome. Its own dial (not the email tick) so failure-detection
+    # latency can be tuned without re-rating email sends, warmup, IMAP sync
+    # and Meta lead polling. Floor of 10s enforced in main.py; the relay
+    # budget, not the DB, is the binding constraint — see the scheduler.
+    sms_verify_tick_seconds: int = 30
     email_sync_min_interval_seconds: int = 180
 
     # Dedicated connection pool for the background schedulers (see db.py's

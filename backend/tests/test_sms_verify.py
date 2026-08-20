@@ -253,3 +253,179 @@ def test_retry_cap_stops_machine_gunning(sv_org, api, sv_setup, monkeypatch):
         enr = db.get(SmsEnrollment, enr_id)
         assert enr.current_position == 2  # but no further retries queued
         assert enr.next_run_at is None
+
+
+# --- Re-pollable verification: fast failure detection, safe success ---------
+#
+# The two outcomes are not equally trustworthy at the same age. A nonzero
+# `error` is only ever written after a real failure, so it can be acted on
+# immediately. error=0 is provisional — the Mac stamps failures
+# asynchronously, so an early success read can be contradicted minutes later.
+# These pin that asymmetry, which is the whole reason the pass re-polls
+# instead of checking once, late.
+
+
+def test_failure_is_caught_fast_well_before_the_success_confirm_age(
+    sv_org, api, sv_setup, monkeypatch
+):
+    """A dead send is failed + requeued at FIRST_CHECK_AGE — it does not have
+    to wait out CONFIRM_SUCCESS_AGE, which is what made retries slow."""
+    contact_id, enr_id = _enroll_contact(sv_org, api, sv_setup, "4805559811")
+    age = sms_verify.FIRST_CHECK_AGE.total_seconds() / 60 + 0.2
+    assert dt.timedelta(minutes=age) < sms_verify.CONFIRM_SUCCESS_AGE
+    _fabricate_sent(
+        sv_org, sv_setup, enr_id, contact_id, "GUID_FAST_FAIL", age_minutes=age
+    )
+    monkeypatch.setattr(sms_verify, "_fetch_state", lambda *a: {"error": 4})
+
+    sms_verify.run_due(SessionLocal())
+    with SessionLocal() as db:
+        msg = db.execute(
+            select(SmsMessage).where(SmsMessage.provider_sid == "GUID_FAST_FAIL")
+        ).scalar_one()
+        assert msg.status == SMS_MSG_FAILED
+        assert msg.failed_at is not None
+        assert msg.verified_at is not None  # terminal on first sight
+        assert "error 4" in (msg.error_detail or "")
+        assert db.get(SmsEnrollment, enr_id).next_run_at is not None
+
+
+def test_early_success_is_provisional_and_a_later_failure_still_wins(
+    sv_org, api, sv_setup, monkeypatch
+):
+    """The regression that motivated re-polling: reading error=0 early must
+    NOT retire the row, because the Mac can stamp the failure afterwards.
+    Checking once at a low age would have lost this send permanently."""
+    contact_id, enr_id = _enroll_contact(sv_org, api, sv_setup, "4805559812")
+    age = sms_verify.FIRST_CHECK_AGE.total_seconds() / 60 + 0.2
+    _fabricate_sent(
+        sv_org, sv_setup, enr_id, contact_id, "GUID_LATE_FAIL", age_minutes=age
+    )
+
+    # First look: the Mac has not stamped the failure yet.
+    monkeypatch.setattr(sms_verify, "_fetch_state", lambda *a: {"error": 0})
+    sms_verify.run_due(SessionLocal())
+    with SessionLocal() as db:
+        msg = db.execute(
+            select(SmsMessage).where(SmsMessage.provider_sid == "GUID_LATE_FAIL")
+        ).scalar_one()
+        assert msg.verified_at is None, "an early success must stay provisional"
+        assert msg.check_attempts == 1
+        assert msg.last_checked_at is not None
+
+    # The failure lands. Age the row past the re-poll gap and look again.
+    with SessionLocal() as db:
+        msg = db.execute(
+            select(SmsMessage).where(SmsMessage.provider_sid == "GUID_LATE_FAIL")
+        ).scalar_one()
+        msg.last_checked_at = utcnow() - sms_verify.RECHECK_INTERVAL * 2
+        db.commit()
+    monkeypatch.setattr(sms_verify, "_fetch_state", lambda *a: {"error": 4})
+    sms_verify.run_due(SessionLocal())
+    with SessionLocal() as db:
+        msg = db.execute(
+            select(SmsMessage).where(SmsMessage.provider_sid == "GUID_LATE_FAIL")
+        ).scalar_one()
+        assert msg.status == SMS_MSG_FAILED
+        assert msg.verified_at is not None
+
+
+def test_success_terminalizes_only_once_old_enough(sv_org, api, sv_setup, monkeypatch):
+    contact_id, enr_id = _enroll_contact(sv_org, api, sv_setup, "4805559813")
+    old = sms_verify.CONFIRM_SUCCESS_AGE.total_seconds() / 60 + 1
+    _fabricate_sent(sv_org, sv_setup, enr_id, contact_id, "GUID_OLD_OK", age_minutes=old)
+    monkeypatch.setattr(
+        sms_verify, "_fetch_state", lambda *a: {"error": 0, "dateDelivered": 1}
+    )
+    sms_verify.run_due(SessionLocal())
+    with SessionLocal() as db:
+        msg = db.execute(
+            select(SmsMessage).where(SmsMessage.provider_sid == "GUID_OLD_OK")
+        ).scalar_one()
+        assert msg.verified_at is not None
+        assert msg.status == "delivered"
+        assert msg.delivered_at is not None
+
+
+def test_relay_refusal_never_fabricates_a_verification(
+    sv_org, api, sv_setup, monkeypatch
+):
+    """A rotated password or a 502 used to look identical to 'unknown guid'
+    and stamped verified_at on the whole batch, with no outcome recorded and
+    no way to re-check. It must leave the row alone instead."""
+    contact_id, enr_id = _enroll_contact(sv_org, api, sv_setup, "4805559814")
+    _fabricate_sent(sv_org, sv_setup, enr_id, contact_id, "GUID_RELAY_DOWN")
+
+    def _boom(*a):
+        raise sms_verify.RelayUnavailable("relay HTTP 401")
+
+    monkeypatch.setattr(sms_verify, "_fetch_state", _boom)
+    sms_verify.run_due(SessionLocal())
+    with SessionLocal() as db:
+        msg = db.execute(
+            select(SmsMessage).where(SmsMessage.provider_sid == "GUID_RELAY_DOWN")
+        ).scalar_one()
+        assert msg.verified_at is None
+        assert msg.check_attempts == 0, "a relay outage must not burn an attempt"
+
+
+def test_numeric_string_zero_is_a_success_not_a_failure(
+    sv_org, api, sv_setup, monkeypatch
+):
+    """The relay has returned `error` as both a number and a string. A bare
+    `== 0` read the string form as a failure and RE-SENT a delivered text."""
+    contact_id, enr_id = _enroll_contact(sv_org, api, sv_setup, "4805559815")
+    old = sms_verify.CONFIRM_SUCCESS_AGE.total_seconds() / 60 + 1
+    _fabricate_sent(
+        sv_org, sv_setup, enr_id, contact_id, "GUID_STR_ZERO", age_minutes=old
+    )
+    monkeypatch.setattr(sms_verify, "_fetch_state", lambda *a: {"error": "0"})
+    sms_verify.run_due(SessionLocal())
+    with SessionLocal() as db:
+        msg = db.execute(
+            select(SmsMessage).where(SmsMessage.provider_sid == "GUID_STR_ZERO")
+        ).scalar_one()
+        assert msg.status == SMS_MSG_SENT
+        assert msg.verified_at is not None
+        assert msg.error_code is None
+
+
+def test_does_not_rewind_when_a_later_step_already_reached_the_lead(
+    sv_org, api, sv_setup, monkeypatch
+):
+    """Verification is asynchronous; if the sequence already sent a LATER
+    message, rewinding would re-send an earlier one they already got."""
+    contact_id, enr_id = _enroll_contact(sv_org, api, sv_setup, "4805559816")
+    _fabricate_sent(sv_org, sv_setup, enr_id, contact_id, "GUID_SUPERSEDED")
+    with SessionLocal() as db:
+        # A later step went out after the row being verified.
+        db.add(
+            SmsMessage(
+                organization_id=sv_org["org"],
+                account_id=sv_setup["account"]["id"],
+                campaign_id=sv_setup["campaign"]["id"],
+                enrollment_id=enr_id,
+                step_id="a-different-step-id",
+                contact_id=contact_id,
+                direction="out",
+                to_number="+14805550123",
+                body="follow up",
+                status=SMS_MSG_SENT,
+                provider_sid="GUID_LATER_STEP",
+                created_at=utcnow(),
+            )
+        )
+        enr = db.get(SmsEnrollment, enr_id)
+        enr.current_position = 3
+        enr.next_run_at = None
+        db.commit()
+    monkeypatch.setattr(sms_verify, "_fetch_state", lambda *a: {"error": 4})
+    sms_verify.run_due(SessionLocal())
+    with SessionLocal() as db:
+        msg = db.execute(
+            select(SmsMessage).where(SmsMessage.provider_sid == "GUID_SUPERSEDED")
+        ).scalar_one()
+        assert msg.status == SMS_MSG_FAILED  # ledger still honest
+        enr = db.get(SmsEnrollment, enr_id)
+        assert enr.current_position == 3  # but not rewound
+        assert enr.next_run_at is None

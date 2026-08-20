@@ -34,17 +34,20 @@ from ..models.crm import Contact
 from ..models.sms_outreach import (
     HELP_KEYWORDS,
     SMS_DIR_IN,
+    SMS_DIR_OUT,
     SMS_ENROLL_ACTIVE,
     SMS_ENROLL_EXITED,
     SMS_MSG_DELIVERED,
     SMS_MSG_FAILED,
     SMS_MSG_READ,
     SMS_MSG_RECEIVED,
+    SMS_MSG_SENT,
     SMS_SUPPRESS_STOP,
     STOP_KEYWORDS,
     SmsAccount,
     SmsEnrollment,
     SmsMessage,
+    advance_status,
 )
 from ..security import decrypt_secret
 from ..services import crm, lead_relay, sms_campaigns, sms_consent
@@ -96,10 +99,18 @@ def _exit_contact_enrollments(db: Session, contact: Contact, reason: str) -> int
 
 
 def _contacts_for_number(db: Session, org_id: str, number: str) -> list:
+    """Every contact in the org reachable at this number, OLDEST FIRST.
+
+    The order matters: callers attribute the inbound message to contacts[0],
+    so an unordered scan meant duplicate contacts sharing a phone attributed
+    replies to an arbitrary one — and a different one on a re-run. Oldest-first
+    is the stable, defensible choice (the original lead record wins)."""
     return [
         c
         for c in db.execute(
-            select(Contact).where(Contact.organization_id == org_id)
+            select(Contact)
+            .where(Contact.organization_id == org_id)
+            .order_by(Contact.created_at.asc(), Contact.id.asc())
         ).scalars()
         if sms_consent.contact_sms_number(c) == number
     ]
@@ -132,6 +143,25 @@ def _process_inbound(
     reporting (an iMessage-capable provider falling back to green/SMS)."""
     from_number = sms_consent.normalize_phone(from_raw) or ""
     lowered = body.lower().strip(" .!")
+
+    # Idempotency. Providers retry a webhook on any non-2xx (and BlueBubbles
+    # can re-fire new-message on its own), so without this a retry creates a
+    # duplicate ledger row AND re-runs handle_reply — which re-schedules the
+    # reply step and texts the lead a second time.
+    if provider_sid:
+        # Sessions are autoflush=False, so a row added earlier in THIS session
+        # would be invisible to the check below. Retries normally arrive as
+        # separate requests, but a provider can also double-fire inside one.
+        db.flush()
+        already = db.execute(
+            select(SmsMessage.id).where(
+                SmsMessage.provider_sid == provider_sid,
+                SmsMessage.organization_id == account.organization_id,
+                SmsMessage.direction == SMS_DIR_IN,
+            )
+        ).first()
+        if already:
+            return
 
     # Relay: a text FROM the operator's relay phone is a command to reply to a
     # lead (tagged with the lead's code), never a lead message — route it and
@@ -207,44 +237,121 @@ def _process_inbound(
             lead_relay.forward_to_operator(db, account, contacts[0], body)
 
 
+# Provider status vocabularies → our ladder. Anything absent here is a
+# no-op, deliberately: an unknown word must never move a row.
+_STATUS_PROGRESS = {
+    # Twilio, Sendblue, Telnyx all use these three spellings.
+    "sent": SMS_MSG_SENT,
+    "delivered": SMS_MSG_DELIVERED,
+    "read": SMS_MSG_READ,
+}
+_STATUS_FAILURE = {
+    "failed",
+    "error",
+    "declined",
+    # Twilio: the carrier rejected it after Twilio accepted (spam filter,
+    # unreachable handset) — distinct cause from a Twilio-side failure, so it
+    # gets its own detail line below even though both end at 'failed'.
+    "undelivered",
+    "canceled",
+    "cancelled",
+    # Telnyx terminal failures (message.finalized).
+    "delivery_failed",
+    "sending_failed",
+    "expired",
+}
+# Reported when a carrier returns no DLR at all. NOT a failure — the message
+# very likely arrived — but it must not be counted as a confirmed delivery
+# either, so it records the fact and leaves the status where it is.
+_STATUS_UNCONFIRMED = {"delivery_unconfirmed"}
+
+_FAILURE_DETAIL = {
+    "undelivered": "Carrier rejected the message after the provider accepted it",
+    "canceled": "Send was canceled before delivery",
+    "cancelled": "Send was canceled before delivery",
+    "expired": "Provider gave up before the carrier accepted it",
+    "declined": "Recipient's device or carrier declined the message",
+}
+
+
 def _apply_status(
-    db: Session, account: SmsAccount, sid: Optional[str], status: str, error_code
+    db: Session,
+    account: SmsAccount,
+    sid: Optional[str],
+    status: str,
+    error_code,
+    error_detail: Optional[str] = None,
+    service: Optional[str] = None,
 ) -> None:
-    """Provider-agnostic delivery-receipt handling. `status` is normalized to
-    lowercase; 'delivered'/'sent' → delivered, failure words → failed,
-    'read' → read (Sendblue/iMessage read receipts only — Twilio never sends
-    this status, so the branch is simply unreachable on that provider).
-    Telnyx's terminal failures (delivery_failed / sending_failed / expired)
-    map to failed — without them a dead send would sit at 'sent' forever."""
+    """Provider-agnostic delivery-receipt handling, shared by all four
+    providers. `status` is normalized to lowercase and mapped through
+    _STATUS_* above; every write goes through advance_status so an
+    out-of-order callback can't walk a row backwards (a late 'delivered'
+    after a 'read' used to drop the read out of analytics entirely)."""
     if not sid:
         return
+    # Scoped to this account and to OUTBOUND rows. Inbound rows carry a
+    # provider_sid too, and matching one would rewrite read_at — which means
+    # something different by direction (recipient-read vs our-team-read).
+    # .first() not .scalar_one_or_none(): duplicate SIDs are reachable (the
+    # BlueBubbles duplicate-send rescue probe can return an existing message's
+    # guid), and raising here 500s the webhook, which makes the provider retry
+    # forever and loses every later receipt for that message.
     row = db.execute(
-        select(SmsMessage).where(
+        select(SmsMessage)
+        .where(
             SmsMessage.provider_sid == sid,
             SmsMessage.organization_id == account.organization_id,
+            SmsMessage.account_id == account.id,
+            SmsMessage.direction == SMS_DIR_OUT,
         )
+        .order_by(SmsMessage.created_at.desc())
+        .limit(1)
     ).scalar_one_or_none()
     if row is None:
         return
+
+    if service and not row.service:
+        row.service = str(service)[:20]
+
     status = (status or "").lower()
-    if status in ("read",):
-        row.status = SMS_MSG_READ
-        row.read_at = row.read_at or utcnow()
-    elif status in ("delivered",):
-        row.status = SMS_MSG_DELIVERED
-    elif status in (
-        "failed",
-        "undelivered",
-        "error",
-        "declined",
-        # Telnyx terminal failures (message.finalized).
-        "delivery_failed",
-        "sending_failed",
-        "expired",
-    ):
-        row.status = SMS_MSG_FAILED
-        if error_code is not None:
-            row.error_code = str(error_code)
+    now = utcnow()
+
+    if status in _STATUS_UNCONFIRMED:
+        row.error_detail = row.error_detail or (
+            "Carrier returned no delivery confirmation"
+        )
+        return
+
+    if status in _STATUS_FAILURE:
+        before = row.status
+        row.status = advance_status(row.status, SMS_MSG_FAILED)
+        if row.status == SMS_MSG_FAILED and before != SMS_MSG_FAILED:
+            row.failed_at = row.failed_at or now
+        if row.status == SMS_MSG_FAILED:
+            if error_code is not None:
+                row.error_code = str(error_code)[:20]
+            detail = error_detail or _FAILURE_DETAIL.get(status)
+            if detail:
+                row.error_detail = str(detail)[:500]
+        return
+
+    mapped = _STATUS_PROGRESS.get(status)
+    if mapped is None:
+        return
+    row.status = advance_status(row.status, mapped)
+    if mapped == SMS_MSG_READ and row.status == SMS_MSG_READ:
+        row.read_at = row.read_at or now
+    if mapped in (SMS_MSG_READ, SMS_MSG_DELIVERED):
+        # A read implies delivery, so both receipts stamp delivered_at.
+        row.delivered_at = row.delivered_at or now
+    # A success report supersedes an earlier failure guess (advance_status
+    # allows that transition) — clear the stale reason so the failure
+    # breakdown doesn't keep counting a message that demonstrably arrived.
+    if row.status in (SMS_MSG_DELIVERED, SMS_MSG_READ):
+        row.error_code = None
+        row.error_detail = None
+        row.failed_at = None
 
 
 def _require_token(account: SmsAccount, token: str) -> None:

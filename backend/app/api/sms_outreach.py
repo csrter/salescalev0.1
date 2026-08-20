@@ -11,12 +11,13 @@ _scoped_get pattern (404-not-403).
 """
 
 import datetime as dt
+import math
 import secrets
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from ..db import get_db
@@ -92,28 +93,39 @@ def _scoped_get(db: Session, scope: TenantScope, model, object_id: str):
 _INBOUND_STALE_MIN_SENDS = 20
 
 
-def _account_out(db: Session, a: SmsAccount) -> dict:
-    # Inbound-webhook liveness. Sendblue/BlueBubbles have no Twilio-21610-style
-    # send-time opt-out self-heal, so if their inbound webhook was never
-    # registered (or is misconfigured) STOP is silently never captured — a TCPA
-    # exposure. Surface it: last time an inbound message landed, plus a derived
-    # warning when a non-Twilio active account has sent a meaningful volume yet
-    # has never received a single inbound message.
+def _inbound_health(db: Session, a: SmsAccount) -> tuple:
+    """(last_inbound_at, inbound_webhook_stale) for one account.
+
+    Inbound-webhook liveness. Sendblue/BlueBubbles have no Twilio-21610-style
+    send-time opt-out self-heal, so if their inbound webhook was never
+    registered (or is misconfigured) STOP is silently never captured — a TCPA
+    exposure, not a nicety. Stale = a non-Twilio active account that has sent
+    a meaningful volume yet has never received a single inbound message.
+    Shared by the account list and the dashboard's number-health cards."""
     last_inbound_at = db.execute(
         select(func.max(SmsMessage.created_at)).where(
             SmsMessage.account_id == a.id,
             SmsMessage.direction == SMS_DIR_IN,
         )
     ).scalar_one_or_none()
-    inbound_webhook_stale = False
-    if a.provider != "twilio" and a.status == SMS_ACCOUNT_ACTIVE and last_inbound_at is None:
+    stale = False
+    if (
+        a.provider != "twilio"
+        and a.status == SMS_ACCOUNT_ACTIVE
+        and last_inbound_at is None
+    ):
         outbound_total = db.execute(
             select(func.count(SmsMessage.id)).where(
                 SmsMessage.account_id == a.id,
                 SmsMessage.direction == SMS_DIR_OUT,
             )
         ).scalar_one() or 0
-        inbound_webhook_stale = outbound_total >= _INBOUND_STALE_MIN_SENDS
+        stale = outbound_total >= _INBOUND_STALE_MIN_SENDS
+    return last_inbound_at, stale
+
+
+def _account_out(db: Session, a: SmsAccount) -> dict:
+    last_inbound_at, inbound_webhook_stale = _inbound_health(db, a)
     return {
         "id": a.id,
         "name": a.name,
@@ -476,39 +488,217 @@ _SENT_STATUSES = (SMS_MSG_SENT, SMS_MSG_DELIVERED, SMS_MSG_READ)
 _DELIVERED_STATUSES = (SMS_MSG_DELIVERED, SMS_MSG_READ)
 
 
-def _campaign_stats(db: Session, campaign: SmsCampaign) -> dict:
+def _aware(value: dt.datetime) -> dt.datetime:
+    """SQLite hands back naive datetimes even for DateTime(timezone=True);
+    Postgres returns aware. Normalize before any arithmetic or bucketing."""
+    return value if value.tzinfo else value.replace(tzinfo=dt.timezone.utc)
+
+
+# --- provider receipt capability ---------------------------------------------
+#
+# Not every channel can report every outcome, and a metric that NO provider in
+# play is able to measure must render as "—", never as a confident 0.0%:
+#   delivery receipt — Twilio/Telnyx/Sendblue all report one. BlueBubbles only
+#     does for iMessage, so a mailbox pinned to green-bubble SMS
+#     (bluebubbles_force_sms) terminates every successful send at "sent" and
+#     structurally cannot produce a delivery rate.
+#   read receipt — iMessage only (Sendblue/BlueBubbles). Twilio and Telnyx
+#     never emit one, so a "read rate" on them is 0 by construction.
+
+
+def _receipt_capabilities(account: Optional[SmsAccount]) -> tuple:
+    """(can_report_delivery, can_report_read) for one sending account."""
+    if account is None:
+        # Unknown account (deleted row) — don't suppress a real measurement.
+        return True, True
+    if account.provider == "bluebubbles":
+        imessage = not account.bluebubbles_force_sms
+        return imessage, imessage
+    if account.provider == "sendblue":
+        return True, True
+    return True, False  # twilio / telnyx
+
+
+def _campaign_capabilities(
+    db: Session, campaign: SmsCampaign, since: Optional[dt.datetime]
+) -> tuple:
+    """Receipt capability rolled up over the accounts that ACTUALLY sent this
+    campaign's messages in scope (config can be repointed after the fact),
+    falling back to the campaign's configured account when nothing has sent
+    yet. Capability is OR-ed: one iMessage account in a mixed campaign makes
+    the read rate a real (if partial) measurement rather than a fiction."""
+    stmt = select(SmsMessage.account_id).where(
+        SmsMessage.campaign_id == campaign.id,
+        SmsMessage.direction == SMS_DIR_OUT,
+    )
+    if since is not None:
+        stmt = stmt.where(SmsMessage.created_at >= since)
+    ids = [a for a in db.execute(stmt.distinct()).scalars().all() if a]
+    if not ids and campaign.account_id:
+        ids = [campaign.account_id]
+    if not ids:
+        return True, True
+    caps = [_receipt_capabilities(db.get(SmsAccount, aid)) for aid in ids]
+    return any(c[0] for c in caps), any(c[1] for c in caps)
+
+
+# Latency samples are read into Python; bound the scan so a campaign with a
+# six-figure ledger can't turn a dashboard load into a full-table read.
+_LATENCY_SAMPLE_CAP = 2000
+# Below this many observations a median/p90 is noise, not a metric — report
+# null rather than a number nobody should act on.
+_MIN_LATENCY_SAMPLE = 5
+
+
+def _percentile(values: list, q: float) -> Optional[int]:
+    """Nearest-rank percentile in whole seconds (no interpolation — these are
+    coarse operational timings, not statistics). Nearest rank is ceil(q*n):
+    the p90 of six samples is the sixth, so a slow tail is actually caught
+    rather than rounded away."""
+    if not values:
+        return None
+    ordered = sorted(values)
+    idx = min(len(ordered) - 1, max(0, math.ceil(q * len(ordered)) - 1))
+    return int(round(ordered[idx]))
+
+
+def _campaign_filter(column, campaign_id):
+    """campaign_id may be one id or a list of them — the org-wide totals need
+    the SAME measurement over every campaign in scope, and a median cannot be
+    reconstructed by combining per-campaign medians."""
+    if isinstance(campaign_id, (list, tuple, set)):
+        return column.in_(list(campaign_id))
+    return column == campaign_id
+
+
+def _delivery_latency(db: Session, campaign_id, since: Optional[dt.datetime]) -> tuple:
+    """(median, p90) seconds from send to delivery confirmation. This is what
+    delivered_at exists for — the status alone never carried a timestamp, so
+    time-to-delivery was previously unmeasurable."""
+    stmt = select(SmsMessage.created_at, SmsMessage.delivered_at).where(
+        _campaign_filter(SmsMessage.campaign_id, campaign_id),
+        SmsMessage.direction == SMS_DIR_OUT,
+        SmsMessage.delivered_at.is_not(None),
+    )
+    if since is not None:
+        stmt = stmt.where(SmsMessage.created_at >= since)
+    rows = db.execute(
+        stmt.order_by(SmsMessage.created_at.desc()).limit(_LATENCY_SAMPLE_CAP)
+    ).all()
+    secs = [
+        (_aware(delivered) - _aware(created)).total_seconds()
+        for created, delivered in rows
+        if created is not None and delivered is not None
+    ]
+    secs = [s for s in secs if s >= 0]  # clock skew / backfilled rows
+    if len(secs) < _MIN_LATENCY_SAMPLE:
+        return None, None
+    return _percentile(secs, 0.5), _percentile(secs, 0.9)
+
+
+def _reply_latency(db: Session, campaign_id, since: Optional[dt.datetime]) -> Optional[int]:
+    """Median seconds from a lead's FIRST outbound message in this campaign to
+    their first reply — how long a cohort takes to answer."""
+    first_out = dict(
+        db.execute(
+            select(SmsMessage.enrollment_id, func.min(SmsMessage.created_at))
+            .where(
+                _campaign_filter(SmsMessage.campaign_id, campaign_id),
+                SmsMessage.direction == SMS_DIR_OUT,
+                SmsMessage.enrollment_id.is_not(None),
+            )
+            .group_by(SmsMessage.enrollment_id)
+        ).all()
+    )
+    if not first_out:
+        return None
+    enr = select(SmsEnrollment.id, SmsEnrollment.replied_at).where(
+        _campaign_filter(SmsEnrollment.campaign_id, campaign_id),
+        SmsEnrollment.replied_at.is_not(None),
+    )
+    if since is not None:
+        enr = enr.where(SmsEnrollment.created_at >= since)
+    secs = []
+    for enrollment_id, replied_at in db.execute(enr).all():
+        started = first_out.get(enrollment_id)
+        if started is None or replied_at is None:
+            continue
+        delta = (_aware(replied_at) - _aware(started)).total_seconds()
+        if delta >= 0:
+            secs.append(delta)
+    if len(secs) < _MIN_LATENCY_SAMPLE:
+        return None
+    return _percentile(secs, 0.5)
+
+
+def _campaign_stats(
+    db: Session, campaign: SmsCampaign, since: Optional[dt.datetime] = None
+) -> dict:
     """Computed funnel for one campaign. Definitions (all campaign-scoped):
       sent      = messages the provider accepted (incl. later receipts)
       delivered = confirmed delivered via the status callback (incl. read)
       read      = iMessage/Sendblue read receipts — the closest thing SMS has
                   to "opened"; plain carrier SMS never reports this
       failed    = messages the provider (or the network) rejected outright
+      unconfirmed = accepted but never confirmed by anything (still "sent",
+                  no receipt and no verification read-back). On BlueBubbles
+                  green-bubble SMS this is the terminal state of a SUCCESSFUL
+                  send; elsewhere it means the outcome is genuinely unknown.
+                  Surfaced so the counts reconcile instead of leaving a
+                  silent gap between sent and delivered+failed.
       replied   = enrollments with at least one reply recorded
       replies   = total inbound messages linked to this campaign (a lead
                   texting back three times counts three here, once in replied)
       opted_out = enrollments exited via STOP/opt-out
       awaiting_reply = active enrollments parked at a reply-triggered step
-    Rates (None when the denominator is 0): delivery_rate = delivered/sent,
-    read_rate = read/delivered, reply_rate = replied/sent,
-    opt_out_rate = opted_out/sent."""
+
+    `since` windows the figures. Message counts cover messages SENT in the
+    window; the enrollment-derived figures (enrolled/replied/opted_out/…) are
+    a COHORT — the leads enrolled in the window and what became of them — so
+    that numerator and denominator always describe the same population. Pass
+    since=None (the default) for lifetime stats, which is what the campaign
+    detail view wants.
+
+    Rates are None when the denominator is 0 (undefined, not zero):
+      delivery_rate = delivered/sent, read_rate = read/delivered — each null
+        when no provider in play can emit that receipt type AND none was ever
+        observed (see delivery_measurable/read_measurable), so a structurally
+        impossible metric never renders as a confident 0.0%.
+      reply_rate / opt_out_rate = per MESSAGE (kept for compatibility).
+      reply_rate_per_lead / opt_out_rate_per_lead = per LEAD (÷ enrolled) —
+        the honest engagement figures. The message-denominated ones divide
+        people by sends, so an N-step campaign deflates them ~N-fold; the
+        carrier-filtering red line must be read off the per-lead opt-out
+        rate or it under-fires on exactly the long campaigns most at risk."""
     cid = campaign.id
     base = select(func.count(SmsMessage.id)).where(
         SmsMessage.campaign_id == cid, SmsMessage.direction == SMS_DIR_OUT
     )
+    in_base = select(func.count(SmsMessage.id)).where(
+        SmsMessage.campaign_id == cid, SmsMessage.direction == SMS_DIR_IN
+    )
+    enr = select(func.count(SmsEnrollment.id)).where(SmsEnrollment.campaign_id == cid)
+    if since is not None:
+        base = base.where(SmsMessage.created_at >= since)
+        in_base = in_base.where(SmsMessage.created_at >= since)
+        enr = enr.where(SmsEnrollment.created_at >= since)
+
     sent = _count(db, base.where(SmsMessage.status.in_(_SENT_STATUSES)))
     delivered = _count(db, base.where(SmsMessage.status.in_(_DELIVERED_STATUSES)))
     read = _count(db, base.where(SmsMessage.status == SMS_MSG_READ))
     failed = _count(db, base.where(SmsMessage.status == SMS_MSG_FAILED))
+    unconfirmed = _count(
+        db,
+        base.where(
+            SmsMessage.status == SMS_MSG_SENT, SmsMessage.verified_at.is_(None)
+        ),
+    )
     # Reply counting excludes automated out-of-office auto-responders so the
     # numbers reflect REAL human engagement; auto_replies is surfaced on its own.
-    in_base = select(func.count(SmsMessage.id)).where(
-        SmsMessage.campaign_id == cid, SmsMessage.direction == SMS_DIR_IN
-    )
     replies = _count(db, in_base.where(SmsMessage.is_auto_reply.is_(False)))
     auto_replies = _count(db, in_base.where(SmsMessage.is_auto_reply.is_(True)))
-    failure_reasons = _failure_reasons(db, cid)
+    failure_reasons = _failure_reasons(db, cid, since)
 
-    enr = select(func.count(SmsEnrollment.id)).where(SmsEnrollment.campaign_id == cid)
     enrolled = _count(db, enr)
     active = _count(db, enr.where(SmsEnrollment.status == SMS_ENROLL_ACTIVE))
     awaiting = _count(
@@ -525,6 +715,13 @@ def _campaign_stats(db: Session, campaign: SmsCampaign) -> dict:
     steps_count = _count(
         db, select(func.count(SmsStep.id)).where(SmsStep.campaign_id == cid)
     )
+    delivery_ok, read_ok = _campaign_capabilities(db, campaign, since)
+    # An actual observation always wins over the capability table: if a receipt
+    # of that kind exists, the metric is measured, whatever we assumed about
+    # the provider. The gate only suppresses a rate that is structurally 0.
+    delivery_ok = delivery_ok or delivered > 0
+    read_ok = read_ok or read > 0
+    median_delivery, p90_delivery = _delivery_latency(db, cid, since)
     return {
         "steps_count": steps_count,
         "enrolled": enrolled,
@@ -534,19 +731,29 @@ def _campaign_stats(db: Session, campaign: SmsCampaign) -> dict:
         "delivered": delivered,
         "read": read,
         "failed": failed,
+        "unconfirmed": unconfirmed,
         "failure_reasons": failure_reasons,
         "replied": replied,
         "replies": replies,
         "auto_replies": auto_replies,
         "opted_out": opted_out,
-        "delivery_rate": _rate(delivered, sent),
-        "read_rate": _rate(read, delivered),
+        "delivery_measurable": delivery_ok,
+        "read_measurable": read_ok,
+        "delivery_rate": _rate(delivered, sent) if delivery_ok else None,
+        "read_rate": _rate(read, delivered) if read_ok else None,
         "reply_rate": _rate(replied, sent),
         "opt_out_rate": _rate(opted_out, sent),
+        "reply_rate_per_lead": _rate(replied, enrolled),
+        "opt_out_rate_per_lead": _rate(opted_out, enrolled),
+        "median_delivery_seconds": median_delivery,
+        "p90_delivery_seconds": p90_delivery,
+        "median_reply_seconds": _reply_latency(db, cid, since),
     }
 
 
-def _failure_reasons(db: Session, campaign_id: str) -> list:
+def _failure_reasons(
+    db: Session, campaign_id: str, since: Optional[dt.datetime] = None
+) -> list:
     """Send-tracking diagnostics: failed outbound grouped by reason, most
     common first. Reason is the human error_detail when present, else the
     provider error_code, else 'Unknown'. Lets an operator see WHY sends failed
@@ -556,14 +763,15 @@ def _failure_reasons(db: Session, campaign_id: str) -> list:
         func.nullif(SmsMessage.error_code, ""),
         "Unknown",
     )
+    stmt = select(label.label("reason"), func.count(SmsMessage.id).label("n")).where(
+        SmsMessage.campaign_id == campaign_id,
+        SmsMessage.direction == SMS_DIR_OUT,
+        SmsMessage.status == SMS_MSG_FAILED,
+    )
+    if since is not None:
+        stmt = stmt.where(SmsMessage.created_at >= since)
     rows = db.execute(
-        select(label.label("reason"), func.count(SmsMessage.id).label("n"))
-        .where(
-            SmsMessage.campaign_id == campaign_id,
-            SmsMessage.direction == SMS_DIR_OUT,
-            SmsMessage.status == SMS_MSG_FAILED,
-        )
-        .group_by(label)
+        stmt.group_by(label)
         .order_by(func.count(SmsMessage.id).desc())
         .limit(8)
     ).all()
@@ -644,7 +852,9 @@ def _campaign_out(db: Session, c: SmsCampaign, *, full: bool = False) -> dict:
         "auto_enroll_new_leads": c.auto_enroll_new_leads,
         "activated_at": c.activated_at.isoformat() if c.activated_at else None,
         "created_at": c.created_at.isoformat(),
-        **_campaign_stats(db, c),
+        # Campaign list/detail always reports LIFETIME stats — the dashboard's
+        # date range is an analytics-only concern (see the analytics endpoint).
+        **_campaign_stats(db, c, since=None),
     }
     if full:
         per_step = _step_stats(db, c.id)
@@ -1181,8 +1391,15 @@ def preview_campaign(
 
 
 def _message_out(m: SmsMessage, contact: Optional[Contact] = None) -> dict:
-    sent_at = m.created_at.isoformat() if m.direction == SMS_DIR_OUT else None
-    received_at = m.created_at.isoformat() if m.direction != SMS_DIR_OUT else None
+    # sent_at means "the provider accepted this" — a queued or failed row never
+    # sent, so it reports none (created_at is still there for ordering/display).
+    outbound = m.direction == SMS_DIR_OUT
+    sent_at = (
+        m.created_at.isoformat()
+        if outbound and m.status in _SENT_STATUSES
+        else None
+    )
+    received_at = m.created_at.isoformat() if not outbound else None
     return {
         "id": m.id,
         "account_id": m.account_id,
@@ -1202,6 +1419,13 @@ def _message_out(m: SmsMessage, contact: Optional[Contact] = None) -> dict:
         "sent_at": sent_at,
         "received_at": received_at,
         "read_at": m.read_at.isoformat() if m.read_at else None,
+        # Transport actually used ("iMessage"/"SMS"/"RCS") — the green-bubble
+        # signal on an iMessage-capable provider.
+        "service": m.service,
+        "delivered_at": m.delivered_at.isoformat() if m.delivered_at else None,
+        # BlueBubbles read-back: null on a "sent" row means the outcome is
+        # still provisional, not confirmed.
+        "verified_at": m.verified_at.isoformat() if m.verified_at else None,
         "created_at": m.created_at.isoformat(),
     }
 
@@ -1360,6 +1584,11 @@ def analytics(
     user: User = Depends(require_team),
     scope: TenantScope = Depends(get_scope),
 ):
+    """Windowed analytics. `days` is the selected range and it applies to
+    EVERYTHING here — the headline totals, the by-campaign table, the daily
+    series and the per-number rollup all cover the same window, so nothing on
+    this screen is an all-time figure sitting under a control that says
+    "7 days". Lifetime stats live on the campaign list/detail routes."""
     days = max(1, min(days, 365))
     campaigns = db.execute(
         scope.filter(select(SmsCampaign), SmsCampaign)
@@ -1370,35 +1599,57 @@ def analytics(
             raise HTTPException(404, "Not found")
     cids = [c.id for c in campaigns]
 
-    agg = {
-        k: 0
-        for k in (
-            "sent", "delivered", "read", "failed", "replied", "replies",
-            "auto_replies", "opted_out", "enrolled", "active_enrollments",
-            "awaiting_reply",
-        )
-    }
-    by_campaign = []
-    for c in campaigns:
-        st = _campaign_stats(db, c)
-        for k in agg:
-            agg[k] += st.get(k, 0)
-        by_campaign.append({"campaign_id": c.id, "name": c.name, **st})
-    totals = {
-        **agg,
-        "delivery_rate": _rate(agg["delivered"], agg["sent"]),
-        "read_rate": _rate(agg["read"], agg["delivered"]),
-        "reply_rate": _rate(agg["replied"], agg["sent"]),
-        "opt_out_rate": _rate(agg["opted_out"], agg["sent"]),
-    }
-
     since = utcnow().replace(hour=0, minute=0, second=0, microsecond=0) - dt.timedelta(
         days=days - 1
     )
+
+    agg = {
+        k: 0
+        for k in (
+            "sent", "delivered", "read", "failed", "unconfirmed", "replied",
+            "replies", "auto_replies", "opted_out", "enrolled",
+            "active_enrollments", "awaiting_reply",
+        )
+    }
+    by_campaign = []
+    # A rate is measurable for the org as a whole if ANY campaign in scope runs
+    # on a provider that can emit that receipt type.
+    delivery_ok = False
+    read_ok = False
+    for c in campaigns:
+        st = _campaign_stats(db, c, since=since)
+        for k in agg:
+            agg[k] += st.get(k, 0)
+        delivery_ok = delivery_ok or st["delivery_measurable"]
+        read_ok = read_ok or st["read_measurable"]
+        by_campaign.append({"campaign_id": c.id, "name": c.name, **st})
+    _totals_delivery = _delivery_latency(db, cids, since)
+    totals = {
+        **agg,
+        "delivery_measurable": delivery_ok,
+        "read_measurable": read_ok,
+        "delivery_rate": _rate(agg["delivered"], agg["sent"]) if delivery_ok else None,
+        "read_rate": _rate(agg["read"], agg["delivered"]) if read_ok else None,
+        "reply_rate": _rate(agg["replied"], agg["sent"]),
+        "opt_out_rate": _rate(agg["opted_out"], agg["sent"]),
+        # Per-LEAD rates — divide people by people. The message-denominated
+        # pair above deflates by roughly the step count on a multi-step
+        # campaign; the opt-out red line reads off this one.
+        "reply_rate_per_lead": _rate(agg["replied"], agg["enrolled"]),
+        "opt_out_rate_per_lead": _rate(agg["opted_out"], agg["enrolled"]),
+        # Measured across every campaign in scope, not summed from the
+        # per-campaign figures — a median of medians is not a median.
+        "median_delivery_seconds": _totals_delivery[0],
+        "p90_delivery_seconds": _totals_delivery[1],
+        "median_reply_seconds": _reply_latency(db, cids, since),
+    }
+
     by_day = _analytics_by_day(db, cids, since)
-    accounts = _analytics_accounts(db, scope)
+    accounts = _analytics_accounts(db, scope, since)
     org = db.get(Organization, scope.organization_id)
     return {
+        "days": days,
+        "since": since.isoformat(),
         "totals": totals,
         "by_day": by_day,
         "by_campaign": by_campaign,
@@ -1413,11 +1664,15 @@ def analytics(
 def _day_key(value: Optional[dt.datetime]) -> Optional[str]:
     if value is None:
         return None
-    v = value if value.tzinfo else value.replace(tzinfo=dt.timezone.utc)
-    return v.astimezone(dt.timezone.utc).date().isoformat()
+    return _aware(value).astimezone(dt.timezone.utc).date().isoformat()
 
 
 def _analytics_by_day(db: Session, cids: list, since: dt.datetime) -> list:
+    """Daily series. Each event buckets on the day it ACTUALLY happened —
+    a delivery on delivered_at, a read on read_at — not on the send day, so a
+    bar stops mutating retroactively days after it was drawn. Legacy rows that
+    carry a delivered status but no delivered_at (they predate the column)
+    fall back to the send day, which is the best they can do."""
     if not cids:
         return []
     buckets: dict = {}
@@ -1435,52 +1690,66 @@ def _analytics_by_day(db: Session, cids: list, since: dt.datetime) -> list:
             },
         )
 
+    # Date predicate in SQL, not Python: this used to read a campaign's ENTIRE
+    # outbound history on every dashboard load. A row qualifies if any of its
+    # three bucketable moments falls in the window (a message sent before the
+    # window can still be delivered or read inside it).
     msgs = db.execute(
-        select(SmsMessage.created_at, SmsMessage.status, SmsMessage.read_at).where(
+        select(
+            SmsMessage.created_at,
+            SmsMessage.status,
+            SmsMessage.read_at,
+            SmsMessage.delivered_at,
+        ).where(
             SmsMessage.campaign_id.in_(cids),
             SmsMessage.direction == SMS_DIR_OUT,
+            or_(
+                SmsMessage.created_at >= since,
+                SmsMessage.read_at >= since,
+                SmsMessage.delivered_at >= since,
+            ),
         )
     ).all()
-    for created_at, status, read_at in msgs:
-        aware = (
-            created_at
-            if created_at.tzinfo
-            else created_at.replace(tzinfo=dt.timezone.utc)
-        )
+    for created_at, status, read_at, delivered_at in msgs:
+        aware = _aware(created_at)
         if aware >= since:
             if status in _SENT_STATUSES:
                 _b(_day_key(aware))["sent"] += 1
-            if status in _DELIVERED_STATUSES:
-                _b(_day_key(aware))["delivered"] += 1
             if status == SMS_MSG_FAILED:
                 _b(_day_key(aware))["failed"] += 1
+        if status in _DELIVERED_STATUSES:
+            # Bucket on the confirmation, falling back to the send day only
+            # for rows written before delivered_at existed.
+            when = _aware(delivered_at) if delivered_at is not None else aware
+            if when >= since:
+                _b(_day_key(when))["delivered"] += 1
         # Reads bucket on the day the RECIPIENT read it, not the send day.
         if status == SMS_MSG_READ and read_at is not None:
-            read_aware = (
-                read_at if read_at.tzinfo else read_at.replace(tzinfo=dt.timezone.utc)
-            )
+            read_aware = _aware(read_at)
             if read_aware >= since:
                 _b(_day_key(read_aware))["read"] += 1
     replies = db.execute(
         select(SmsEnrollment.replied_at).where(
             SmsEnrollment.campaign_id.in_(cids),
-            SmsEnrollment.replied_at.is_not(None),
+            SmsEnrollment.replied_at >= since,
         )
     ).all()
     for (replied_at,) in replies:
         if replied_at is None:
             continue
-        aware = (
-            replied_at
-            if replied_at.tzinfo
-            else replied_at.replace(tzinfo=dt.timezone.utc)
-        )
-        if aware >= since:
-            _b(_day_key(aware))["replied"] += 1
+        _b(_day_key(_aware(replied_at)))["replied"] += 1
     return [buckets[k] for k in sorted(buckets)]
 
 
-def _analytics_accounts(db: Session, scope: TenantScope) -> list:
+def _analytics_accounts(
+    db: Session, scope: TenantScope, since: dt.datetime
+) -> list:
+    """Per-number rollup over the SELECTED window (this was hardcoded to 7
+    days regardless of the range control). failure_rate_7d is kept at its
+    literal 7-day meaning for compatibility; `failure_rate` follows the
+    window. Both divide by ATTEMPTS (sent + failed), not by successes — the
+    old denominator reported 50 sent + 50 failed as "100%" and rendered a
+    fully dead number (0 sent, 100 failed) as nothing at all."""
     accounts = db.execute(
         scope.filter(select(SmsAccount), SmsAccount)
     ).scalars().all()
@@ -1490,18 +1759,41 @@ def _analytics_accounts(db: Session, scope: TenantScope) -> list:
         base = select(func.count(SmsMessage.id)).where(
             SmsMessage.account_id == a.id,
             SmsMessage.direction == SMS_DIR_OUT,
-            SmsMessage.created_at >= seven_days_ago,
         )
-        sent_7d = _count(db, base.where(SmsMessage.status.in_(_SENT_STATUSES)))
-        failed_7d = _count(db, base.where(SmsMessage.status == SMS_MSG_FAILED))
+        windowed = base.where(SmsMessage.created_at >= since)
+        sent = _count(db, windowed.where(SmsMessage.status.in_(_SENT_STATUSES)))
+        failed = _count(db, windowed.where(SmsMessage.status == SMS_MSG_FAILED))
+        unconfirmed = _count(
+            db,
+            windowed.where(
+                SmsMessage.status == SMS_MSG_SENT,
+                SmsMessage.verified_at.is_(None),
+            ),
+        )
+        week = base.where(SmsMessage.created_at >= seven_days_ago)
+        sent_7d = _count(db, week.where(SmsMessage.status.in_(_SENT_STATUSES)))
+        failed_7d = _count(db, week.where(SmsMessage.status == SMS_MSG_FAILED))
+        last_inbound_at, inbound_webhook_stale = _inbound_health(db, a)
         out.append(
             {
                 "account_id": a.id,
                 "from_number": a.from_number,
+                # Which channel this number runs on — the qualifier that makes
+                # a 0% delivery/read rate readable instead of alarming.
+                "provider": a.provider,
                 "status": a.status,
                 "sends_today": sms_send.sends_today(db, a),
                 "daily_send_cap": a.daily_send_cap,
-                "failure_rate_7d": _rate(failed_7d, sent_7d),
+                "sent": sent,
+                "failed": failed,
+                "unconfirmed": unconfirmed,
+                "failure_rate": _rate(failed, sent + failed),
+                "failure_rate_7d": _rate(failed_7d, sent_7d + failed_7d),
+                "channel_health": sms_send.channel_health(db, a),
+                "last_inbound_at": (
+                    last_inbound_at.isoformat() if last_inbound_at else None
+                ),
+                "inbound_webhook_stale": inbound_webhook_stale,
             }
         )
     return out

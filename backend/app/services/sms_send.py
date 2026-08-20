@@ -408,15 +408,44 @@ def _bluebubbles_resolve_service(base: str, pw: str, to_number: str) -> str:
     return "iMessage"
 
 
+# Cache for the server-capability probe below: {relay_base: (expires_at, method)}.
+# Whether a Mac has a working Private API helper is a property of that host's
+# INSTALL (SIP state, helper build) — it does not change between two sends, so
+# re-probing on every single send spent a relay round trip per message for an
+# answer that is stable for hours. The relay is rate-limited per Apple ID
+# (~4 req/s measured), and that budget is shared with the actual sends and the
+# verification poller, so this is real headroom, not micro-optimization.
+_BB_METHOD_TTL = dt.timedelta(minutes=10)
+_bb_method_cache: dict = {}
+
+
+def reset_method_cache() -> None:
+    """Forget cached relay capabilities — for tests, and for when a relay is
+    reconfigured or reinstalled (its Private API support can change)."""
+    _bb_method_cache.clear()
+
+
 def _bluebubbles_method(base: str, pw: str) -> str:
     """'private-api' when the host Mac's Private API helper is usable, else
     'apple-script'. EC2 Mac instances can never disable SIP (no Recovery
     Mode), so the Private API is structurally unavailable there and a
     hardcoded private-api method would fail every send; BlueBubbles can
-    still send via its AppleScript method on such hosts. Probed per send
-    from /api/v1/server/info; any probe failure keeps the historical
-    default (private-api) rather than downgrading the proven path on a
-    transient blip."""
+    still send via its AppleScript method on such hosts. Probed from
+    /api/v1/server/info and cached per relay for _BB_METHOD_TTL; any probe
+    failure keeps the historical default (private-api) rather than
+    downgrading the proven path on a transient blip."""
+    # Keyed on the credential too, so rotating a relay password re-probes
+    # instead of trusting an answer obtained with the old one.
+    key = (base, pw)
+    cached = _bb_method_cache.get(key)
+    if cached and cached[0] > utcnow():
+        return cached[1]
+    method = _probe_bluebubbles_method(base, pw)
+    _bb_method_cache[key] = (utcnow() + _BB_METHOD_TTL, method)
+    return method
+
+
+def _probe_bluebubbles_method(base: str, pw: str) -> str:
     try:
         resp = httpx.get(
             f"{base}/api/v1/server/info", params={"password": pw}, timeout=10
@@ -774,7 +803,18 @@ def channel_health(db: Session, account: SmsAccount) -> dict:
         .limit(_CHANNEL_HEALTH_SAMPLE)
     ).all()
     sampled = len(rows)
-    sent = sum(1 for status, _ in rows if status == SMS_MSG_SENT)
+    # Inclusive, like every other `sent` counter in the product
+    # (_SENT_STATUSES / _COUNTED_SENT_STATUSES): a delivered or read
+    # message was also sent. Counting only the literal 'sent' status made
+    # this field mean 'sent but not yet confirmed' in the one place it sits
+    # beside `delivered` and `failed`, so a healthy fast-receipt account
+    # reported sent: 0.
+    sent = sum(
+        1
+        for status, _ in rows
+        if status in (SMS_MSG_SENT, SMS_MSG_DELIVERED, SMS_MSG_READ)
+    )
+    unconfirmed = sum(1 for status, _ in rows if status == SMS_MSG_SENT)
     delivered = sum(
         1 for status, _ in rows if status in (SMS_MSG_DELIVERED, SMS_MSG_READ)
     )
@@ -791,16 +831,19 @@ def channel_health(db: Session, account: SmsAccount) -> dict:
             "delivered": delivered,
             "failed": failed,
             "downgraded": downgraded,
+            "unconfirmed": unconfirmed,
             "sampled": sampled,
             "detail": "No recent sends",
         }
-    if sampled and failed / sampled >= 0.5:
+    attempted = sent + failed
+    if attempted and failed / attempted >= 0.5:
         return {
             "status": "blocked",
             "sent": sent,
             "delivered": delivered,
             "failed": failed,
             "downgraded": downgraded,
+            "unconfirmed": unconfirmed,
             "sampled": sampled,
             "detail": "High recent failure rate",
         }
@@ -816,6 +859,7 @@ def channel_health(db: Session, account: SmsAccount) -> dict:
             "delivered": delivered,
             "failed": failed,
             "downgraded": downgraded,
+            "unconfirmed": unconfirmed,
             "sampled": sampled,
             "detail": " and ".join(reasons).capitalize(),
         }
@@ -825,6 +869,7 @@ def channel_health(db: Session, account: SmsAccount) -> dict:
         "delivered": delivered,
         "failed": failed,
         "downgraded": downgraded,
+        "unconfirmed": unconfirmed,
         "sampled": sampled,
         "detail": "Sending normally",
     }
@@ -932,7 +977,9 @@ def send(
         return FAILED, row
     if error_code is None:
         row.status = SMS_MSG_SENT
-        row.provider_sid = sid
+        # `or None`: an empty guid still satisfies IS NOT NULL, so it would be
+        # polled forever against a URL with no id and never resolve.
+        row.provider_sid = sid or None
         db.add(row)
         db.flush()
         return SENT, row
@@ -992,7 +1039,9 @@ def send_notification(
         return FAILED, row
     if error_code is None:
         row.status = SMS_MSG_SENT
-        row.provider_sid = sid
+        # `or None`: an empty guid still satisfies IS NOT NULL, so it would be
+        # polled forever against a URL with no id and never resolve.
+        row.provider_sid = sid or None
         db.add(row)
         db.flush()
         return SENT, row
@@ -1044,7 +1093,9 @@ def send_reply(
         return FAILED, row
     if error_code is None:
         row.status = SMS_MSG_SENT
-        row.provider_sid = sid
+        # `or None`: an empty guid still satisfies IS NOT NULL, so it would be
+        # polled forever against a URL with no id and never resolve.
+        row.provider_sid = sid or None
         db.add(row)
         db.flush()
         return SENT, row

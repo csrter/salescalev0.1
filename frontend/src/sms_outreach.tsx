@@ -61,6 +61,7 @@ import {
   type SmsAccountBody,
   type SmsAnalytics,
   type SmsCampaign,
+  type SmsChannelHealth,
   type SmsCampaignDetail,
   type SmsEnrollment,
   type SmsEnrollReceipt,
@@ -113,6 +114,33 @@ const pct = (v: number | null | undefined): string =>
 
 const int = (v: number | null | undefined): string =>
   v == null ? "—" : v.toLocaleString();
+
+/** Seconds → compact duration ("45s", "6m 12s", "1h 4m"); null → "—". Used for
+ * the delivery/reply latency readouts, which are null below a usable sample. */
+const dur = (v: number | null | undefined): string => {
+  if (v == null) return "—";
+  if (v < 60) return `${Math.round(v)}s`;
+  if (v < 3600) {
+    const m = Math.floor(v / 60);
+    const s = Math.round(v % 60);
+    return s ? `${m}m ${s}s` : `${m}m`;
+  }
+  const h = Math.floor(v / 3600);
+  const m = Math.round((v % 3600) / 60);
+  return m ? `${h}h ${m}m` : `${h}h`;
+};
+
+const PROVIDER_LABELS: Record<SmsProvider, string> = {
+  twilio: "Twilio",
+  sendblue: "Sendblue",
+  bluebubbles: "BlueBubbles",
+  telnyx: "Telnyx",
+};
+
+const providerLabel = (p: SmsProvider): string => PROVIDER_LABELS[p] ?? p;
+
+const healthTone = (status: SmsChannelHealth["status"]): "ok" | "warn" | "danger" =>
+  status === "healthy" ? "ok" : status === "degraded" ? "warn" : "danger";
 
 const contactLabel = (c: {
   first_name: string | null;
@@ -360,11 +388,22 @@ function DashboardPanel({
 
   const loading = data === null;
   const t = data?.totals;
-  const optOutOver = (t?.opt_out_rate ?? 0) >= OPT_OUT_RED_LINE;
+  // The red line reads off the PER-LEAD rate. Against the per-message rate it
+  // under-fired by roughly the step count — on exactly the long campaigns
+  // most at risk of carrier filtering.
+  const optOutOver = (t?.opt_out_rate_per_lead ?? 0) >= OPT_OUT_RED_LINE;
+  const windowLabel = `last ${days} days`;
 
   const campaignColumns: Column<SmsAnalytics["by_campaign"][number]>[] = [
     { key: "name", header: "Campaign", render: (c) => c.name, sortValue: (c) => c.name },
     { key: "sent", header: "Sent", align: "right", render: (c) => int(c.sent), sortValue: (c) => c.sent },
+    {
+      key: "unconfirmed",
+      header: "Unconfirmed",
+      align: "right",
+      render: (c) => int(c.unconfirmed),
+      sortValue: (c) => c.unconfirmed,
+    },
     {
       key: "delivery",
       header: "Delivery",
@@ -387,11 +426,26 @@ function DashboardPanel({
       sortValue: (c) => c.replies,
     },
     {
+      // Per LEAD, not per message — the two differ by ~the step count, so the
+      // header says which one this is.
       key: "reply",
-      header: "Reply",
+      header: "Reply / lead",
       align: "right",
-      render: (c) => pct(c.reply_rate),
-      sortValue: (c) => c.reply_rate ?? -1,
+      render: (c) => pct(c.reply_rate_per_lead),
+      sortValue: (c) => c.reply_rate_per_lead ?? -1,
+    },
+    {
+      key: "optout",
+      header: "Opt-out / lead",
+      align: "right",
+      render: (c) =>
+        c.opt_out_rate_per_lead != null &&
+        c.opt_out_rate_per_lead >= OPT_OUT_RED_LINE ? (
+          <Badge tone="danger">{pct(c.opt_out_rate_per_lead)}</Badge>
+        ) : (
+          pct(c.opt_out_rate_per_lead)
+        ),
+      sortValue: (c) => c.opt_out_rate_per_lead ?? -1,
     },
     {
       key: "failed",
@@ -404,6 +458,13 @@ function DashboardPanel({
 
   const chartLabels = data?.by_day.map((d) => d.date) ?? [];
   const hasChart = chartLabels.length > 1;
+
+  // Numbers whose STOP-capture webhook was never wired (see SmsAccount
+  // .inbound_webhook_stale) — a compliance failure, so it leads the page
+  // rather than hiding inside a card.
+  const staleWebhookNumbers = (data?.accounts ?? [])
+    .filter((a) => a.inbound_webhook_stale)
+    .map((a) => a.from_number || providerLabel(a.provider));
 
   return (
     <div>
@@ -460,28 +521,66 @@ function DashboardPanel({
               <KpiSkeleton />
               <KpiSkeleton />
               <KpiSkeleton />
+              <KpiSkeleton />
+              <KpiSkeleton />
             </>
           ) : (
             <>
               <Kpi label="Sent" value={int(t.sent)} />
+              <Kpi label="Delivered" value={int(t.delivered)} />
+              <Kpi label="Unconfirmed" value={int(t.unconfirmed)} />
+              <Kpi label="Failed" value={int(t.failed)} />
               <Kpi label="Delivery rate" value={pct(t.delivery_rate)} />
               <Kpi label="Read rate (iMessage)" value={pct(t.read_rate)} />
-              <Kpi label="Replies" value={int(t.replies)} />
-              <Kpi label="Reply rate" value={pct(t.reply_rate)} />
-              <Kpi label="Auto-replies" value={int(t.auto_replies)} />
-              <Kpi label="Failed" value={int(t.failed)} />
-              <Kpi label="Opt-out rate" value={pct(t.opt_out_rate)} />
+              <Kpi label="Reply rate (per lead)" value={pct(t.reply_rate_per_lead)} />
+              <Kpi
+                label="Opt-out rate (per lead)"
+                value={pct(t.opt_out_rate_per_lead)}
+              />
             </>
           )}
         </KpiGrid>
+        {!loading && t && (
+          <p className="sms-hint">
+            Every figure on this page covers the {windowLabel}.{" "}
+            <strong>Per lead</strong> rates divide by the {int(t.enrolled)} leads
+            enrolled in this window — per message they read{" "}
+            {pct(t.reply_rate)} reply / {pct(t.opt_out_rate)} opt-out, roughly
+            one step's worth of the same thing.
+            {t.unconfirmed > 0 && (
+              <>
+                {" "}
+                {int(t.unconfirmed)} send{t.unconfirmed === 1 ? "" : "s"} are
+                still unconfirmed — accepted, with no delivery receipt or
+                read-back yet.
+              </>
+            )}
+            {!t.delivery_measurable && (
+              <>
+                {" "}
+                Delivery rate reads “—” because no number in play can report a
+                delivery receipt (green-bubble SMS through BlueBubbles never
+                does), not because nothing arrived.
+              </>
+            )}
+            {!t.read_measurable && (
+              <>
+                {" "}
+                Read receipts are iMessage-only — Twilio and Telnyx never send
+                one, so read rate reads “—” rather than 0%.
+              </>
+            )}
+          </p>
+        )}
       </div>
 
       {!loading && optOutOver && (
         <div className="sms-redline">
           <Alert tone="danger" title="Opt-out rate is elevated">
-            {pct(t?.opt_out_rate)} of sends resulted in an opt-out (over{" "}
-            {pct(OPT_OUT_RED_LINE)}). Review targeting and message content —
-            a high opt-out rate risks carrier filtering.
+            {pct(t?.opt_out_rate_per_lead)} of leads texted in the{" "}
+            {windowLabel} opted out (over {pct(OPT_OUT_RED_LINE)}). Review
+            targeting and message content — a high opt-out rate risks carrier
+            filtering.
           </Alert>
         </div>
       )}
@@ -495,6 +594,57 @@ function DashboardPanel({
           </Alert>
         </div>
       )}
+
+      {!loading && staleWebhookNumbers.length > 0 && (
+        <div className="sms-redline">
+          <Alert tone="danger" title="STOP replies are not being captured">
+            {staleWebhookNumbers.join(", ")} {staleWebhookNumbers.length === 1 ? "has" : "have"}{" "}
+            sent real volume and never received a single inbound message, which
+            means the inbound webhook was never wired up. Unlike Twilio, these
+            providers have no carrier-level opt-out fallback — every STOP is
+            being missed, and texting someone who opted out is a TCPA
+            violation. Paste the inbound webhook URL from the Accounts tab into
+            the provider now.
+          </Alert>
+        </div>
+      )}
+
+      <Section title="Response & timing">
+        <KpiGrid>
+          {loading || !t ? (
+            <>
+              <KpiSkeleton />
+              <KpiSkeleton />
+              <KpiSkeleton />
+              <KpiSkeleton />
+              <KpiSkeleton />
+              <KpiSkeleton />
+            </>
+          ) : (
+            <>
+              <Kpi label="Leads enrolled" value={int(t.enrolled)} />
+              <Kpi label="Leads who replied" value={int(t.replied)} />
+              <Kpi label="Replies" value={int(t.replies)} />
+              <Kpi label="Auto-replies" value={int(t.auto_replies)} />
+              <Kpi
+                label="Time to delivery (median)"
+                value={dur(t.median_delivery_seconds)}
+              />
+              <Kpi
+                label="Time to reply (median)"
+                value={dur(t.median_reply_seconds)}
+              />
+            </>
+          )}
+        </KpiGrid>
+        {!loading && t && (
+          <p className="sms-hint">
+            Delivery p90 {dur(t.p90_delivery_seconds)} — the slow tail, not the
+            typical case. Timings read “—” until there are enough confirmed
+            observations to mean anything.
+          </p>
+        )}
+      </Section>
 
       <Section title="Volume over time">
         {loading ? (
@@ -561,10 +711,49 @@ function DashboardPanel({
                   </Badge>
                 </div>
                 <div className="sms-health-meta">
+                  <Badge tone="neutral">{providerLabel(a.provider)}</Badge>
+                  {a.channel_health && (
+                    <Badge tone={healthTone(a.channel_health.status)}>
+                      {a.channel_health.status}
+                    </Badge>
+                  )}
                   <span>
                     {int(a.sends_today)} of {int(a.daily_send_cap)} today
                   </span>
                 </div>
+                <div className="sms-health-meta">
+                  <span>
+                    {int(a.sent)} sent · {int(a.failed)} failed ·{" "}
+                    {pct(a.failure_rate)} failure rate
+                  </span>
+                </div>
+                {a.unconfirmed > 0 && (
+                  <div className="sms-health-meta">
+                    <span>{int(a.unconfirmed)} unconfirmed</span>
+                  </div>
+                )}
+                {a.channel_health && a.channel_health.downgraded > 0 && (
+                  // The most actionable iMessage signal: sends the provider
+                  // reported went out as green-bubble SMS instead.
+                  <div className="sms-health-meta">
+                    <span>
+                      {int(a.channel_health.downgraded)} of{" "}
+                      {int(a.channel_health.sampled)} recent sends fell back to
+                      SMS
+                    </span>
+                  </div>
+                )}
+                {a.inbound_webhook_stale ? (
+                  <Alert tone="danger" title="Inbound webhook not delivering">
+                    No inbound message has ever arrived on this number, so STOP
+                    replies are not being recorded. Wire the inbound webhook in
+                    the Accounts tab.
+                  </Alert>
+                ) : (
+                  <div className="sms-health-meta">
+                    <span>Last inbound {timeAgo(a.last_inbound_at)}</span>
+                  </div>
+                )}
               </GlassCard>
             ))}
           </div>
@@ -878,6 +1067,15 @@ function CampaignsPanel({ accounts }: { accounts: SmsAccount[] }) {
     },
     { key: "sent", header: "Sent", align: "right", render: (c) => int(c.sent), sortValue: (c) => c.sent },
     {
+      // Accepted but never confirmed — on green-bubble SMS that IS the success
+      // state, elsewhere it means the outcome is unknown.
+      key: "unconfirmed",
+      header: "Unconfirmed",
+      align: "right",
+      render: (c) => int(c.unconfirmed),
+      sortValue: (c) => c.unconfirmed,
+    },
+    {
       key: "read",
       header: "Read",
       align: "right",
@@ -892,11 +1090,13 @@ function CampaignsPanel({ accounts }: { accounts: SmsAccount[] }) {
       sortValue: (c) => c.replies,
     },
     {
+      // Per LEAD — replied ÷ enrolled. The per-message rate divides people by
+      // sends and so reads ~N times low on an N-step campaign.
       key: "reply",
-      header: "Reply",
+      header: "Reply / lead",
       align: "right",
-      render: (c) => pct(c.reply_rate),
-      sortValue: (c) => c.reply_rate ?? -1,
+      render: (c) => pct(c.reply_rate_per_lead),
+      sortValue: (c) => c.reply_rate_per_lead ?? -1,
     },
     {
       key: "failed",
@@ -907,15 +1107,16 @@ function CampaignsPanel({ accounts }: { accounts: SmsAccount[] }) {
     },
     {
       key: "optout",
-      header: "Opt-out",
+      header: "Opt-out / lead",
       align: "right",
       render: (c) =>
-        c.opt_out_rate != null && c.opt_out_rate >= OPT_OUT_RED_LINE ? (
-          <Badge tone="danger">{pct(c.opt_out_rate)}</Badge>
+        c.opt_out_rate_per_lead != null &&
+        c.opt_out_rate_per_lead >= OPT_OUT_RED_LINE ? (
+          <Badge tone="danger">{pct(c.opt_out_rate_per_lead)}</Badge>
         ) : (
-          pct(c.opt_out_rate)
+          pct(c.opt_out_rate_per_lead)
         ),
-      sortValue: (c) => c.opt_out_rate ?? -1,
+      sortValue: (c) => c.opt_out_rate_per_lead ?? -1,
     },
     {
       key: "manage",
@@ -2721,8 +2922,13 @@ const ConversationListItem = memo(function ConversationListItem({
           <span>{contact ? contactLabel(contact) : "Unknown contact"}</span>
           {unread && <Badge tone="info">new</Badge>}
         </span>
-        <time className="sms-thread-time" title={last?.sent_at ?? last?.received_at ?? undefined}>
-          {timeAgo(last?.sent_at || last?.received_at || null)}
+        {/* A failed send has no sent_at — fall back to created_at so the
+            conversation still carries a time. */}
+        <time
+          className="sms-thread-time"
+          title={last?.sent_at ?? last?.received_at ?? last?.created_at ?? undefined}
+        >
+          {timeAgo(last?.sent_at || last?.received_at || last?.created_at || null)}
         </time>
       </div>
       <span className="sms-thread-snippet">{last?.body}</span>
@@ -2892,7 +3098,15 @@ function MessagesPanel({
                   <small className="sms-msg-meta">
                     {m.status}
                     {" · "}
-                    {timeAgo(m.sent_at || m.received_at)}
+                    {/* sent_at is null on a row that never sent (queued or
+                        failed) — created_at is what it always has. */}
+                    {timeAgo(m.sent_at || m.received_at || m.created_at)}
+                    {m.direction === "out" && m.service && (
+                      <span>{` · ${m.service}`}</span>
+                    )}
+                    {m.direction === "out" &&
+                      m.status === "sent" &&
+                      !m.verified_at && <span>{" · unconfirmed"}</span>}
                     {m.direction === "out" && m.read_at && (
                       <span className="sms-read">
                         {" · "}Read {timeAgo(m.read_at)}
@@ -3149,24 +3363,9 @@ function AccountsPanel({
                 <div className="sms-account-top">
                   <div>
                     <div className="sms-account-name">
-                      {a.name}{" "}
-                      <Badge tone="neutral">
-                        {a.provider === "bluebubbles"
-                          ? "BlueBubbles"
-                          : a.provider === "sendblue"
-                            ? "Sendblue"
-                            : "Twilio"}
-                      </Badge>{" "}
+                      {a.name} <Badge tone="neutral">{providerLabel(a.provider)}</Badge>{" "}
                       {a.channel_health && (
-                        <Badge
-                          tone={
-                            a.channel_health.status === "healthy"
-                              ? "ok"
-                              : a.channel_health.status === "degraded"
-                                ? "warn"
-                                : "danger"
-                          }
-                        >
+                        <Badge tone={healthTone(a.channel_health.status)}>
                           {a.channel_health.status}
                         </Badge>
                       )}
@@ -3182,6 +3381,20 @@ function AccountsPanel({
 
                 {a.status === "error" && a.error_detail && (
                   <Alert tone="danger">{a.error_detail}</Alert>
+                )}
+
+                {a.inbound_webhook_stale && (
+                  // 20+ sends and not one inbound message ever: the webhook
+                  // below was never registered. On a non-Twilio provider there
+                  // is no carrier-level opt-out fallback, so every STOP is
+                  // being silently missed — a TCPA exposure, not a nicety.
+                  <Alert tone="danger" title="Inbound webhook never delivered">
+                    This number has sent real volume and has never received a
+                    single inbound message. STOP replies are not being
+                    recorded. Register the inbound URL below with{" "}
+                    {providerLabel(a.provider)}, then send a test text to this
+                    number to confirm it lands.
+                  </Alert>
                 )}
 
                 {a.provider === "twilio" && a.status === "active" && (
@@ -3200,6 +3413,27 @@ function AccountsPanel({
                   <span>
                     {int(a.sends_today)} of {int(a.daily_send_cap)} sent today
                   </span>
+                </div>
+
+                {a.channel_health && a.channel_health.sampled > 0 && (
+                  // The health badge is a one-word verdict; these are the
+                  // counts behind it — `downgraded` especially, which is the
+                  // green-bubble fallback signal on an iMessage provider.
+                  <div className="sms-account-stat">
+                    <span>
+                      {a.channel_health.detail} — last{" "}
+                      {int(a.channel_health.sampled)} sends:{" "}
+                      {int(a.channel_health.delivered)} delivered,{" "}
+                      {int(a.channel_health.failed)} failed
+                      {(a.provider === "sendblue" || a.provider === "bluebubbles") &&
+                        `, ${int(a.channel_health.downgraded)} sent as SMS`}
+                      .
+                    </span>
+                  </div>
+                )}
+
+                <div className="sms-account-stat">
+                  <span>Last inbound message {timeAgo(a.last_inbound_at)}</span>
                 </div>
 
                 <div className="sms-webhooks">

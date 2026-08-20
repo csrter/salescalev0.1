@@ -343,7 +343,7 @@ async def _email_outreach_scheduler():
 
     from .db import SchedulerSessionLocal
     from .services import email_campaigns, email_outreach_sync, email_warmup
-    from .services import lead_notify, meta_lead_poll, sms_campaigns, sms_verify
+    from .services import lead_notify, meta_lead_poll, sms_campaigns
 
     log = logging.getLogger("salescale.email_outreach")
 
@@ -369,10 +369,6 @@ async def _email_outreach_scheduler():
                 # alerts / relay forwards) — transient BlueBubbles/device
                 # errors must not silently cost an alert.
                 lead_notify.retry_failed(sms_db)
-                # Read back the TRUE outcome of recent BlueBubbles sends
-                # (fire-and-forget AppleScript reports success at hand-off);
-                # silent device-side failures become failed + auto-retried.
-                sms_verify.run_due(sms_db)
             finally:
                 sms_db.close()
         except Exception:
@@ -396,6 +392,50 @@ async def _email_outreach_scheduler():
                 await asyncio.get_event_loop().run_in_executor(None, _tick)
             except Exception:
                 log.exception("email outreach scheduler tick failed")
+
+    asyncio.create_task(_loop())
+
+
+@app.on_event("startup")
+async def _sms_verify_scheduler():
+    """Read back the TRUE outcome of recent BlueBubbles sends on its own fast
+    loop (fire-and-forget AppleScript reports success at hand-off, so a device
+    -side failure is otherwise invisible and the lead's text is silently lost).
+
+    Deliberately NOT part of the email tick it used to ride: that tick does
+    IMAP sync and mailbox reprobes first and can block for minutes, so
+    verification inherited a latency it has no reason to pay — and speeding
+    the shared tick up would have re-rated warmup, email sends and Meta lead
+    polling too. On its own loop the check interval is a single dial that
+    affects nothing else.
+
+    Sizing: BATCH_PER_ACCOUNT (25) lookups per account per tick, ~0.8 req/s at
+    the default 30s — comfortably under the ~4 req/s per-Apple-ID ceiling
+    measured for this relay (see services/imessage_check.py), which the send
+    path also draws on."""
+    if not _settings.email_outreach_scheduler_enabled or not _settings.run_schedulers():
+        return
+    import asyncio
+
+    from .db import SchedulerSessionLocal
+    from .services import sms_verify
+
+    log = logging.getLogger("salescale.sms_verify")
+
+    def _tick():
+        db = SchedulerSessionLocal()
+        try:
+            sms_verify.run_due(db)
+        finally:
+            db.close()
+
+    async def _loop():
+        while True:
+            await asyncio.sleep(max(10, _settings.sms_verify_tick_seconds))
+            try:
+                await asyncio.get_event_loop().run_in_executor(None, _tick)
+            except Exception:
+                log.exception("sms verify tick failed")
 
     asyncio.create_task(_loop())
 

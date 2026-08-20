@@ -45,6 +45,15 @@ log = logging.getLogger("salescale.sms_outreach")
 router = APIRouter(prefix="/api/webhooks/imessage", tags=["imessage-webhooks"])
 
 
+def _bb_service(data: dict) -> str | None:
+    """The transport BlueBubbles actually used ("iMessage" / "SMS"). An
+    iMessage-capable account reporting SMS is the green-bubble downgrade
+    signal channel_health watches for, and outbound rows had no other way to
+    learn it — the send path never recorded one."""
+    svc = data.get("service") or (data.get("handle") or {}).get("service")
+    return str(svc)[:20] if isinstance(svc, str) and svc else None
+
+
 def _require_bb_secret(account: SmsAccount, request: Request) -> None:
     """BlueBubbles has no request-signing scheme, so authenticity is a
     shared secret carried either as a header (what the VPS relay/Caddy
@@ -94,7 +103,19 @@ async def bluebubbles_webhook(account_id: str, request: Request):
                 create_missing=True,
                 service="iMessage",
             )
-        elif typ == "updated-message":
+        elif typ == "updated-message" and data.get("isFromMe") is not False:
+            # Skip updates for INCOMING messages, which BlueBubbles also emits
+            # (they carry dateRead/dateDelivered too). Those used to match the
+            # inbound ledger row and stamp its read_at — which on an inbound
+            # row means "our team read this conversation", so a lead's own
+            # delivery receipt silently cleared their reply from the
+            # operator's unread list.
+            #
+            # Tested `is not False` rather than truthiness on purpose: only an
+            # EXPLICIT isFromMe=false identifies an incoming message. A
+            # payload that omits the field is still handled, so a relay
+            # version that doesn't send it can't silently kill delivery
+            # tracking for every outbound message.
             if data.get("error"):
                 status = "failed"
             elif data.get("dateRead"):
@@ -104,7 +125,14 @@ async def bluebubbles_webhook(account_id: str, request: Request):
             else:
                 status = None
             if status:
-                _apply_status(db, account, data.get("guid"), status, data.get("error"))
+                _apply_status(
+                    db,
+                    account,
+                    data.get("guid"),
+                    status,
+                    data.get("error"),
+                    service=_bb_service(data),
+                )
         db.commit()
     finally:
         db.close()

@@ -2204,7 +2204,11 @@ export interface SmsChannelHealth {
   sent: number;
   delivered: number;
   failed: number;
+  /** Sends an iMessage-capable provider reported went out as green-bubble SMS
+   * instead — the most actionable iMessage signal on the card. */
   downgraded: number;
+  /** Sampled sends still awaiting any confirmation (optional: newer field). */
+  unconfirmed?: number;
   sampled: number;
   detail: string;
 }
@@ -2231,6 +2235,13 @@ export interface SmsAccount {
   /** URL secret for providers without request signing (Sendblue, BlueBubbles). */
   webhook_token: string | null;
   channel_health: SmsChannelHealth | null;
+  /** Last time ANY inbound message landed on this number (null = never). */
+  last_inbound_at: string | null;
+  /** True when a non-Twilio active number with real send volume has never
+   * received a single inbound message — its STOP-capture webhook was almost
+   * certainly never wired, so opt-outs are not being recorded. TCPA exposure,
+   * not a nicety: surfaced as a warning, not a subtitle. */
+  inbound_webhook_stale: boolean;
   created_at: string;
 }
 
@@ -2251,12 +2262,10 @@ export interface SmsAccountBody {
 
 export type SmsCampaignStatus = "draft" | "active" | "paused" | "archived";
 
-export interface SmsCampaign {
-  id: string;
-  name: string;
-  status: SmsCampaignStatus;
-  account_id: string;
-  steps_count: number;
+/** The computed SMS funnel — identical shape wherever it appears (a campaign
+ * row, an analytics total, a by-campaign row). See _campaign_stats on the
+ * backend for the authoritative definitions. */
+export interface SmsFunnelStats {
   enrolled: number;
   active_enrollments: number;
   /** Active enrollments parked at a reply-triggered step, waiting on the lead. */
@@ -2265,18 +2274,52 @@ export interface SmsCampaign {
   delivered: number;
   /** iMessage/Sendblue read receipts — the SMS equivalent of "opened". */
   read: number;
+  failed: number;
+  /** Accepted but never confirmed by anything: still "sent", no receipt and no
+   * verification read-back. On BlueBubbles green-bubble SMS this is where a
+   * SUCCESSFUL send ends up; elsewhere the outcome is genuinely unknown.
+   * Surfaced so sent = delivered + failed + unconfirmed reconciles. */
+  unconfirmed: number;
+  /** Enrollments (people) with at least one reply recorded. */
+  replied: number;
   /** Real human inbound replies (a lead texting back three times counts three
    * here). Excludes automated out-of-office auto-responders. */
   replies: number;
   /** Inbound automated out-of-office / auto-responder texts (not real replies). */
   auto_replies: number;
-  failed: number;
-  /** Failed sends grouped by reason, most common first — send diagnostics. */
-  failure_reasons: SmsFailureReason[];
+  opted_out: number;
+  /** False when no provider in play can emit a delivery receipt (green-bubble
+   * BlueBubbles) and none was ever observed — delivery_rate is then null, and
+   * must render "—" rather than a measured-looking 0.0%. */
+  delivery_measurable: boolean;
+  /** False when no provider in play can emit a read receipt (Twilio/Telnyx
+   * never do) and none was ever observed. */
+  read_measurable: boolean;
   delivery_rate: number | null;
   read_rate: number | null;
+  /** Per MESSAGE — kept for compatibility. On an N-step campaign these divide
+   * people by sends and so read roughly N times too low; prefer the per-lead
+   * pair below for anything an operator acts on. */
   reply_rate: number | null;
   opt_out_rate: number | null;
+  /** Per LEAD (÷ enrolled) — the honest engagement figures. */
+  reply_rate_per_lead: number | null;
+  opt_out_rate_per_lead: number | null;
+  /** Seconds from send to delivery confirmation; null below a usable sample. */
+  median_delivery_seconds: number | null;
+  p90_delivery_seconds: number | null;
+  /** Seconds from a lead's first message to their reply; null below a sample. */
+  median_reply_seconds: number | null;
+}
+
+export interface SmsCampaign extends SmsFunnelStats {
+  id: string;
+  name: string;
+  status: SmsCampaignStatus;
+  account_id: string;
+  steps_count: number;
+  /** Failed sends grouped by reason, most common first — send diagnostics. */
+  failure_reasons: SmsFailureReason[];
   created_at: string;
 }
 
@@ -2388,9 +2431,19 @@ export interface SmsMessage {
     last_name: string | null;
     phone: string | null;
   } | null;
+  /** When the provider ACCEPTED the send — null on a queued or failed row
+   * (which never sent). Use created_at for ordering/display. */
   sent_at: string | null;
   received_at: string | null;
   read_at: string | null;
+  created_at: string;
+  /** Transport actually used ("iMessage" | "SMS" | "RCS") — the green-bubble
+   * signal on an iMessage-capable provider. */
+  service: string | null;
+  delivered_at: string | null;
+  /** BlueBubbles read-back. Null on a "sent" row means the outcome is still
+   * provisional, not confirmed. */
+  verified_at: string | null;
 }
 
 export interface SmsSuppression {
@@ -2406,54 +2459,53 @@ export interface SmsFailureReason {
   count: number;
 }
 
-export interface SmsRateBlock {
-  sent: number;
-  delivered: number;
-  read: number;
-  failed: number;
-  replied: number;
-  replies: number;
-  /** Inbound automated out-of-office / auto-responder texts — excluded from
-   * `replies` so engagement reflects real humans; surfaced on its own. */
-  auto_replies: number;
-  opted_out: number;
-  awaiting_reply: number;
-  delivery_rate: number | null;
-  read_rate: number | null;
-  reply_rate: number | null;
-  opt_out_rate: number | null;
-}
+export type SmsRateBlock = SmsFunnelStats;
 
+/** Everything on the analytics screen covers the SELECTED window — totals,
+ * by_campaign, by_day and the per-number rollup alike. Lifetime figures come
+ * from the campaign list/detail routes instead. */
 export interface SmsAnalytics {
   /** False when no AI key resolves for the org — {{ai_snippet}} renders empty. */
   ai_configured?: boolean;
+  /** The window these figures cover, echoed back for labelling. */
+  days: number;
+  since: string;
   totals: SmsRateBlock;
   by_day: {
     date: string;
     sent: number;
+    /** Bucketed on the day the receipt landed, not the send day. */
     delivered: number;
     read: number;
     replied: number;
     failed: number;
   }[];
-  by_campaign: {
+  by_campaign: (SmsFunnelStats & {
     campaign_id: string;
     name: string;
-    sent: number;
-    replies: number;
-    auto_replies: number;
-    failed: number;
+    steps_count: number;
     failure_reasons: SmsFailureReason[];
-    delivery_rate: number | null;
-    read_rate: number | null;
-    reply_rate: number | null;
-  }[];
+  })[];
   accounts: {
     account_id: string;
     from_number: string | null;
+    /** Which channel this number runs on — the qualifier that makes a null or
+     * zero delivery/read rate readable instead of alarming. */
+    provider: SmsProvider;
     status: SmsAccountStatus;
     sends_today: number;
     daily_send_cap: number;
+    sent: number;
+    failed: number;
+    unconfirmed: number;
+    /** Failures ÷ ATTEMPTS (sent + failed), over the selected window. */
+    failure_rate: number | null;
+    /** Same denominator, fixed at the literal last 7 days. */
+    failure_rate_7d: number | null;
+    channel_health: SmsChannelHealth | null;
+    last_inbound_at: string | null;
+    /** STOP-capture webhook almost certainly never wired — see SmsAccount. */
+    inbound_webhook_stale: boolean;
   }[];
 }
 

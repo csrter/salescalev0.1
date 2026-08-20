@@ -81,6 +81,48 @@ SMS_MSG_READ = "read"  # Sendblue/iMessage read receipt only — Twilio never se
 SMS_MSG_FAILED = "failed"
 SMS_MSG_RECEIVED = "received"  # inbound
 
+# Monotonic status ladder. Delivery reports arrive OUT OF ORDER as a matter of
+# course (Sendblue emits DELIVERED and READ as separate callbacks; providers
+# retry callbacks; the BlueBubbles verification pass reads state back minutes
+# later) — and `status` is one destructive column. Assigning it directly means
+# a late-arriving 'delivered' overwrites a 'read', which both drops the read
+# from analytics and, on the failure path, can rewind an enrollment that
+# already succeeded and re-text the lead. Every writer goes through
+# advance_status() instead of assigning.
+_STATUS_RANK = {
+    SMS_MSG_QUEUED: 0,
+    SMS_MSG_SENT: 1,
+    SMS_MSG_DELIVERED: 2,
+    SMS_MSG_READ: 3,
+}
+
+
+def advance_status(current: Optional[str], incoming: str) -> str:
+    """The status a row should hold after an `incoming` report, never moving
+    backwards down the ladder.
+
+    Rules, in order:
+    - A progress report (sent/delivered/read) only applies if it moves UP.
+      A stale 'delivered' after a 'read' is ignored.
+    - A failure only applies to a row that hasn't been confirmed received.
+      Once a message is delivered or read it demonstrably arrived, so a late
+      failure callback is the stale one, not the delivery.
+    - Conversely a delivered/read report DOES override a prior 'failed': proof
+      of arrival is stronger evidence than a provider's failure guess.
+    """
+    current = current or SMS_MSG_QUEUED
+    if incoming == SMS_MSG_FAILED:
+        # Don't let a late failure erase a confirmed delivery/read.
+        if _STATUS_RANK.get(current, 0) >= _STATUS_RANK[SMS_MSG_DELIVERED]:
+            return current
+        return SMS_MSG_FAILED
+    if incoming not in _STATUS_RANK:
+        return current
+    if current == SMS_MSG_FAILED:
+        return incoming
+    return incoming if _STATUS_RANK[incoming] > _STATUS_RANK.get(current, 0) else current
+
+
 SMS_KIND_CAMPAIGN = "campaign"
 SMS_KIND_MANUAL = "manual"
 # An alert to the agency's OWN team (services/lead_notify.py), not lead
@@ -333,7 +375,9 @@ class SmsMessage(Base):
     account_id: Mapped[str] = mapped_column(
         ForeignKey("sms_accounts.id"), nullable=False, index=True
     )
-    campaign_id: Mapped[Optional[str]] = mapped_column(ForeignKey("sms_campaigns.id"))
+    campaign_id: Mapped[Optional[str]] = mapped_column(
+        ForeignKey("sms_campaigns.id"), index=True
+    )
     step_id: Mapped[Optional[str]] = mapped_column(ForeignKey("sms_steps.id"))
     enrollment_id: Mapped[Optional[str]] = mapped_column(
         ForeignKey("sms_enrollments.id")
@@ -355,10 +399,32 @@ class SmsMessage(Base):
     error_code: Mapped[Optional[str]] = mapped_column(String(20))
     error_detail: Mapped[Optional[str]] = mapped_column(Text)
     read_at: Mapped[Optional[dt.datetime]] = mapped_column(DateTime(timezone=True))
+    # When the transition into delivered/failed actually happened. created_at
+    # is the send instant, so (delivered_at - created_at) is real time-to-
+    # delivery — previously unmeasurable, since only the STATUS was stored and
+    # never the moment it changed. Stamped by the status webhooks and by the
+    # verification pass; never overwritten once set (first confirmation wins).
+    delivered_at: Mapped[Optional[dt.datetime]] = mapped_column(
+        DateTime(timezone=True)
+    )
+    failed_at: Mapped[Optional[dt.datetime]] = mapped_column(DateTime(timezone=True))
     # BlueBubbles post-send verification (services/sms_verify): when this
     # row's REAL outcome was read back from the Mac's Messages DB. The
     # AppleScript path reports success at hand-off and only records failures
     # asynchronously, so "sent" is provisional until this is stamped.
+    #
+    # verified_at means TERMINAL — the outcome is final and the row is never
+    # polled again. last_checked_at/check_attempts drive the RE-POLL loop that
+    # runs before that point: the relay can report error=0 on a send that later
+    # flips to failed, so an early success read is provisional (recorded here)
+    # and only becomes terminal once the row is old enough to trust. A failure
+    # (error != 0) is trustworthy immediately and terminalizes on first sight.
+    last_checked_at: Mapped[Optional[dt.datetime]] = mapped_column(
+        DateTime(timezone=True)
+    )
+    check_attempts: Mapped[int] = mapped_column(
+        Integer, default=0, nullable=False, server_default=text("0")
+    )
     verified_at: Mapped[Optional[dt.datetime]] = mapped_column(DateTime(timezone=True))
     # Transport actually used for this message — "iMessage"/"SMS"/"RCS".
     # Populated by status webhooks (Sendblue's `service` field / BlueBubbles'

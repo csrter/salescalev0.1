@@ -33,6 +33,15 @@ for _k in (
     "ANTHROPIC_API_KEY",
     "OPENAI_API_KEY",
     "GEMINI_API_KEY",
+    # Mail transport, for the same reason and then some: several tests assert
+    # the "composed but NOT delivered" dev-mode behavior, and with a real key
+    # present from a populated backend/.env the suite doesn't just fail those
+    # — it actually hands mail to Resend/SMTP for every invite, password
+    # reset and 2FA code it exercises.
+    "RESEND_API_KEY",
+    "SMTP_HOST",
+    "SMTP_USERNAME",
+    "SMTP_PASSWORD",
 ):
     os.environ[_k] = ""
 # One dedicated platform super-admin for the /api/admin tests. No org-scoped
