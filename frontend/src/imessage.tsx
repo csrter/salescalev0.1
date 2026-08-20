@@ -18,6 +18,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { MessageSquare, RefreshCw } from "./components/icons";
 
 import {
+  cancelEnrichmentJob,
   getEnrichmentJobs,
   imessageCheck,
   imessageLists,
@@ -177,9 +178,28 @@ export function ImessageView({
 
       {job && (
         <Alert tone="ok" title="Checking now">
-          {job.processed} of {job.total} looked up — {eta}. Paced at one per
-          second so the relay's Apple ID doesn't get rate-limited; you can
-          leave this page.
+          <p>
+            {job.processed} of {job.total} looked up — {eta}. Paced so the
+            relay's Apple ID doesn't get rate-limited; you can leave this page.
+          </p>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => {
+              cancelEnrichmentJob(job.id)
+                .then((r) => {
+                  toast(
+                    `Stopped. ${r.processed} leads were checked and kept — run it again any time to pick up the rest.`,
+                    "ok",
+                  );
+                  setJob(null);
+                  load();
+                })
+                .catch((e) => toast((e as Error).message, "error"));
+            }}
+          >
+            Stop this run
+          </Button>
         </Alert>
       )}
 

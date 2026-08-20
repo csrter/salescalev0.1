@@ -889,6 +889,7 @@ const ENRICH_STATUS_TONE: Record<EnrichmentJob["status"], "ok" | "warn" | "dange
   completed: "neutral",
   failed: "danger",
   interrupted: "warn",
+  cancelled: "neutral",
 };
 
 

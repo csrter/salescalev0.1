@@ -3524,6 +3524,31 @@ live activation + the entitlement flip, the Outreach module build
       binary hash-matched into the bundle, imessage chunk verified inside
       app.asar), installed to /Applications and launch-verified (own backend
       bound :8000, health 200, both routes 401 on the packaged backend).
+      PACING + CANCEL (same session): the 1.0s inter-lookup sleep was the
+      binding constraint, not Apple. Measured against a live relay: a single
+      lookup is ~320ms median, and throughput PLATEAUS at ~4/sec regardless
+      of concurrency (4, 8 and 16 workers all ~4/sec, 16 slightly worse than
+      4) — the ceiling is server-side, BlueBubbles/Apple serialize the IDS
+      query per Apple ID, so parallelism cannot buy past it and was
+      deliberately NOT adopted (~35% for a materially worse burst profile on
+      an Apple ID that already gets throttled for send volume). There is also
+      no bulk endpoint (comma-separated addresses return one bogus verdict
+      for the whole string) and the Mac's local handle table is useless for
+      cold leads (0 of 409 exotic-rental numbers were known locally — it only
+      knows numbers the Mac has already talked to). So the round trip is its
+      own pacer at ~3/sec and CHECK_SPACING_SECONDS dropped 1.0 → 0.1:
+      measured 0.39s/lead end to end through the service, i.e. ~14 min for
+      2,151 leads where the old pacing was ~47 min. Zero failures across 87
+      lookups incl. bursts at 16 concurrent. CANCELLATION added at the same
+      time (a running sweep previously could only be stopped by recreating
+      the container): POST /api/crm/enrich/jobs/{id}/cancel flips the job
+      status and run_check re-reads its own row between lookups and exits —
+      no new column, and everything already checked is KEPT because the
+      sweep is resumable (fresh verdicts are skipped by the 30-day cache).
+      A "Stop this run" button sits in the checker's progress alert. NOTE the
+      cancel endpoint scopes by hand rather than scope.get_or_404, which
+      asserts obj.client_id — EnrichmentJob is org-scoped with no client, the
+      same trap that 500'd the client-scoped summary earlier. Tests 677 → 678.
 - [ ] Stripe live activation + entitlement flip (after 12–14, so real
       limits land everywhere in one pass)
 - [ ] Outreach module build (dev-mode) — go-live gated on Meta App

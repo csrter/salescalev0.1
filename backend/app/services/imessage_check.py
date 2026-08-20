@@ -45,10 +45,22 @@ from . import sms_consent
 
 log = logging.getLogger("salescale.imessage_check")
 
-# Seconds between IDS lookups. Anti-rate-limit pacing, same reasoning as the
-# send-spacing throttle in sms_send: this runs through one Mac and one Apple
-# ID, and bursts are what draw attention.
-CHECK_SPACING_SECONDS = 1.0
+# Extra sleep between IDS lookups, ON TOP of the round trip itself.
+#
+# Measured against a live relay (2026-08-19): a single lookup takes ~320ms
+# median, and throughput plateaus at ~4/sec no matter the concurrency —
+# 4, 8 and 16 parallel workers all landed at ~4/sec, with 16 slightly WORSE
+# than 4. So the ceiling is server-side (BlueBubbles/Apple serialize the IDS
+# query per Apple ID), not something the client can spend its way out of.
+# Parallelism was measured and deliberately NOT adopted: it buys ~35% for a
+# real increase in burst profile on an Apple ID that already gets throttled
+# for send volume.
+#
+# That leaves the round trip itself as the natural pacer at ~3/sec, which is
+# nowhere near a rate a human couldn't produce by typing recipients. This
+# constant is the small deliberate gap on top so the loop is never tight;
+# raise it if Apple ever starts refusing lookups.
+CHECK_SPACING_SECONDS = 0.1
 # Hard ceiling on one run, so a runaway caller can't queue an all-night job.
 MAX_PER_RUN = 3000
 # A verdict older than this is re-checked (numbers do get ported onto and off
@@ -193,6 +205,18 @@ def run_check(
 
         seen: dict[str, Optional[bool]] = {}
         for index, (contact, number) in enumerate(todo):
+            # Cancellation, without a new column: the API flips this job's
+            # status, and the loop notices between lookups. Cheap because the
+            # row is already in this session and we commit every iteration
+            # anyway. Everything checked so far is kept — the sweep is
+            # resumable by simply running it again (fresh verdicts are
+            # skipped by the RECHECK_AFTER_DAYS cache).
+            db.refresh(job)
+            if job.status != "running":
+                log.info("imessage check %s cancelled at %s/%s", job.id, index, len(todo))
+                job.finished_at = utcnow()
+                db.commit()
+                return
             if number in seen:
                 verdict = seen[number]
             else:

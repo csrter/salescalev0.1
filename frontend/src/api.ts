@@ -1510,6 +1510,14 @@ export interface ImessageListCoverage {
   unchecked: number;
 }
 
+/** Stop a running background pass. Everything already processed is kept —
+ * re-running the sweep picks up where it left off. */
+export const cancelEnrichmentJob = (jobId: string) =>
+  api<{ id: string; status: string; processed: number }>(
+    `/api/crm/enrich/jobs/${jobId}/cancel`,
+    { method: "POST" },
+  );
+
 export const imessageLists = (clientId?: string) =>
   api<{ lists: ImessageListCoverage[] }>(
     `/api/crm/imessage/lists${clientId ? `?client_id=${clientId}` : ""}`,
@@ -1539,7 +1547,7 @@ export const imessageSummary = (clientId?: string, listId?: string) => {
  * quiet (backend restarted mid-run). */
 export interface EnrichmentJob {
   id: string;
-  status: "running" | "completed" | "failed" | "interrupted";
+  status: "running" | "completed" | "failed" | "interrupted" | "cancelled";
   // "imessage" is the iMessage-capability sweep — it reuses this same
   // job record so both passes share one progress surface.
   phase: "enriching" | "verifying" | "done" | "imessage";

@@ -1411,6 +1411,30 @@ def imessage_check_bulk(
 _ENRICH_STALE_SECONDS = 180
 
 
+@router.post("/enrich/jobs/{job_id}/cancel")
+def cancel_enrichment_job(
+    job_id: str,
+    user: User = Depends(require_team),
+    scope: TenantScope = Depends(get_scope),
+    db: Session = Depends(get_db),
+):
+    """Stop a running background pass. The worker re-reads its own job row
+    between items and exits when the status is no longer "running", so
+    everything already processed is kept and the sweep can simply be run
+    again to pick up where it left off."""
+    # NOT scope.get_or_404 — it asserts obj.client_id, and EnrichmentJob is
+    # org-scoped with no client (same trap as Client rows). Scope by hand.
+    job = db.get(EnrichmentJob, job_id)
+    if job is None:
+        raise HTTPException(404, "Not found")
+    scope.check_organization_id(job.organization_id)
+    if job.status != "running":
+        raise HTTPException(400, "That run has already finished")
+    job.status = "cancelled"
+    db.commit()
+    return {"id": job.id, "status": job.status, "processed": job.processed}
+
+
 @router.get("/enrich/jobs")
 def enrichment_job_status(
     user: User = Depends(require_team),

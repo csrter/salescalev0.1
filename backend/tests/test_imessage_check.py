@@ -317,3 +317,50 @@ def test_list_scoped_sweep_and_coverage(api, imc_org, monkeypatch):
     assert row["with_number"] == 1
     assert row["imessage"] == 1
     assert row["unchecked"] == 0
+
+
+def test_cancel_stops_the_sweep_and_keeps_what_was_checked(imc_org, api, monkeypatch):
+    """Cancelling mid-run must keep every verdict already written — the
+    sweep is resumable, not all-or-nothing. Also guards the scoping: an
+    EnrichmentJob has no client_id, so scope.get_or_404 would 500 on it."""
+    from app.models.lead_finder import EnrichmentJob
+
+    with SessionLocal() as db:
+        _account(db, imc_org, "relay6", "+14805550600")
+        ids = [
+            _contact(db, imc_org, f"+1480555{n:04d}").id for n in (1001, 1002, 1003)
+        ]
+
+    seen = []
+
+    def fake_get(url, **kw):
+        seen.append(kw.get("params", {}).get("address"))
+        # cancel from "outside" once the first lookup has landed
+        if len(seen) == 1:
+            with SessionLocal() as d2:
+                job = (
+                    d2.query(EnrichmentJob)
+                    .filter_by(organization_id=imc_org["org_id"], status="running")
+                    .order_by(EnrichmentJob.created_at.desc())
+                    .first()
+                )
+                r = api.post(
+                    f"/api/crm/enrich/jobs/{job.id}/cancel",
+                    headers=imc_org["headers"],
+                )
+                assert r.status_code == 200, r.text
+        return _available(True)
+
+    monkeypatch.setattr(imessage_check.httpx, "get", fake_get)
+    monkeypatch.setattr(imessage_check.time, "sleep", lambda s: None)
+    imessage_check.run_check(imc_org["org_id"], ids)
+
+    # stopped early, and the one it did finish is still recorded
+    assert len(seen) < 3
+    with SessionLocal() as db:
+        checked = [
+            c
+            for c in (db.get(Contact, i) for i in ids)
+            if c.imessage_capable is not None
+        ]
+        assert len(checked) == len(seen)
