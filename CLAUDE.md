@@ -3819,6 +3819,77 @@ live activation + the entitlement flip, the Outreach module build
       the web deploy (migration c1a4f7b9e206) and a desktop rebuild in
       lockstep, per the standing rule that a web-deployed migration without a
       desktop rebuild crash-loops the installed app at boot.
+      DEPLOYED 2026-08-20 (a9563ea), web + desktop: migration c1a4f7b9e206
+      applied to the live Supabase DB through the container-boot flow (alembic
+      current = c1a4f7b9e206 head), /api/health ok, zero boot errors, both new
+      routes live and auth-gated; desktop PyInstaller backend + DMG (148MB,
+      binary hash-matched into the app bundle, the drawer's conversation panel
+      and status control verified inside app.asar), installed to /Applications
+      and launch-verified — own backend bound :8000, health 200, and
+      /api/crm/contacts/{id}/messages answering 401 rather than 404 on the
+      PACKAGED backend (the runtime proof the frozen binary carries it, since
+      the compressed archive defeats `strings`; the new revision was also
+      confirmed present via PyInstaller's own CArchiveReader).
+
+- [x] SMS branch replies: follow-up texts no longer erase the branch signal,
+      + q3 epoxy keyword tuning (2026-08-20, found by inspecting prod after the
+      user reported branches not matching). TWO SEPARATE PROBLEMS, one code one
+      config. (1) THE BUG: a lead rarely answers in one message. "Hi yes" then,
+      forty seconds later, "How can we help you?" is one answer plus small talk
+      — but last_reply_body is last-write-wins and a reply step waits
+      wait_days/wait_minutes before firing, so the second message overwrote the
+      decisive one before the send read it, and the lead got the generic
+      default instead of the branch they had clearly qualified for. Observed
+      live on q3 epoxy (Vantyx Coatings). New sms_campaigns.branch_reply_text()
+      decides on every inbound received since the enrollment's last outbound,
+      NEWEST FIRST, taking the first that matches a branch: a later explicit
+      signal still wins ("yes" then "actually no thanks" -> no), while a
+      message carrying no signal can no longer erase an earlier one. Falls back
+      to last_reply_body so AI branching still classifies the most recent text.
+      last_reply_body itself is deliberately untouched — the Audience tab shows
+      it and must keep meaning "the latest thing they said". Tests 719 -> 721
+      (the two-part-answer reproduction + the later-signal-still-wins flip
+      case). NOTE both new tests initially collided on the module-scoped DB's
+      unique (org, from_number) index; `grep -c` counts LINES not occurrences,
+      so a "2" reads as free when it is one mine + one theirs — enumerate the
+      claimed numbers programmatically instead.
+      (2) THE CONFIG: q3 epoxy's two branches had 5 keywords each and 8 of 13
+      real replies matched nothing. Every unmatched one was affirmative or
+      ENGAGED, not a denial — step 1 asks "Hey is this {{company}}?", so any
+      engagement is effectively a yes, but the branch only listed literal
+      affirmations ("Can I help you with something?", "Which ads do you run?
+      And what is cost", "Meta or Google" all fell through). yes 5 -> 44
+      keywords, no 5 -> 25, copy untouched (the apply script asserts labels and
+      bodies are byte-identical before writing and re-reads after the commit).
+      THE TRAP: branch order is priority and `yes` runs FIRST, so any decline
+      containing a yes-token wins — the first draft included "interested" and
+      routed "not interested" to the PITCH. Caught by testing candidate lists
+      against a synthetic denial corpus before touching prod; four more forced
+      narrower choices ("a customer" -> "you a customer" so "I'm not a
+      customer" misses; "we do" dropped; "information" -> "more info", which by
+      word-boundary does NOT match "more information"; bare meta/google ->
+      "meta or google"). "not"/"can't"/"cannot" went back into `no` to catch
+      declines that previously matched nothing at all. Final: 12/12 real
+      replies -> yes, 25/25 denials -> no, re-verified against the live
+      campaign. Residual, accepted: a name+company signature ("Jeff Nelson /
+      Ridge Concrete Coatings") matches nothing and takes the default —
+      matching on trade words would misfire on "I don't do coatings anymore";
+      this step has ai_branching OFF and a working Gemini key, so enabling it
+      is the fix if that class recurs. Also accepted: "Who is this? Remove me"
+      routes to yes (a bare "who is this?" is far more common); STOP
+      suppression is unaffected either way.
+      PROD REMEDIATION after the deploy: 3 leads had received the default
+      ("Thanks for getting back to me!") where the new keywords give the yes
+      pitch. Neither catch_up_past_replies nor resume_completed covers this —
+      both skip enrollments that already have a reply-step send ("already
+      responded") — so they were re-opened deliberately at step 2 with
+      last_reply_body primed from their actual matching inbound (the send
+      clears it), dry-run first, consent re-checked per lead, and explicitly
+      skipping anyone who had already received the correct branch. All 3 sent
+      (one read within minutes). Two further enrollments were left alone: the
+      engine had already scheduled them from their own newer replies, and both
+      landed correctly on the next tick (a yes pitch, and the `no` parting
+      message to a lead who answered "No interested").
 
 - [ ] Stripe live activation + entitlement flip (after 12–14, so real
       limits land everywhere in one pass)
