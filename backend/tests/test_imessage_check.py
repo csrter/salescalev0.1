@@ -216,6 +216,12 @@ def test_summary_endpoint_is_not_shadowed_by_the_contact_detail_route(
         "imessage",
         "sms_only",
         "unchecked",
+        # deliverability half — counted independently of the iMessage verdict
+        "line_checked",
+        "textable",
+        "not_textable",
+        "landline",
+        "voip",
     }
 
 
@@ -364,3 +370,186 @@ def test_cancel_stops_the_sweep_and_keeps_what_was_checked(imc_org, api, monkeyp
             if c.imessage_capable is not None
         ]
         assert len(checked) == len(seen)
+
+
+# --- deliverability half: can the number receive a text at all? -------------
+
+
+def _telnyx_account(db, imc_org, from_number):
+    acct = SmsAccount(
+        organization_id=imc_org["org_id"],
+        name="lookup line",
+        provider="telnyx",
+        account_sid="telnyx",
+        auth_token_encrypted=encrypt_secret("telnyx-key"),
+        from_number=from_number,
+        status="active",
+    )
+    db.add(acct)
+    db.commit()
+    return acct
+
+
+def _carrier(kind):
+    return _Resp(200, {"data": {"carrier": {"type": kind, "name": "Acme Telecom"}}})
+
+
+def test_landline_is_recorded_as_not_textable(imc_org, monkeypatch):
+    """The whole point of this half: iMessage lookup reports a landline
+    identically to a mobile that just isn't on iMessage. Only the carrier
+    knows, and every SMS to a landline is a silent billed failure."""
+    with SessionLocal() as db:
+        _account(db, imc_org, "relay-line1", "+14805557700")
+        _telnyx_account(db, imc_org, "+14805557701")
+        land = _contact(db, imc_org, "+14805558800").id
+        cell = _contact(db, imc_org, "+14805558801").id
+
+    def fake_get(url, **kw):
+        if "handle/availability" in url:
+            return _available(False)          # neither is on iMessage
+        return _carrier("landline" if url.endswith("+14805558800") else "mobile")
+
+    monkeypatch.setattr(imessage_check.httpx, "get", fake_get)
+    monkeypatch.setattr(imessage_check.line_lookup.httpx, "get", fake_get)
+    monkeypatch.setattr(imessage_check.time, "sleep", lambda s: None)
+    imessage_check.run_check(imc_org["org_id"], [land, cell])
+
+    with SessionLocal() as db:
+        a, b = db.get(Contact, land), db.get(Contact, cell)
+        assert a.line_type == "landline" and a.sms_capable is False
+        assert b.line_type == "mobile" and b.sms_capable is True
+        assert a.carrier_name == "Acme Telecom"
+        assert a.line_checked_at is not None
+
+
+def test_imessage_capable_numbers_skip_the_billed_lookup(imc_org, monkeypatch):
+    """A number registered with Apple is provably a live device, so paying a
+    carrier to confirm it is waste. This is a COST guarantee, not a nicety."""
+    with SessionLocal() as db:
+        _account(db, imc_org, "relay-line2", "+14805557702")
+        _telnyx_account(db, imc_org, "+14805557703")
+        cid = _contact(db, imc_org, "+14805558802").id
+
+    looked_up = []
+
+    def fake_get(url, **kw):
+        if "handle/availability" in url:
+            return _available(True)           # on iMessage
+        looked_up.append(url)
+        return _carrier("mobile")
+
+    monkeypatch.setattr(imessage_check.httpx, "get", fake_get)
+    monkeypatch.setattr(imessage_check.line_lookup.httpx, "get", fake_get)
+    monkeypatch.setattr(imessage_check.time, "sleep", lambda s: None)
+    imessage_check.run_check(imc_org["org_id"], [cid])
+
+    assert looked_up == []                     # never paid for
+    with SessionLocal() as db:
+        c = db.get(Contact, cid)
+        assert c.imessage_capable is True
+        assert c.sms_capable is None           # unknown, NOT False
+
+
+def test_failed_line_lookup_records_nothing(imc_org, monkeypatch):
+    """Same rule as the iMessage half: 'we don't know' must stay
+    distinguishable from 'no'."""
+    with SessionLocal() as db:
+        _account(db, imc_org, "relay-line3", "+14805557704")
+        _telnyx_account(db, imc_org, "+14805557705")
+        cid = _contact(db, imc_org, "+14805558803").id
+
+    def fake_get(url, **kw):
+        if "handle/availability" in url:
+            return _available(False)
+        return _Resp(500)
+
+    monkeypatch.setattr(imessage_check.httpx, "get", fake_get)
+    monkeypatch.setattr(imessage_check.line_lookup.httpx, "get", fake_get)
+    monkeypatch.setattr(imessage_check.time, "sleep", lambda s: None)
+    imessage_check.run_check(imc_org["org_id"], [cid])
+
+    with SessionLocal() as db:
+        c = db.get(Contact, cid)
+        assert c.sms_capable is None and c.line_type is None
+
+
+def test_line_half_runs_for_a_contact_already_imessage_checked(imc_org, monkeypatch):
+    """The two checks have independent timestamps. A contact checked for
+    iMessage last week must still be picked up for its first line lookup —
+    otherwise _due() would exclude it from the sweep entirely."""
+    with SessionLocal() as db:
+        _account(db, imc_org, "relay-line4", "+14805557706")
+        _telnyx_account(db, imc_org, "+14805557707")
+        c = _contact(db, imc_org, "+14805558804")
+        c.imessage_capable = False            # green bubble, checked recently
+        c.imessage_checked_at = utcnow()
+        db.commit()
+        cid = c.id
+
+    ids_calls, line_calls = [], []
+
+    def fake_get(url, **kw):
+        if "handle/availability" in url:
+            ids_calls.append(url)
+            return _available(False)
+        line_calls.append(url)
+        return _carrier("landline")
+
+    monkeypatch.setattr(imessage_check.httpx, "get", fake_get)
+    monkeypatch.setattr(imessage_check.line_lookup.httpx, "get", fake_get)
+    monkeypatch.setattr(imessage_check.time, "sleep", lambda s: None)
+    imessage_check.run_check(imc_org["org_id"], [cid])
+
+    assert ids_calls == []                     # fresh iMessage verdict reused
+    assert len(line_calls) == 1                # but the line half still ran
+    with SessionLocal() as db:
+        assert db.get(Contact, cid).sms_capable is False
+
+
+def test_unrecognized_line_type_is_not_a_no(imc_org, monkeypatch):
+    """An unmapped provider verdict records the type but NOT a capability
+    flag. "We don't recognise this" must never read as "cannot receive
+    texts" — that would silently drop a good lead from every audience."""
+    with SessionLocal() as db:
+        _account(db, imc_org, "relay-line5", "+14805557708")
+        _telnyx_account(db, imc_org, "+14805557709")
+        cid = _contact(db, imc_org, "+14805558805").id
+
+    def fake_get(url, **kw):
+        if "handle/availability" in url:
+            return _available(False)
+        return _Resp(200, {"data": {"carrier": {"type": "something-new", "name": "X"}}})
+
+    monkeypatch.setattr(imessage_check.httpx, "get", fake_get)
+    monkeypatch.setattr(imessage_check.line_lookup.httpx, "get", fake_get)
+    monkeypatch.setattr(imessage_check.time, "sleep", lambda s: None)
+    imessage_check.run_check(imc_org["org_id"], [cid])
+
+    with SessionLocal() as db:
+        c = db.get(Contact, cid)
+        assert c.line_type == "unknown"
+        assert c.sms_capable is None       # NOT False
+        assert c.line_checked_at is not None
+
+
+def test_invalid_number_is_recorded_as_undeliverable(imc_org, monkeypatch):
+    """Telnyx's valid_number=false is unambiguous where carrier type is not."""
+    with SessionLocal() as db:
+        _account(db, imc_org, "relay-line6", "+14805557710")
+        _telnyx_account(db, imc_org, "+14805557711")
+        cid = _contact(db, imc_org, "+14805558806").id
+
+    def fake_get(url, **kw):
+        if "handle/availability" in url:
+            return _available(False)
+        return _Resp(200, {"data": {"valid_number": False,
+                                    "carrier": {"type": "mobile", "name": "X"}}})
+
+    monkeypatch.setattr(imessage_check.httpx, "get", fake_get)
+    monkeypatch.setattr(imessage_check.line_lookup.httpx, "get", fake_get)
+    monkeypatch.setattr(imessage_check.time, "sleep", lambda s: None)
+    imessage_check.run_check(imc_org["org_id"], [cid])
+
+    with SessionLocal() as db:
+        c = db.get(Contact, cid)
+        assert c.line_type == "invalid" and c.sms_capable is False

@@ -224,6 +224,22 @@ export function ImessageView({
             {summary.imessage} on iMessage · {summary.sms_only} SMS only
             {summary.unchecked > 0 && ` · ${summary.unchecked} not checked`}
           </p>
+          {/* Deliverability is a separate verdict from a separate provider,
+              so it gets its own line rather than being blended into the
+              blue/green counts above. Hidden until something is looked up —
+              an org with no Telnyx/Twilio connected never sees an empty row. */}
+          {summary.line_checked > 0 && (
+            <p className="crm-enrich-line">
+              {summary.not_textable > 0 ? (
+                <strong>{summary.not_textable} can&rsquo;t receive texts</strong>
+              ) : (
+                <>{summary.textable} textable</>
+              )}
+              {summary.landline > 0 && ` · ${summary.landline} landline`}
+              {summary.voip > 0 && ` · ${summary.voip} VoIP`}
+              {` · ${summary.line_checked} of ${summary.with_number} line-checked`}
+            </p>
+          )}
           {summary.unchecked > 0 && (
             <Button
               variant="ghost"

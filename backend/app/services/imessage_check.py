@@ -1,6 +1,18 @@
-"""Check which CRM contacts are reachable on iMessage.
+"""Check how (and whether) CRM contacts can be reached by text.
 
-Answers one question per contact: is this phone number registered with Apple?
+Answers TWO questions per contact:
+
+1. Is this number registered with Apple? (free, via the org's BlueBubbles
+   relay — decides blue bubble vs green.)
+2. Can it receive a text AT ALL? (billed, via the org's own Telnyx/Twilio
+   number lookup — a landline is neither blue nor green, and Apple's IDS
+   lookup reports it identically to a mobile that simply isn't on iMessage.)
+
+The second is skipped for anything already known to be iMessage-capable: that
+is provably a real device, so paying a carrier to confirm it is waste. See
+services/line_lookup.py.
+
+On question 1: is this phone number registered with Apple?
 That decides whether a BlueBubbles send lands as a blue iMessage or has to go
 out as green-bubble SMS through the host Mac's Text Message Forwarding — which
 is a materially different channel (iMessage gets read receipts and no carrier
@@ -41,7 +53,7 @@ from ..models.core import Organization
 from ..models.crm import Contact, ContactListMember
 from ..models.sms_outreach import SMS_ACCOUNT_ACTIVE, SmsAccount
 from ..security import decrypt_secret
-from . import sms_consent
+from . import line_lookup, sms_consent
 
 log = logging.getLogger("salescale.imessage_check")
 
@@ -115,6 +127,20 @@ def check_number(base: str, password: str, e164: str) -> Optional[bool]:
     return bool(available) if isinstance(available, bool) else None
 
 
+def _line_due(contact: Contact, force: bool, cutoff: dt.datetime) -> bool:
+    """Same cache rule as _due, on the line-lookup timestamp. Kept separate
+    because the two checks have different costs and can drift apart: a contact
+    can be iMessage-checked today and line-checked never."""
+    if force:
+        return True
+    if contact.line_checked_at is None:
+        return True
+    stamped = contact.line_checked_at
+    if stamped.tzinfo is None:
+        stamped = stamped.replace(tzinfo=dt.timezone.utc)
+    return stamped < cutoff
+
+
 def _due(contact: Contact, force: bool, cutoff: dt.datetime) -> bool:
     if force or contact.imessage_checked_at is None:
         return True
@@ -150,21 +176,27 @@ def run_check(
         org = db.get(Organization, organization_id)
         if org is None:
             return
+        # The two halves are independently optional. An org with only Telnyx
+        # gets deliverability; one with only BlueBubbles gets iMessage; with
+        # neither there is nothing to do and the caller was told so already.
+        lookup_account = line_lookup.resolve_account(db, organization_id)
         account = resolve_account(db, organization_id)
-        if account is None:
+        base = password = None
+        if account is not None:
+            base = (account.relay_url or "").rstrip("/")
+            if not base:
+                raise NoRelayError("The BlueBubbles account has no relay URL configured")
+            try:
+                password = decrypt_secret(account.auth_token_encrypted or "")
+            except Exception as exc:  # InvalidToken stringifies to "" — be explicit
+                raise NoRelayError(
+                    "The BlueBubbles account's stored password could not be read. "
+                    "Reconnect it in SMS \u2192 Accounts."
+                ) from exc
+        elif lookup_account is None:
             raise NoRelayError(
                 "No active BlueBubbles account — connect one in SMS → Accounts"
             )
-        base = (account.relay_url or "").rstrip("/")
-        if not base:
-            raise NoRelayError("The BlueBubbles account has no relay URL configured")
-        try:
-            password = decrypt_secret(account.auth_token_encrypted or "")
-        except Exception as exc:  # InvalidToken stringifies to "" — be explicit
-            raise NoRelayError(
-                "The BlueBubbles account's stored password could not be read. "
-                "Reconnect it in SMS \u2192 Accounts."
-            ) from exc
 
         q = select(Contact).where(Contact.organization_id == organization_id)
         if contact_ids:
@@ -188,7 +220,18 @@ def run_check(
         todo: list[tuple[Contact, str]] = []
         for c in contacts:
             number = sms_consent.contact_sms_number(c)
-            if not number or not _due(c, force, cutoff):
+            if not number:
+                continue
+            # In scope if EITHER half is due. Without this, a contact
+            # iMessage-checked last week would never reach the line lookup,
+            # because the two checks have independent timestamps.
+            wants_imessage = account is not None and _due(c, force, cutoff)
+            wants_line = (
+                lookup_account is not None
+                and not line_lookup.should_skip(c.imessage_capable)
+                and _line_due(c, force, cutoff)
+            )
+            if not (wants_imessage or wants_line):
                 continue
             todo.append((c, number))
         todo = todo[:MAX_PER_RUN]
@@ -204,6 +247,12 @@ def run_check(
         db.commit()
 
         seen: dict[str, Optional[bool]] = {}
+        # Line lookups are billed per call, so the same number is never looked
+        # up twice in one sweep — same reasoning as `seen`, higher stakes.
+        # lookup_account resolved above (it also decides scope). None simply
+        # means the org has no Telnyx/Twilio connected; the sweep still does
+        # the free iMessage half rather than refusing to run.
+        line_seen: dict[str, Optional[tuple]] = {}
         for index, (contact, number) in enumerate(todo):
             # Cancellation, without a new column: the API flips this job's
             # status, and the loop notices between lookups. Cheap because the
@@ -219,14 +268,47 @@ def run_check(
                 return
             if number in seen:
                 verdict = seen[number]
-            else:
+            elif base and _due(contact, force, cutoff):
                 if index:
                     time.sleep(CHECK_SPACING_SECONDS)
                 verdict = check_number(base, password, number)
                 seen[number] = verdict
+            else:
+                verdict = None  # iMessage verdict still fresh — line half only
             if verdict is not None:
                 contact.imessage_capable = verdict
                 contact.imessage_checked_at = utcnow()
+
+            # Second question: can it receive a text at all? Only worth paying
+            # for when the number is NOT a known iMessage device, and only when
+            # we don't already have a fresh verdict.
+            capable = contact.imessage_capable
+            if (
+                lookup_account is not None
+                and not line_lookup.should_skip(capable)
+                and _line_due(contact, force, cutoff)
+            ):
+                if number in line_seen:
+                    line = line_seen[number]
+                else:
+                    line = line_lookup.lookup(lookup_account, number)
+                    line_seen[number] = line
+                if line is not None:
+                    line_type, carrier = line
+                    contact.line_type = line_type
+                    # "unknown" means the provider gave us a type we don't
+                    # recognise — that is NOT the same as "cannot receive
+                    # texts", so the capability flag stays None. Recording
+                    # False here would quietly drop a good lead out of every
+                    # future audience on no evidence.
+                    contact.sms_capable = (
+                        None
+                        if line_type == "unknown"
+                        else line_type in line_lookup.TEXTABLE
+                    )
+                    contact.carrier_name = carrier
+                    contact.line_checked_at = utcnow()
+
             job.processed = index + 1
             job.updated_at = utcnow()
             db.commit()
@@ -274,6 +356,7 @@ def summary(
     rows = list(db.execute(q).scalars().all())
     with_number = [c for c in rows if sms_consent.contact_sms_number(c)]
     checked = [c for c in with_number if c.imessage_capable is not None]
+    line_checked = [c for c in with_number if c.sms_capable is not None]
     return {
         "total": len(rows),
         "with_number": len(with_number),
@@ -281,6 +364,14 @@ def summary(
         "imessage": sum(1 for c in checked if c.imessage_capable),
         "sms_only": sum(1 for c in checked if not c.imessage_capable),
         "unchecked": len(with_number) - len(checked),
+        # Line-type half. Counted over contacts with a number (not over
+        # `checked`) because the two checks are independent — a contact can be
+        # line-checked without ever being iMessage-checked and vice versa.
+        "line_checked": len(line_checked),
+        "textable": sum(1 for c in line_checked if c.sms_capable),
+        "not_textable": sum(1 for c in line_checked if not c.sms_capable),
+        "landline": sum(1 for c in with_number if c.line_type == "landline"),
+        "voip": sum(1 for c in with_number if c.line_type == "voip"),
     }
 
 

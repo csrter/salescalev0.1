@@ -838,6 +838,11 @@ class ContactOutTeam(ContactOutPublic):
     # — team-only routing signal, decides blue-bubble vs green-bubble SMS.
     imessage_capable: Optional[bool] = None
     imessage_checked_at: Optional[dt.datetime] = None
+    # Carrier line type — team-only, like every other enrichment verdict.
+    line_type: Optional[str] = None
+    sms_capable: Optional[bool] = None
+    carrier_name: Optional[str] = None
+    line_checked_at: Optional[dt.datetime] = None
     # AI research field answers (key -> {"value","confidence","source_url",
     # "researched_at"}) — agency workflow data, never in the client portal.
     research: Optional[Dict[str, Any]] = None

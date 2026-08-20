@@ -169,6 +169,19 @@ class Contact(Base):
     imessage_checked_at: Mapped[Optional[dt.datetime]] = mapped_column(
         DateTime(timezone=True)
     )
+    # Carrier line type — a SEPARATE question from iMessage capability, which
+    # only distinguishes blue bubble from green. A landline is neither: it
+    # cannot receive a text at all, and no amount of iMessage lookup reveals
+    # that. Filled by services/line_lookup.py via the org's own Telnyx/Twilio
+    # account (a per-lookup billed call), so it carries its own timestamp
+    # rather than sharing imessage_checked_at.
+    # NULL sms_capable = never looked up, deliberately distinct from False.
+    line_type: Mapped[Optional[str]] = mapped_column(String(20))
+    sms_capable: Mapped[Optional[bool]] = mapped_column(Boolean)
+    carrier_name: Mapped[Optional[str]] = mapped_column(String(120))
+    line_checked_at: Mapped[Optional[dt.datetime]] = mapped_column(
+        DateTime(timezone=True)
+    )
     # AI research fields (Claygent-lite): key -> {"value", "confidence",
     # "source_url", "researched_at"}, keyed by ResearchFieldDef.key. Written
     # via services/research.py only; reassign-whole-dict on write (same JSON-
@@ -218,6 +231,10 @@ RESERVED_CONTACT_FIELD_KEYS: frozenset[str] = frozenset(
         "sms_opt_in_source",
         "imessage_capable",
         "imessage_checked_at",
+        "line_type",
+        "sms_capable",
+        "carrier_name",
+        "line_checked_at",
         "qualification",
         "qualified",
         "qualified_at",

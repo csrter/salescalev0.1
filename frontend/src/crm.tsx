@@ -152,6 +152,12 @@ interface ContactRow {
   // iMessage reachability of the lead's number (team payloads only).
   // undefined/null = never checked — NOT the same as "not on iMessage".
   imessage_capable?: boolean | null;
+  // Carrier line type — whether the number can receive a text AT ALL, which
+  // iMessage capability cannot answer (a landline reads as "not on iMessage",
+  // same as any Android). null = never looked up, NOT "no".
+  line_type?: string | null;
+  sms_capable?: boolean | null;
+  carrier_name?: string | null;
   imessage_checked_at?: string | null;
   qualification?: Record<string, boolean> | null;
   custom_fields?: CustomValues | null;
@@ -249,6 +255,11 @@ function VerificationBadge({ contact }: { contact?: ContactRow | null }) {
  * relay lookup is never recorded, so an unchecked lead may well be blue. */
 function ImessageBadge({ contact }: { contact?: ContactRow | null }) {
   const capable = contact?.imessage_capable;
+  // Undeliverable outranks the blue/green question: if the carrier says this
+  // line can't receive a text, neither channel works and that's the fact that
+  // should drive whether the lead is in an audience at all.
+  if (contact?.sms_capable === false)
+    return <Badge tone="danger">{contact.line_type ?? "no texts"}</Badge>;
   if (capable == null) return <Badge tone="neutral">not checked</Badge>;
   return capable ? (
     <Badge tone="ok">iMessage</Badge>
@@ -1224,9 +1235,15 @@ function LeadList({
       out = out.filter((c) =>
         imsgFilter === "unchecked"
           ? c.imessage_capable == null
-          : imsgFilter === "imessage"
-            ? c.imessage_capable === true
-            : c.imessage_capable === false,
+          : imsgFilter === "undeliverable"
+            ? c.sms_capable === false
+            : imsgFilter === "landline"
+              ? c.line_type === "landline"
+              : imsgFilter === "imessage"
+                ? c.imessage_capable === true
+                : // "SMS only" means green-bubble but still textable — a
+                  // landline is not an SMS-only lead, it's an unusable one.
+                  c.imessage_capable === false && c.sms_capable !== false,
       );
     if (debouncedFilters.length === 0) return out;
     return out.filter((c) =>
@@ -1374,9 +1391,16 @@ function LeadList({
             key: "imessage",
             header: "iMessage",
             render: (c) => <ImessageBadge contact={c} />,
-            // unchecked sorts last — the actionable rows group together
+            // undeliverable first (the rows worth removing from an
+            // audience), then blue, green, and unchecked last
             sortValue: (c) =>
-              c.imessage_capable == null ? 2 : c.imessage_capable ? 0 : 1,
+              c.sms_capable === false
+                ? -1
+                : c.imessage_capable == null
+                  ? 2
+                  : c.imessage_capable
+                    ? 0
+                    : 1,
           } satisfies Column<ContactRow>,
         ]
       : []),
@@ -1442,6 +1466,8 @@ function LeadList({
               <option value="">All numbers</option>
               <option value="imessage">iMessage</option>
               <option value="sms">SMS only</option>
+              <option value="undeliverable">Can't receive texts</option>
+              <option value="landline">Landline</option>
               <option value="unchecked">Not checked</option>
             </select>
           )}

@@ -103,7 +103,7 @@ from ..services import crm as crm_svc
 from ..services import custom_fields as custom_fields_svc
 from ..services import email_verification
 from ..services import entitlements, external_sync, metrics
-from ..services import imessage_check
+from ..services import imessage_check, line_lookup
 from ..services import lead_finder as lead_finder_svc
 from ..services import research as research_svc
 from ..services import sms_consent
@@ -1390,12 +1390,17 @@ def imessage_check_bulk(
     Background because the lookups are deliberately paced (see
     services/imessage_check); the caller polls /enrich/jobs like every other
     bulk pass. An empty contact_ids means the org's whole CRM."""
+    # Either half is enough to run: BlueBubbles answers "blue or green",
+    # Telnyx/Twilio answers "can it receive a text at all". An org with only
+    # one connected still gets that half rather than a hard 400.
     account = imessage_check.resolve_account(db, scope.organization_id)
-    if account is None:
+    lookup_acct = line_lookup.resolve_account(db, scope.organization_id)
+    if account is None and lookup_acct is None:
         raise HTTPException(
             400,
-            "No active BlueBubbles account. iMessage lookups run through a "
-            "BlueBubbles relay — connect one in SMS \u2192 Accounts.",
+            "No account that can check numbers. iMessage lookups need a "
+            "BlueBubbles relay; deliverability lookups need Telnyx or Twilio. "
+            "Connect one in SMS \u2192 Accounts.",
         )
     if body.contact_ids:
         contacts = [scope.get_or_404(db, Contact, cid) for cid in body.contact_ids]

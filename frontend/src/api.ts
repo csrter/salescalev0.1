@@ -1576,6 +1576,14 @@ export interface ImessageSummary {
   imessage: number;
   sms_only: number;
   unchecked: number;
+  /** Carrier line-type half — a separate question from iMessage capability.
+   * A landline is neither blue nor green: it can't receive a text at all.
+   * Counted independently, since the two checks have their own timestamps. */
+  line_checked: number;
+  textable: number;
+  not_textable: number;
+  landline: number;
+  voip: number;
 }
 
 export const imessageSummary = (clientId?: string, listId?: string) => {
