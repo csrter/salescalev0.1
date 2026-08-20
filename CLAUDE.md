@@ -3741,6 +3741,85 @@ live activation + the entitlement flip, the Outreach module build
       nothing will ever answer them. (e) ~42% of that account's sends over 3
       days failed error 22; lookups resolve correctly now, so those were the
       Mac defaulting to iMessage while availability lookups were failing.
+- [x] Client portal accounts — invite, lead conversation, client-owned status
+      (2026-08-20): the client role was fully built but had NO DOOR — TenantScope
+      pinned client users to their client_id, the CRM already served them
+      ContactOutPublic with `read_only: true`, internal-only activities filtered
+      at the query, and `visible_to_clients` custom-field gating — yet the only
+      ROLE_CLIENT users that had ever existed were in test fixtures.
+      api/orgs.add_member hard-rejected anything but admin/member, so no
+      endpoint or UI could create one. Migration c1a4f7b9e206 (two additive
+      nullable columns; NO create_foreign_key — SQLite has no ALTER-for-
+      constraints, so the house convention for add_column is a bare String(36),
+      see e7b4a9d2c6f1).
+      (1) INVITES: organization_invites.client_id carries which client a portal
+      invite pins to. send_invite accepts role="client" (admin-gated like any
+      invite), validates the client is org-scoped and NOT the house CRM (the
+      agency's own prospect pipeline — it must never have a portal user), and
+      SKIPS enforce_can_add_seat: a portal user is visibility-only and never
+      occupies a team seat. accept-signup creates the User with
+      role=client + client_id and deliberately NO organization_membership
+      (membership is the team-seat record and drives the org switcher —
+      models/team.py). Guards both ways: a client-portal email can't join the
+      team (existed) and a team email can't be demoted into a portal user (new);
+      an existing logged-in account can't redeem a portal invite at all, since
+      silently repinning it to one client is a privilege change nobody asked
+      for. Cross-org client_id 404s, not 403s.
+      (2) LEAD CONVERSATION: GET /api/crm/contacts/{id}/messages merges SMS +
+      email for one lead, open to BOTH roles. Scoping rides on the Contact, not
+      the message tables — SmsMessage/EmailMessage carry organization_id but NO
+      client_id, so TenantScope.filter() would AttributeError on them for a
+      client user (that, not policy, is why those routers are require_team).
+      scope.get_or_404(Contact) applies the org check AND the client pin, then
+      every row is keyed to that contact. Outbound rows are filtered by an
+      ALLOWLIST of kinds (campaign/manual), never a denylist: the agency's own
+      lead-notification texts, relay forwards and warmup traffic must not reach
+      a client, and a kind added later must not leak by default. Those rows also
+      carry contact_id=None today, so the contact filter already excludes them —
+      the allowlist is the second lock, because that invariant lives in another
+      module. Inbound is always included (the lead's own replies).
+      (3) CLIENT-OWNED STATUS: contacts.client_status/client_status_at +
+      PUT /contacts/{id}/client-status, fixed vocabulary (new/contacted/reached/
+      appointment/won/lost/bad_lead). Deliberately NOT qualification: that flag
+      feeds the guarantee tracker and LQA-CPL, so a client could otherwise move
+      the agency's own guarantee math by working its leads — set_qualification
+      stays require_team and a client PUT to it still 403s. Each change also
+      writes a non-internal Activity so the team sees it in the timeline.
+      POST /activities opened to the client role for type="note" ONLY, with
+      is_internal forced False (an internal note would be invisible to the
+      client who wrote it); every other type 403s.
+      Frontend: the CRM nav item now shows for both roles — house CRM for the
+      team, the pinned client for a portal user (crmClientId in App.tsx),
+      labelled "My leads"; the existing CrmView is reused wholesale since it
+      already renders read-only from the board's read_only flag. Drawer gained a
+      LeadConversation panel (Schematic register: hairlines, mono metadata, an
+      inset accent edge for inbound rather than chat bubbles; delivery status
+      rendered outbound only) and a ClientStatusControl (editable for the
+      client, read-only badge for the team). NewActivityForm gained notesOnly.
+      Team page invite form gained the client role + a client picker, with the
+      seat-limit `disabled` flag deliberately NOT applied to portal invites.
+      The accept page shows portal-specific copy ("Your <Org> portal") instead
+      of "Join <Org>". Tests 714 -> 719 (test_client_portal.py, own cp_org).
+      Two existing tests updated for the deliberate contract change:
+      test_crm's client-role test (a note is now 201, not 403 — note its
+      cleanup block is what keeps test_metrics' per-contact arithmetic honest,
+      so its failure cascaded into 3 metrics failures until fixed) and
+      test_teams_invites' exact-dict lookup assertion.
+      VERIFIED LIVE end-to-end on alt3 against a real running server (alt2's
+      port was held by another session): real invite -> real accept-signup ->
+      logged in as the portal user -> saw only their own client, their own
+      lead, and exactly the 3 conversation messages with the seeded
+      "*NEW LEAD* ... INTERNAL OPS ALERT" row correctly absent; another
+      client's lead 404s on both detail and messages; SMS module, house CRM and
+      qualification all 403; status + note round-tripped and showed up on the
+      team side with qualified_at still null. Seat behavior confirmed in the UI
+      with the org at "1 / 1 seats used, all seats taken": the portal user is
+      an ACTIVE member, and a client invite's Send button stays enabled while a
+      team invite's is disabled. Zero console errors. NOT YET DEPLOYED — needs
+      the web deploy (migration c1a4f7b9e206) and a desktop rebuild in
+      lockstep, per the standing rule that a web-deployed migration without a
+      desktop rebuild crash-loops the installed app at boot.
+
 - [ ] Stripe live activation + entitlement flip (after 12–14, so real
       limits land everywhere in one pass)
 - [ ] Outreach module build (dev-mode) — go-live gated on Meta App

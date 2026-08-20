@@ -83,7 +83,11 @@ class OrganizationInvite(Base):
         ForeignKey("organizations.id"), nullable=False, index=True
     )
     email: Mapped[str] = mapped_column(String(320), nullable=False, index=True)
-    role: Mapped[str] = mapped_column(String(20), nullable=False)  # admin | member
+    role: Mapped[str] = mapped_column(String(20), nullable=False)  # admin|member|client
+    # Set only on a client-portal invite: WHICH client the accepting user is
+    # pinned to (TenantScope reads User.client_id). NULL on every team invite,
+    # which is why the column is nullable rather than defaulted.
+    client_id: Mapped[Optional[str]] = mapped_column(ForeignKey("clients.id"))
     invited_by_user_id: Mapped[str] = mapped_column(
         ForeignKey("users.id"), nullable=False
     )

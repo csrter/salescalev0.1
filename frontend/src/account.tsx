@@ -225,7 +225,18 @@ export function AcceptInvite({
       </>
     );
 
-  const intro = (
+  const intro = invite.client_name ? (
+    // Client-portal invite: they're not joining the agency's team, they're
+    // getting a login to their own account — say so plainly.
+    <>
+      <h1>Your {invite.organization_name} portal</h1>
+      <p className="auth-sub">
+        Set up your login for <strong>{invite.client_name}</strong> (
+        {invite.email}) to see your leads, the messages sent to them, and your
+        ad performance.
+      </p>
+    </>
+  ) : (
     <>
       <h1>Join {invite.organization_name}</h1>
       <p className="auth-sub">

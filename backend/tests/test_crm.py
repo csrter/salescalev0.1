@@ -977,9 +977,11 @@ def test_client_role_pipeline_view(api, team_headers, client_a_headers, seeded):
             json={"qualified": True},
             headers=client_a_headers,
         ),
+        # A client may leave a NOTE (below), but never a record of agency
+        # work, and never an internal-only entry.
         api.post(
             "/api/crm/activities",
-            json={"contact_id": contact_id, "type": "note", "body": "hi"},
+            json={"contact_id": contact_id, "type": "email", "body": "hi"},
             headers=client_a_headers,
         ),
         api.get(
@@ -989,6 +991,41 @@ def test_client_role_pipeline_view(api, team_headers, client_a_headers, seeded):
         api.get("/api/orgs/me/qualified-lead-criteria", headers=client_a_headers),
     ]
     assert [r.status_code for r in denied] == [403] * len(denied)
+
+    # The two writes the portal DOES have: a note, and their own status.
+    note = api.post(
+        "/api/crm/activities",
+        json={
+            "contact_id": contact_id,
+            "type": "note",
+            "body": "Called them, booked for Tuesday",
+            # Asking for internal must not produce an internal entry — it would
+            # be invisible to the client who wrote it.
+            "is_internal": True,
+        },
+        headers=client_a_headers,
+    )
+    assert note.status_code == 201
+    assert note.json()["is_internal"] is False
+
+    st = api.put(
+        f"/api/crm/contacts/{contact_id}/client-status",
+        json={"status": "won"},
+        headers=client_a_headers,
+    )
+    assert st.status_code == 200 and st.json()["client_status"] == "won"
+    bad = api.put(
+        f"/api/crm/contacts/{contact_id}/client-status",
+        json={"status": "not-a-status"},
+        headers=client_a_headers,
+    )
+    assert bad.status_code == 400
+    # Setting their own status must NOT touch the guarantee-tracker flag.
+    team_view = api.get(
+        f"/api/crm/contacts/{contact_id}", headers=team_headers
+    ).json()
+    assert team_view["client_status"] == "won"
+    assert team_view["qualified_at"] is None
 
     # Remove this test's client_a contact so test_metrics' exact per-contact
     # arithmetic for client_a (5 seeded leads) still holds.

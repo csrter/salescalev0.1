@@ -113,6 +113,15 @@ class Contact(Base):
     qualified_at: Mapped[Optional[dt.datetime]] = mapped_column(
         DateTime(timezone=True)
     )
+    # The CLIENT's own read on this lead, set from the client portal. Kept
+    # deliberately separate from qualification/qualified_at above: those feed
+    # the guarantee tracker and LQA-CPL, so a client user must never be able to
+    # move the agency's own guarantee math by working its leads. This is
+    # advisory feedback the team reads (and may act on), nothing more.
+    client_status: Mapped[Optional[str]] = mapped_column(String(20))
+    client_status_at: Mapped[Optional[dt.datetime]] = mapped_column(
+        DateTime(timezone=True)
+    )
     # External CRM sync mapping (optional per-client) — the other system's
     # contact id, so two-way sync updates in place instead of duplicating.
     external_crm_id: Mapped[Optional[str]] = mapped_column(String(100), index=True)
@@ -173,6 +182,19 @@ class Contact(Base):
 # first-class contact column is added, add its name here so a later custom
 # field can't shadow it in the JSONB bag or in API/CSV mapping. `custom_fields`
 # itself and the qualification/attribution machinery are reserved too.
+# Values a client portal user may set on Contact.client_status. A fixed
+# vocabulary rather than free text so the team can filter/report on it, and so
+# a client can't write arbitrary strings into a column the team's UI renders.
+CLIENT_STATUSES: tuple[str, ...] = (
+    "new",
+    "contacted",
+    "reached",
+    "appointment",
+    "won",
+    "lost",
+    "bad_lead",
+)
+
 RESERVED_CONTACT_FIELD_KEYS: frozenset[str] = frozenset(
     {
         "id",
@@ -199,6 +221,8 @@ RESERVED_CONTACT_FIELD_KEYS: frozenset[str] = frozenset(
         "qualification",
         "qualified",
         "qualified_at",
+        "client_status",
+        "client_status_at",
         "verification_status",
         "verified_at",
         "candidate_emails",

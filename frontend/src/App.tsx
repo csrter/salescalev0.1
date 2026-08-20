@@ -446,7 +446,9 @@ export default function App() {
   // both consume this same filtered list.
   const nav: NavItem[] = [
     { key: "clients", label: "Clients", icon: Building2, section: "Workspace", show: true },
-    { key: "crm", label: "CRM", icon: Table2, section: "Workspace", show: isTeam },
+    // Team: the agency's own house CRM. Client portal: their own leads — same
+    // view, different client id (see crmClientId below).
+    { key: "crm", label: isTeam ? "CRM" : "My leads", icon: Table2, section: "Workspace", show: true },
     { key: "leads", label: "Lead Finder", icon: Compass, section: "Workspace", show: isTeam },
     // IG Outreach go-live is gated on Meta App Review — hidden unless the
     // operator allowlists the org (dead-end door otherwise; beta honesty).
@@ -466,6 +468,10 @@ export default function App() {
     { key: "admin", label: "Admin", icon: Settings, section: "Platform", show: !!session.is_superadmin },
   ];
   const visibleNav = nav.filter((n) => n.show);
+  // The CRM this session works in: the house pipeline for the team, the
+  // pinned client for a portal user (TenantScope enforces the pin server-side
+  // regardless — this only picks which board to ask for).
+  const crmClientId = isTeam ? houseId : session.client_id ?? null;
 
   // Mobile bottom tab bar (≤760px): the thumb-reachable primary nav. Four
   // high-frequency destinations per role + "More", which opens the existing
@@ -628,11 +634,11 @@ export default function App() {
                     </Suspense>
                   </div>
                 )}
-                {isTeam && visited.has("crm") && houseId && (
+                {visited.has("crm") && crmClientId && (
                   <div className="view-host" hidden={tab !== "crm"}>
                     <Suspense fallback={<ViewFallback />}>
                       <CrmView
-                        clientId={houseId}
+                        clientId={crmClientId}
                         session={session}
                         active={tab === "crm"}
                       />
@@ -641,7 +647,7 @@ export default function App() {
                 )}
                 {tab === "crm" &&
                   isTeam &&
-                  !houseId &&
+                  !crmClientId &&
                   (houseErr ? (
                     <section className="crm view-host">
                       <Alert tone="danger" title="Couldn't load the CRM">

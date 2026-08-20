@@ -225,7 +225,10 @@ class UserOut(BaseModel):
 
 class InviteCreate(BaseModel):
     email: EmailStr
-    role: str  # admin | member (ownership moves only via explicit transfer)
+    role: str  # admin | member | client (ownership moves only via transfer)
+    # Required when role == "client": which client this portal user is pinned
+    # to. Ignored for team roles.
+    client_id: Optional[str] = None
 
 
 class InviteOut(BaseModel):
@@ -235,6 +238,9 @@ class InviteOut(BaseModel):
     email: str
     role: str
     status: str
+    client_id: Optional[str] = None
+    # Resolved for display only (the Team list shows "Client — Paganelli HVAC").
+    client_name: Optional[str] = None
     invited_by_user_id: str
     expires_at: dt.datetime
     created_at: dt.datetime
@@ -255,6 +261,9 @@ class InviteLookupOut(BaseModel):
     role: str
     status: str  # pending | accepted | revoked | expired
     account_exists: bool
+    # Client-portal invite: the account being created is read-mostly and pinned
+    # to this one client. Drives the copy on the accept screen.
+    client_name: Optional[str] = None
 
 
 class InviteAcceptRequest(BaseModel):
@@ -795,6 +804,10 @@ class ContactOutPublic(BaseModel):
     company_name: Optional[str] = None
     source: Optional[str] = None
     qualified_at: Optional[dt.datetime] = None
+    # Set by the client portal; visible to both sides (the client owns it, the
+    # team reads it as lead-quality feedback).
+    client_status: Optional[str] = None
+    client_status_at: Optional[dt.datetime] = None
     created_at: dt.datetime
 
 
@@ -1102,6 +1115,32 @@ class QualificationIn(BaseModel):
 
     checklist: Optional[Dict[str, bool]] = None
     qualified: Optional[bool] = None
+
+
+class ClientStatusIn(BaseModel):
+    """The client portal's own read on a lead. Deliberately NOT qualification —
+    see Contact.client_status. None clears it."""
+
+    status: Optional[str] = None
+
+
+class LeadMessageOut(BaseModel):
+    """One message in a lead's conversation, safe for a client-role response.
+
+    Deliberately narrow: provider ids, error detail, campaign/step linkage and
+    the agency's internal numbers stay out. Notification and warmup traffic is
+    excluded at the query, not here (see api/crm.list_contact_messages) — a
+    lead alert texted to the agency's own ops phone is not part of the
+    conversation with the lead and must never reach the client.
+    """
+
+    id: str
+    channel: str  # sms | email
+    direction: str  # in | out
+    body: Optional[str] = None
+    subject: Optional[str] = None
+    status: Optional[str] = None
+    occurred_at: dt.datetime
 
 
 class DealCreateIn(BaseModel):

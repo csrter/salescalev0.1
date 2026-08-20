@@ -32,11 +32,17 @@ from fastapi import (
     Query,
     Response,
 )
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.orm import Session
 
 from ..db import get_db
-from ..deps import TenantScope, get_scope, require_admin, require_team
+from ..deps import (
+    TenantScope,
+    get_current_user,
+    get_scope,
+    require_admin,
+    require_team,
+)
 from ..models.attribution import LandingEvent
 from ..models.audit import AUDIT_SUCCESS, AuditLogEntry
 from ..models.core import Client, Organization, User
@@ -54,10 +60,16 @@ from ..models.crm import (
     ResearchFieldDef,
 )
 from ..models.lead_finder import VERIFICATION_STATUSES, EnrichmentJob
+from ..models.crm import CLIENT_STATUSES
+from ..models.email_outreach import DIR_IN as EMAIL_DIR_IN
+from ..models.email_outreach import EmailMessage
+from ..models.sms_outreach import SMS_DIR_IN, SmsMessage
 from ..schemas import (
     ACTIVITY_TYPES,
     ActivityCreateIn,
     ActivityOut,
+    ClientStatusIn,
+    LeadMessageOut,
     ContactBulkDeleteIn,
     ContactPurgeIn,
     ContactBulkUpdateIn,
@@ -1909,14 +1921,23 @@ def list_activities(
 @router.post("/activities", status_code=201, response_model=ActivityOut)
 def create_activity(
     body: ActivityCreateIn,
-    user: User = Depends(require_team),
+    user: User = Depends(get_current_user),
     scope: TenantScope = Depends(get_scope),
     db: Session = Depends(get_db),
 ):
+    """Team members log any activity type. A client portal user may leave a
+    note on their own lead — and only a note: the other types are records of
+    agency work, and an internal-only note is a team concept the portal must
+    not be able to author (it would be invisible to the client who wrote it)."""
     if body.type not in ACTIVITY_TYPES:
         raise HTTPException(
             400, f"type must be one of {', '.join(sorted(ACTIVITY_TYPES))}"
         )
+    is_internal = body.is_internal
+    if not scope.is_team:
+        if body.type != "note":
+            raise HTTPException(403, "Only notes can be added here")
+        is_internal = False
     contact = scope.get_or_404(db, Contact, body.contact_id)
     activity = Activity(
         organization_id=contact.organization_id,
@@ -1924,13 +1945,142 @@ def create_activity(
         contact_id=contact.id,
         type=body.type,
         body=body.body,
-        is_internal=body.is_internal,
+        is_internal=is_internal,
         occurred_at=body.occurred_at or utcnow(),
         created_by_user_id=user.id,
     )
     db.add(activity)
     db.commit()
     return activity
+
+
+# --- Lead conversation + client-owned status (client portal surfaces) ---
+
+# Outbound message kinds that are part of the CONVERSATION WITH THE LEAD.
+# An allowlist, not a denylist: notification texts (the agency's own ops
+# alerts), relay forwards and warmup traffic must never reach a client, and a
+# kind added later must not leak by default. Those rows also carry
+# contact_id=None today, so the contact filter already excludes them — this is
+# the second lock, because that invariant lives in another module.
+_LEAD_MSG_SMS_KINDS = ("campaign", "manual")
+_LEAD_MSG_EMAIL_KINDS = ("campaign", "manual")
+
+
+@router.get("/contacts/{contact_id}/messages", response_model=List[LeadMessageOut])
+def list_contact_messages(
+    contact_id: str,
+    user: User = Depends(get_current_user),
+    scope: TenantScope = Depends(get_scope),
+    db: Session = Depends(get_db),
+):
+    """Every message exchanged with ONE lead, SMS and email merged.
+
+    Open to the client role on purpose — this is the portal's "what have you
+    sent my leads" view. Scoping rides on the Contact, not on the message
+    tables: SmsMessage/EmailMessage carry organization_id but NO client_id, so
+    TenantScope.filter() cannot be used on them directly (it would raise
+    AttributeError for a client user). Resolving the contact through
+    get_or_404 applies both the org check and the client pin, and every row is
+    then keyed to that contact.
+    """
+    contact = scope.get_or_404(db, Contact, contact_id)
+
+    sms_rows = (
+        db.execute(
+            select(SmsMessage).where(
+                SmsMessage.organization_id == contact.organization_id,
+                SmsMessage.contact_id == contact.id,
+                or_(
+                    SmsMessage.direction == SMS_DIR_IN,
+                    SmsMessage.kind.in_(_LEAD_MSG_SMS_KINDS),
+                ),
+            )
+        )
+        .scalars()
+        .all()
+    )
+    email_rows = (
+        db.execute(
+            select(EmailMessage).where(
+                EmailMessage.organization_id == contact.organization_id,
+                EmailMessage.contact_id == contact.id,
+                or_(
+                    EmailMessage.direction == EMAIL_DIR_IN,
+                    EmailMessage.kind.in_(_LEAD_MSG_EMAIL_KINDS),
+                ),
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+    out = [
+        LeadMessageOut(
+            id=m.id,
+            channel="sms",
+            direction=m.direction,
+            body=m.body,
+            subject=None,
+            status=m.status,
+            occurred_at=m.created_at,
+        )
+        for m in sms_rows
+    ] + [
+        LeadMessageOut(
+            id=m.id,
+            channel="email",
+            direction=m.direction,
+            body=m.body_text,
+            subject=m.subject,
+            status=m.status,
+            occurred_at=m.created_at,
+        )
+        for m in email_rows
+    ]
+    out.sort(key=lambda m: m.occurred_at)
+    return out
+
+
+@router.put("/contacts/{contact_id}/client-status")
+def set_client_status(
+    contact_id: str,
+    body: ClientStatusIn,
+    user: User = Depends(get_current_user),
+    scope: TenantScope = Depends(get_scope),
+    db: Session = Depends(get_db),
+):
+    """The client's own read on a lead — writable from the portal.
+
+    NOT qualification: that flag feeds the guarantee tracker and LQA-CPL, so it
+    stays team-only (see set_qualification). This is advisory feedback that the
+    team reads back as lead quality.
+    """
+    contact = scope.get_or_404(db, Contact, contact_id)
+    status = (body.status or "").strip().lower() or None
+    if status is not None and status not in CLIENT_STATUSES:
+        raise HTTPException(
+            400, f"status must be one of {', '.join(CLIENT_STATUSES)}"
+        )
+    contact.client_status = status
+    contact.client_status_at = utcnow() if status else None
+    db.add(
+        Activity(
+            organization_id=contact.organization_id,
+            client_id=contact.client_id,
+            contact_id=contact.id,
+            type="note",
+            body=(
+                f"Status set to \u201c{status}\u201d"
+                if status
+                else "Status cleared"
+            ),
+            is_internal=False,
+            occurred_at=utcnow(),
+            created_by_user_id=user.id,
+        )
+    )
+    db.commit()
+    return {"client_status": contact.client_status, "client_status_at": contact.client_status_at}
 
 
 # --- Tasks / follow-ups (team-only: internal work management) ---

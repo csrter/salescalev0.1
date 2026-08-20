@@ -851,13 +851,52 @@ export const transferOwnership = (memberId: string) =>
     body: JSON.stringify({ member_id: memberId }),
   });
 
+/** One message exchanged with a lead, SMS or email, as the portal sees it.
+ * The backend excludes the agency's own notification/warmup traffic. */
+export interface LeadMessage {
+  id: string;
+  channel: "sms" | "email";
+  direction: "in" | "out";
+  body: string | null;
+  subject: string | null;
+  status: string | null;
+  occurred_at: string;
+}
+
+export const listContactMessages = (contactId: string) =>
+  api<LeadMessage[]>(`/api/crm/contacts/${contactId}/messages`);
+
+export const CLIENT_STATUSES = [
+  "new",
+  "contacted",
+  "reached",
+  "appointment",
+  "won",
+  "lost",
+  "bad_lead",
+] as const;
+export type ClientStatus = (typeof CLIENT_STATUSES)[number];
+
+/** The client's own read on a lead. Deliberately NOT qualification — that
+ * feeds the guarantee tracker and stays team-only. */
+export const setClientStatus = (contactId: string, status: ClientStatus | null) =>
+  api<{ client_status: string | null; client_status_at: string | null }>(
+    `/api/crm/contacts/${contactId}/client-status`,
+    { method: "PUT", body: JSON.stringify({ status }) },
+  );
+
 // --- Phase 13: invites, seats, memberships ---
+
+export type InviteRole = "admin" | "member" | "client";
 
 export interface Invite {
   id: string;
   email: string;
-  role: "admin" | "member";
+  role: InviteRole;
   status: "pending" | "accepted" | "revoked" | "expired";
+  /** Client-portal invite only: the client this account will be pinned to. */
+  client_id?: string | null;
+  client_name?: string | null;
   invited_by_user_id: string;
   expires_at: string;
   created_at: string;
@@ -897,7 +936,12 @@ export interface MembershipAuditEntry {
 }
 
 export const listInvites = () => api<Invite[]>("/api/orgs/me/invites");
-export const sendInvite = (body: { email: string; role: "admin" | "member" }) =>
+export const sendInvite = (body: {
+  email: string;
+  role: InviteRole;
+  /** Required when role is "client" — which client the portal user sees. */
+  client_id?: string;
+}) =>
   api<Invite>("/api/orgs/me/invites", { method: "POST", body: JSON.stringify(body) });
 export const resendInvite = (id: string) =>
   api<Invite>(`/api/orgs/me/invites/${id}/resend`, { method: "POST" });
@@ -912,9 +956,11 @@ export const listMembershipAudit = () =>
 export interface InviteLookup {
   organization_name: string;
   email: string;
-  role: "admin" | "member";
+  role: InviteRole;
   status: "pending" | "accepted" | "revoked" | "expired";
   account_exists: boolean;
+  /** Set when this is a client-portal invite — drives the accept-page copy. */
+  client_name?: string | null;
 }
 
 export const lookupInvite = (token: string) =>

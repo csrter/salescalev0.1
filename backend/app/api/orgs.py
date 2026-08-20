@@ -743,6 +743,42 @@ def membership_audit(
 # --- invites ---
 
 
+def _portal_client_or_400(db: Session, organization_id: str, client_id: Optional[str]):
+    """Resolve the client a portal invite pins to, refusing anything that would
+    hand out access across a tenant boundary — or into the house CRM, which is
+    the agency's OWN prospect pipeline and has no business being visible to a
+    client (it never has a portal user by construction; see services/crm
+    .get_or_create_house_client)."""
+    if not client_id:
+        raise HTTPException(400, "A client invite needs a client_id")
+    client = db.get(Client, client_id)
+    if client is None or client.organization_id != organization_id:
+        raise HTTPException(404, "Not found")
+    if getattr(client, "is_house", False):
+        raise HTTPException(400, "The house CRM can't have a portal user")
+    return client
+
+
+def _invites_out(db: Session, invites) -> List[InviteOut]:
+    """Serialize with the client name resolved in one query (the Team list
+    renders a row per invite; a per-row lookup would be N+1)."""
+    ids = {i.client_id for i in invites if i.client_id}
+    names = (
+        {
+            c.id: c.name
+            for c in db.execute(select(Client).where(Client.id.in_(ids))).scalars()
+        }
+        if ids
+        else {}
+    )
+    out = []
+    for i in invites:
+        o = InviteOut.model_validate(i)
+        o.client_name = names.get(i.client_id) if i.client_id else None
+        out.append(o)
+    return out
+
+
 @router.get("/me/invites", response_model=List[InviteOut])
 def list_invites(user: User = Depends(require_admin), db: Session = Depends(get_db)):
     invites = (
@@ -759,7 +795,7 @@ def list_invites(user: User = Depends(require_admin), db: Session = Depends(get_
     # invite — any() alone would stop at the first expired one.)
     if any([team.expire_if_due(db, i) for i in invites]):
         db.commit()
-    return invites
+    return _invites_out(db, invites)
 
 
 @router.post("/me/invites", response_model=InviteOut, status_code=201)
@@ -771,10 +807,16 @@ def send_invite(
 ):
     """Email an invite. The mail carries the only copy of the token; the DB
     stores its hash. A pending invite reserves a seat (see entitlements)."""
-    if body.role not in (ROLE_ADMIN, ROLE_MEMBER):
-        raise HTTPException(400, "Role must be admin or member")
+    if body.role not in (ROLE_ADMIN, ROLE_MEMBER, ROLE_CLIENT):
+        raise HTTPException(400, "Role must be admin, member or client")
     if body.role == ROLE_ADMIN and user.role != ROLE_OWNER:
         raise HTTPException(403, "Only the Owner can invite admins")
+    is_portal = body.role == ROLE_CLIENT
+    portal_client = (
+        _portal_client_or_400(db, user.organization_id, body.client_id)
+        if is_portal
+        else None
+    )
     enforce_bucket(
         f"org_invites:{user.organization_id}", _ORG_INVITES_PER_HOUR, 3600
     )
@@ -789,11 +831,19 @@ def send_invite(
             raise HTTPException(
                 409, "That person is already a member of this organization"
             )
-        if existing_user.role == ROLE_CLIENT:
+        if existing_user.role == ROLE_CLIENT and not is_portal:
             raise HTTPException(
                 409,
                 "That email belongs to a client portal account — it can't "
                 "join the team",
+            )
+        if is_portal and existing_user.role != ROLE_CLIENT:
+            # The mirror of the guard above. Demoting a team account into a
+            # single-client portal user would silently strip its access.
+            raise HTTPException(
+                409,
+                "That email belongs to a team account — it can't be a client "
+                "portal user",
             )
 
     # Re-inviting supersedes: the old invite dies with its token, the new one
@@ -802,13 +852,17 @@ def send_invite(
     if superseded is not None:
         superseded.status = INVITE_REVOKED
 
-    entitlements.enforce_can_add_seat(db, org)
+    # Client portal users are visibility-only and never occupy a team seat, so
+    # the seat meter (and its 402) applies to team invites only.
+    if not is_portal:
+        entitlements.enforce_can_add_seat(db, org)
 
     raw, token_hash = new_invite_token()
     invite = OrganizationInvite(
         organization_id=org.id,
         email=email,
         role=body.role,
+        client_id=portal_client.id if portal_client else None,
         invited_by_user_id=user.id,
         token_hash=token_hash,
         expires_at=utcnow() + dt.timedelta(days=INVITE_TTL_DAYS),
@@ -823,10 +877,15 @@ def send_invite(
         user,
         AUDIT_INVITE_SENT,
         target_email=email,
-        detail={"role": body.role, "superseded": superseded is not None},
+        detail={
+            "role": body.role,
+            "superseded": superseded is not None,
+            **({"client_id": portal_client.id} if portal_client else {}),
+        },
     )
     db.commit()
     out = InviteOut.model_validate(invite)
+    out.client_name = portal_client.name if portal_client else None
     if not delivered:
         # No email transport (dev/desktop) or delivery failed: hand the link
         # to the inviting Admin to share out-of-band — same posture as the
@@ -934,12 +993,14 @@ def lookup_invite(
         ).scalar_one_or_none()
         is not None
     )
+    client = db.get(Client, invite.client_id) if invite.client_id else None
     return InviteLookupOut(
         organization_name=org.name,
         email=invite.email,
         role=invite.role,
         status=invite.status,
         account_exists=account_exists,
+        client_name=client.name if client else None,
     )
 
 
@@ -959,6 +1020,16 @@ def accept_invite(
             403,
             f"This invite was sent to {invite.email} — log in with that "
             "account to accept it",
+        )
+    if invite.client_id:
+        # A portal invite provisions a NEW single-client account; there is no
+        # "add this existing account to a client" path, and silently repinning
+        # a logged-in user to one client would be a privilege change they never
+        # asked for.
+        raise HTTPException(
+            400,
+            "This is a client portal invite — open it while signed out to "
+            "create the portal account",
         )
     if user.role == ROLE_CLIENT:
         raise HTTPException(403, "Client portal accounts can't join a team")
@@ -1007,7 +1078,13 @@ def accept_invite_signup(
             "the invite link again",
         )
     org = db.get(Organization, invite.organization_id)
-    entitlements.enforce_can_accept_seat(db, org)
+    is_portal = invite.role == ROLE_CLIENT
+    if not is_portal:
+        entitlements.enforce_can_accept_seat(db, org)
+    if is_portal:
+        # Re-validate at accept time: the client could have been deleted, or
+        # moved orgs, between send and redeem.
+        _portal_client_or_400(db, org.id, invite.client_id)
 
     user = User(
         organization_id=org.id,
@@ -1015,11 +1092,17 @@ def accept_invite_signup(
         hashed_password=hash_password(body.password),
         full_name=body.full_name,
         role=invite.role,
+        # Pins TenantScope to this one client for every request this account
+        # ever makes. None for team roles.
+        client_id=invite.client_id if is_portal else None,
         email_verified=True,
     )
     db.add(user)
     db.flush()
-    team.add_membership(db, org.id, user, invite.role)
+    # Portal users deliberately get NO organization_membership: membership is
+    # the team-seat record and drives the org switcher (models/team.py).
+    if not is_portal:
+        team.add_membership(db, org.id, user, invite.role)
     invite.status = INVITE_ACCEPTED
     invite.accepted_by_user_id = user.id
     invite.accepted_at = utcnow()

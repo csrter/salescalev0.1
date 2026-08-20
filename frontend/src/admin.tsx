@@ -11,10 +11,12 @@ import {
   listMembers,
   listMembershipAudit,
   removeMember,
+  listClients,
   resendInvite,
   resetUserPassword,
   revokeInvite,
   sendInvite,
+  type InviteRole,
   transferOwnership,
   updateMember,
   updateOrg,
@@ -604,7 +606,16 @@ export function TeamAdmin({
 
   const inviteColumns: Column<Invite>[] = [
     { key: "email", header: "Email", render: (i) => i.email, sortValue: (i) => i.email },
-    { key: "role", header: "Role", render: (i) => <Badge tone="neutral">{i.role}</Badge> },
+    {
+      key: "role",
+      header: "Role",
+      render: (i) => (
+        <>
+          <Badge tone="neutral">{i.role}</Badge>
+          {i.client_name && <span className="adm-sub"> {i.client_name}</span>}
+        </>
+      ),
+    },
     {
       key: "status",
       header: "Status",
@@ -762,14 +773,30 @@ function InviteForm({
   onSent: () => void;
 }) {
   const [email, setEmail] = useState("");
-  const [role, setRole] = useState<"admin" | "member">("member");
+  const [role, setRole] = useState<InviteRole>("member");
+  const [clientId, setClientId] = useState("");
+  const [clients, setClients] = useState<{ id: string; name: string }[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [sent, setSent] = useState<string | null>(null);
   // Present when the server couldn't email the invite (no delivery transport
   // configured) — the admin copies the link and shares it out-of-band.
   const [link, setLink] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const roles: Role[] = session.role === "owner" ? ["member", "admin"] : ["member"];
+  const roles: InviteRole[] =
+    session.role === "owner" ? ["member", "admin", "client"] : ["member", "client"];
+  const isPortal = role === "client";
+
+  // The client roster, for pinning a portal invite. The house CRM is already
+  // excluded server-side (api/clients) and can never have a portal user.
+  useEffect(() => {
+    let alive = true;
+    listClients()
+      .then((cs) => alive && setClients(cs.map((c) => ({ id: c.id, name: c.name }))))
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, []);
 
   return (
     <form
@@ -781,11 +808,16 @@ function InviteForm({
         setLink(null);
         setBusy(true);
         try {
-          const r = await sendInvite({ email, role });
+          const r = await sendInvite({
+            email,
+            role,
+            ...(isPortal ? { client_id: clientId } : {}),
+          });
           setSent(email);
           setLink(r.invite_link ?? null);
           setEmail("");
           setRole("member");
+          setClientId("");
           onSent();
         } catch (err) {
           setError((err as Error).message);
@@ -796,8 +828,9 @@ function InviteForm({
     >
       <h3 className="adm-invite-title">Invite by email</h3>
       <p className="adm-sub">
-        Sends an invite link — they choose their own password. Invites expire
-        after 7 days and reserve a seat until accepted or revoked.
+        {isPortal
+          ? "Creates a read-mostly portal login for one client: their own leads, the messages sent to them, and their ad performance. It never uses a team seat."
+          : "Sends an invite link — they choose their own password. Invites expire after 7 days and reserve a seat until accepted or revoked."}
       </p>
       <div className="adm-invite-grid">
         <Field label="Email">
@@ -813,18 +846,42 @@ function InviteForm({
           <select
             className="select"
             value={role}
-            onChange={(e) => setRole(e.target.value as "admin" | "member")}
+            onChange={(e) => setRole(e.target.value as InviteRole)}
           >
             {roles.map((r) => (
               <option key={r} value={r}>
-                {r}
+                {r === "client" ? "client (portal)" : r}
               </option>
             ))}
           </select>
         </Field>
+        {isPortal && (
+          <Field label="Client">
+            <select
+              className="select"
+              value={clientId}
+              onChange={(e) => setClientId(e.target.value)}
+              required
+            >
+              <option value="">Choose a client…</option>
+              {clients.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.name}
+                </option>
+              ))}
+            </select>
+          </Field>
+        )}
       </div>
       <div className="adm-invite-foot">
-        <Button type="submit" variant="primary" busy={busy} disabled={disabled}>
+        <Button
+          type="submit"
+          variant="primary"
+          busy={busy}
+          // A portal invite consumes no seat, so a full team plan (the
+          // `disabled` seat-limit flag) must not block it.
+          disabled={isPortal ? !clientId : disabled}
+        >
           Send invite
         </Button>
         {sent && !link && <Alert tone="ok">Invite sent to {sent}.</Alert>}

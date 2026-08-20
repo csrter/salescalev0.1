@@ -100,6 +100,7 @@ def test_invite_new_user_full_flow(api):
         "role": "member",
         "status": "pending",
         "account_exists": False,
+        "client_name": None,  # team invite — no client pin
     }
 
     r = api.post(

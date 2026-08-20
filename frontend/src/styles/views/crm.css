@@ -989,3 +989,63 @@
     align-items: stretch;
   }
 }
+
+/* --- Lead conversation (drawer): the messages sent to one lead ------------
+   Rendered for the team AND the client portal. Kept in the Schematic
+   register: hairline-separated records, mono metadata, an inset accent edge
+   for inbound rather than the chat-bubble idiom (this is a log of what was
+   sent, not a chat client). */
+.crm-convo {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.crm-msg {
+  padding: var(--space-2) 0 var(--space-3);
+  border-bottom: 1px solid var(--border);
+  font-size: var(--text-sm);
+  color: var(--ink);
+}
+
+.crm-msg:last-child {
+  padding-bottom: 0;
+  border-bottom: none;
+}
+
+/* Inbound — the lead answering. The accent edge is the same "selected/from
+   them" cue the email inbox uses for unread. */
+.crm-msg--in {
+  border-left: 2px solid var(--accent);
+  padding-left: var(--space-3);
+}
+
+.crm-msg-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+}
+
+.crm-msg-status {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  letter-spacing: var(--tracking-caps);
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+
+.crm-msg-subject {
+  font-weight: 600;
+  margin-bottom: var(--space-1);
+}
+
+.crm-msg-body {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--ink);
+}

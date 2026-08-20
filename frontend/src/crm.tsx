@@ -51,6 +51,11 @@ import {
   getEnrichmentJobs,
   type EnrichmentJob,
   verifyContacts,
+  listContactMessages,
+  setClientStatus,
+  CLIENT_STATUSES,
+  type ClientStatus,
+  type LeadMessage,
   type ContactEditBody,
   type ContactList,
   type ResearchFieldDef,
@@ -133,6 +138,12 @@ interface ContactRow {
   company_employee_count?: number | null;
   source: string | null;
   qualified_at: string | null;
+  // The CLIENT's own read on this lead, set from the portal. Present in both
+  // team and client payloads — the client owns it, the team reads it back as
+  // lead-quality feedback. Never conflate with qualified_at above, which
+  // feeds the guarantee tracker.
+  client_status?: string | null;
+  client_status_at?: string | null;
   created_at: string;
   // Phase 12 — present in team payloads only (verification is agency
   // workflow, never a client-portal field).
@@ -2426,6 +2437,139 @@ function useDrawerA11y(onClose: () => void) {
   return ref;
 }
 
+/** The conversation with a lead — SMS and email merged, oldest first.
+ *
+ * Rendered for the team AND the client portal: the backend serves the same
+ * endpoint to both and excludes the agency's own notification/warmup traffic,
+ * so there is nothing to hide here in the UI. */
+function LeadConversation({ contactId }: { contactId: string }) {
+  const [msgs, setMsgs] = useState<LeadMessage[] | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    listContactMessages(contactId)
+      .then((m) => alive && setMsgs(m))
+      .catch((e) => alive && setErr((e as Error).message));
+    return () => {
+      alive = false;
+    };
+  }, [contactId]);
+
+  if (err)
+    return (
+      <section className="crm-section">
+        <h6 className="crm-overline">Messages</h6>
+        <Alert tone="danger" title="Couldn't load messages">
+          {err}
+        </Alert>
+      </section>
+    );
+
+  return (
+    <section className="crm-section">
+      <h6 className="crm-overline">Messages</h6>
+      {msgs === null ? (
+        <SkeletonText lines={3} />
+      ) : msgs.length === 0 ? (
+        <p className="crm-muted">No messages sent to this lead yet.</p>
+      ) : (
+        <ul className="crm-convo">
+          {msgs.map((m) => (
+            <li
+              key={m.id}
+              className={
+                m.direction === "in" ? "crm-msg crm-msg--in" : "crm-msg"
+              }
+            >
+              <div className="crm-msg-head">
+                <Badge tone="neutral">{m.channel}</Badge>
+                <Badge tone={m.direction === "in" ? "ok" : "neutral"}>
+                  {m.direction === "in" ? "received" : "sent"}
+                </Badge>
+                {/* Delivery status only means something outbound — inbound
+                    would just repeat the direction badge. */}
+                {m.direction === "out" && m.status && (
+                  <span className="crm-msg-status">{m.status}</span>
+                )}
+                <Timestamp iso={m.occurred_at} />
+              </div>
+              {m.subject && <div className="crm-msg-subject">{m.subject}</div>}
+              <div className="crm-msg-body">{m.body}</div>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
+const CLIENT_STATUS_LABELS: Record<string, string> = {
+  new: "New",
+  contacted: "Contacted",
+  reached: "Reached",
+  appointment: "Appointment set",
+  won: "Won",
+  lost: "Lost",
+  bad_lead: "Bad lead",
+};
+
+/** The client's own read on a lead. Separate from the qualified checkbox on
+ * purpose — that one feeds the guarantee tracker and stays team-only. */
+function ClientStatusControl({
+  detail,
+  canEdit,
+  onChanged,
+}: {
+  detail: ContactDetail;
+  canEdit: boolean;
+  onChanged: () => void;
+}) {
+  const toast = useToast();
+  const [value, setValue] = useState<string>(detail.client_status ?? "");
+  const [saving, setSaving] = useState(false);
+
+  const save = async (next: string) => {
+    setValue(next);
+    setSaving(true);
+    try {
+      await setClientStatus(detail.id, (next || null) as ClientStatus | null);
+      toast(next ? `Marked ${CLIENT_STATUS_LABELS[next] ?? next}` : "Status cleared", "ok");
+      onChanged();
+    } catch (e) {
+      setValue(detail.client_status ?? "");
+      toast((e as Error).message, "error");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (!canEdit)
+    return detail.client_status ? (
+      <Badge tone="neutral">
+        {CLIENT_STATUS_LABELS[detail.client_status] ?? detail.client_status}
+      </Badge>
+    ) : (
+      <span className="crm-muted">Not set by the client yet</span>
+    );
+
+  return (
+    <select
+      aria-label="Lead status"
+      value={value}
+      disabled={saving}
+      onChange={(e) => save(e.target.value)}
+    >
+      <option value="">— No status —</option>
+      {CLIENT_STATUSES.map((s) => (
+        <option key={s} value={s}>
+          {CLIENT_STATUS_LABELS[s] ?? s}
+        </option>
+      ))}
+    </select>
+  );
+}
+
 function ContactDrawer({
   contactId,
   clientId,
@@ -2596,8 +2740,28 @@ function ContactDrawer({
         </section>
 
         <section className="crm-section">
+          <h6 className="crm-overline">
+            {isTeam ? "Client status" : "Your status for this lead"}
+          </h6>
+          <ClientStatusControl
+            detail={detail}
+            canEdit={!isTeam}
+            onChanged={() => {
+              reload();
+              onChanged();
+            }}
+          />
+        </section>
+
+        <LeadConversation contactId={detail.id} />
+
+        <section className="crm-section">
           <h6 className="crm-overline">Activity</h6>
-          {isTeam && <NewActivityForm contactId={detail.id} onCreated={reload} />}
+          <NewActivityForm
+            contactId={detail.id}
+            onCreated={reload}
+            notesOnly={!isTeam}
+          />
           <ul className="crm-timeline">
             {detail.activities.map((a) => (
               <li key={a.id}>
@@ -3202,9 +3366,14 @@ function NewDealForm({
 function NewActivityForm({
   contactId,
   onCreated,
+  notesOnly = false,
 }: {
   contactId: string;
   onCreated: () => void;
+  /** Client portal: a note is the only entry they may author. The other types
+   * are records of agency work, and an internal-only note would be invisible
+   * to the client who wrote it. The backend enforces this too. */
+  notesOnly?: boolean;
 }) {
   const [type, setType] = useState("note");
   const [body, setBody] = useState("");
@@ -3236,27 +3405,34 @@ function NewActivityForm({
 
   return (
     <form className="crm-form" onSubmit={submit}>
-      <Field label="Type">
-        <select value={type} onChange={(e) => setType(e.target.value)}>
-          {["note", "call", "email", "sms", "meeting"].map((t) => (
-            <option key={t} value={t}>
-              {t}
-            </option>
-          ))}
-        </select>
-      </Field>
-      <Field label="What happened?" error={error ?? undefined}>
+      {!notesOnly && (
+        <Field label="Type">
+          <select value={type} onChange={(e) => setType(e.target.value)}>
+            {["note", "call", "email", "sms", "meeting"].map((t) => (
+              <option key={t} value={t}>
+                {t}
+              </option>
+            ))}
+          </select>
+        </Field>
+      )}
+      <Field
+        label={notesOnly ? "Add a note" : "What happened?"}
+        error={error ?? undefined}
+      >
         <input value={body} onChange={(e) => setBody(e.target.value)} />
       </Field>
       <div className="crm-form-actions">
-        <label className="crm-check">
-          <input
-            type="checkbox"
-            checked={internal}
-            onChange={(e) => setInternal(e.target.checked)}
-          />
-          <span>Internal only</span>
-        </label>
+        {!notesOnly && (
+          <label className="crm-check">
+            <input
+              type="checkbox"
+              checked={internal}
+              onChange={(e) => setInternal(e.target.checked)}
+            />
+            <span>Internal only</span>
+          </label>
+        )}
         <Button type="submit" disabled={!body} busy={busy}>
           Log
         </Button>
