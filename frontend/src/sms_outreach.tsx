@@ -1574,9 +1574,14 @@ function ConfigForm({
     <div className="sms-form">
       <Field label="Send from number">
         <select
-          value={detail.account_id}
+          value={detail.account_id ?? ""}
           onChange={(e) => onPatch({ account_id: e.target.value })}
         >
+          {!detail.account_id && (
+            <option value="" disabled>
+              — none (its account was removed; pick one to resume sending) —
+            </option>
+          )}
           {accounts.map((a) => (
             <option key={a.id} value={a.id}>
               {a.name} — {a.from_number || a.messaging_service_sid}
@@ -1923,9 +1928,10 @@ function BranchesEditor({
     <div className="sms-branches">
       <span className="field-label">Response branches</span>
       <p className="sms-hint">
-        Match what they text back: the first branch with a keyword found in
-        their reply (whole word, any casing) sends its response instead of the
-        default message above. Branch order is priority.
+        Match what they text back: the branch whose matching keyword is most
+        specific (longest phrase, e.g. "not interested" beats "interested")
+        sends its response instead of the default message above — position
+        and branch order only break ties between equally specific matches.
       </p>
       {branches.map((b, i) => (
         <div className="sms-branch" key={i}>
@@ -1964,9 +1970,16 @@ function BranchesEditor({
               placeholder={"Great — what's the best time to call you, {{first_name|there}}?"}
             />
           </Field>
-          <Button variant="danger-outline" size="sm" onClick={() => remove(i)}>
-            Remove branch
-          </Button>
+          <div className="sms-branch-footer">
+            <Switch
+              checked={!!b.notify}
+              onChange={(v) => update(i, { ...b, notify: v })}
+              label="Text me when a reply matches this branch"
+            />
+            <Button variant="danger-outline" size="sm" onClick={() => remove(i)}>
+              Remove branch
+            </Button>
+          </div>
         </div>
       ))}
       <Button variant="ghost" size="sm" onClick={add}>

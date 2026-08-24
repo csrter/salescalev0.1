@@ -220,8 +220,13 @@ class SmsCampaign(Base):
     status: Mapped[str] = mapped_column(
         String(20), default=SMS_CAMPAIGN_DRAFT, nullable=False
     )
-    account_id: Mapped[str] = mapped_column(
-        ForeignKey("sms_accounts.id"), nullable=False, index=True
+    # Nullable: deleting the account this campaign sends from clears this to
+    # NULL instead of forcing the campaign to be archived first (see
+    # api.sms_outreach.delete_account). process_enrollment already parks an
+    # active campaign's enrollments when the account is missing — an admin
+    # restores sending with a PATCH that sets a new account_id.
+    account_id: Mapped[Optional[str]] = mapped_column(
+        ForeignKey("sms_accounts.id"), nullable=True, index=True
     )
     timezone: Mapped[str] = mapped_column(
         String(64), default="America/New_York", nullable=False

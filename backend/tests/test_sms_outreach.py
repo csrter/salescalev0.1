@@ -4354,3 +4354,208 @@ def test_stop_after_branch_off_keeps_the_multi_turn_behavior(
     _reply_and_send(api, acct, "+14805557830", "Not interested", "SM_sab_7")
     assert len(captured_sends) == 3
     assert "My apologies!" in captured_sends[-1]["body"]
+
+
+# --- deleting an in-use account no longer forces campaigns to archive -------
+
+
+def test_delete_account_clears_campaign_and_parks_it_without_archiving(
+    sc_org, api, twilio_creds_ok
+):
+    """Deleting an account a campaign still uses no longer 409s — the
+    campaign keeps its status (active stays active) and just parks until an
+    admin picks a new account."""
+    acct = _mk_account(sc_org, api, from_number="+14805550950")
+    camp = _mk_campaign(sc_org, api, acct["id"], **_ALWAYS)
+    contact = _mk_contact(sc_org, api, mobile_phone="4805557950", first="Orin")
+    _set_steps(
+        sc_org,
+        api,
+        camp["id"],
+        [{"position": 1, "trigger": "schedule", "wait_days": 0, "body": "Hi there"}],
+    )
+    assert _activate(sc_org, api, camp["id"]).status_code == 200
+    _enroll(sc_org, api, camp["id"], [contact])
+
+    r = api.delete(f"/api/sms/accounts/{acct['id']}", headers=sc_org["headers"])
+    assert r.status_code == 204, r.text
+
+    got = api.get(f"/api/sms/campaigns/{camp['id']}", headers=sc_org["headers"]).json()
+    assert got["status"] == "active"  # never touched — not archived, not paused
+    assert got["account_id"] is None
+
+    # The enrollment was already due (scheduled at enroll time) — a tick
+    # touches it, finds the account gone, and parks it rather than crashing
+    # on the missing account.
+    assert _tick() == 1
+    db = SessionLocal()
+    try:
+        e = db.execute(
+            select(SmsEnrollment).where(
+                SmsEnrollment.campaign_id == camp["id"],
+                SmsEnrollment.contact_id == contact,
+            )
+        ).scalar_one()
+        assert e.status == SMS_ENROLL_ACTIVE
+        assert e.next_run_at is None  # parked — "reconnect flow re-arms"
+    finally:
+        db.close()
+
+    # Ticking again is a true no-op now — nothing due, nothing to crash on.
+    assert _tick() == 0
+
+    # Activating a DIFFERENT campaign whose account gets deleted before it
+    # ever activates 422s cleanly rather than raising on the None lookup.
+    other_acct = _mk_account(sc_org, api, from_number="+14805550949")
+    draft = _mk_campaign(sc_org, api, other_acct["id"], name="Never activated")
+    _set_steps(
+        sc_org,
+        api,
+        draft["id"],
+        [{"position": 1, "trigger": "schedule", "wait_days": 0, "body": "Hi"}],
+    )
+    assert (
+        api.delete(f"/api/sms/accounts/{other_acct['id']}", headers=sc_org["headers"]).status_code
+        == 204
+    )
+    r = api.post(f"/api/sms/campaigns/{draft['id']}/activate", headers=sc_org["headers"])
+    assert r.status_code == 422
+    assert "not connected" in r.json()["detail"]
+
+
+def test_reassigning_account_via_patch_rearms_the_parked_campaign(
+    sc_org, api, twilio_creds_ok, captured_sends
+):
+    """PATCHing a new account_id onto a campaign whose account was deleted
+    is allowed even while ACTIVE (it's a repair, not a mid-flight swap), and
+    re-arms the parked enrollment so it actually sends again."""
+    acct = _mk_account(sc_org, api, from_number="+14805550951")
+    camp = _mk_campaign(sc_org, api, acct["id"], **_ALWAYS)
+    contact = _mk_contact(sc_org, api, mobile_phone="4805557951", first="Priya")
+    _set_steps(
+        sc_org,
+        api,
+        camp["id"],
+        [{"position": 1, "trigger": "schedule", "wait_days": 0, "body": "Hi there"}],
+    )
+    assert _activate(sc_org, api, camp["id"]).status_code == 200
+    _enroll(sc_org, api, camp["id"], [contact])
+
+    assert api.delete(
+        f"/api/sms/accounts/{acct['id']}", headers=sc_org["headers"]
+    ).status_code == 204
+    assert _tick() == 1  # parks — nothing sent
+    assert len(captured_sends) == 0
+
+    replacement = _mk_account(sc_org, api, from_number="+14805550952")
+    r = api.patch(
+        f"/api/sms/campaigns/{camp['id']}",
+        json={"account_id": replacement["id"]},
+        headers=sc_org["headers"],
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["status"] == "active"  # unchanged throughout
+    assert r.json()["account_id"] == replacement["id"]
+
+    assert _tick() == 1
+    assert len(captured_sends) == 1
+    assert captured_sends[0]["account_id"] == replacement["id"]
+
+
+def test_patch_account_id_still_requires_pause_for_a_working_campaign(
+    sc_org, api, twilio_creds_ok
+):
+    """The "repair" bypass only applies when the campaign currently has NO
+    account — swapping a genuinely working number mid-flight still needs a
+    pause first, unchanged from before this feature."""
+    acct = _mk_account(sc_org, api, from_number="+14805550953")
+    camp = _mk_campaign(sc_org, api, acct["id"], **_ALWAYS)
+    _set_steps(
+        sc_org,
+        api,
+        camp["id"],
+        [{"position": 1, "trigger": "schedule", "wait_days": 0, "body": "Hi there"}],
+    )
+    assert _activate(sc_org, api, camp["id"]).status_code == 200
+
+    other = _mk_account(sc_org, api, from_number="+14805550954")
+    r = api.patch(
+        f"/api/sms/campaigns/{camp['id']}",
+        json={"account_id": other["id"]},
+        headers=sc_org["headers"],
+    )
+    assert r.status_code == 409, r.text
+
+
+# --- branch-matched replies can text the team -------------------------------
+
+
+_NOTIFY_ON_YES = [
+    {"position": 1, "body": "Hey is this {{company}}?"},
+    {
+        "position": 2,
+        "trigger": "reply",
+        "wait_minutes": 0,
+        "body": "Thanks for getting back to me!",
+        "branches": [
+            {
+                "label": "Yes",
+                "keywords": ["yes"],
+                "body": "Here is the pitch.",
+                "notify": True,
+            },
+            {"label": "No", "keywords": ["not interested"], "body": "My apologies!"},
+        ],
+    },
+]
+
+
+def test_positive_branch_reply_texts_the_team(ln_org, api, twilio_creds_ok, captured_sends):
+    """A reply matching a branch flagged notify=True fires an ops alert to
+    the configured lead-notification number(s), on top of the automated
+    branch response actually sent to the lead.
+
+    Uses the dedicated ln_org (not the module-scoped sc_org) since this
+    enables org-wide notifications, which would otherwise leak into every
+    other sc_org test in the file."""
+    _enable_notifications(api, ln_org, ["+14805559111"])
+    acct = _mk_account(ln_org, api, from_number="+14805550960")
+    camp = _mk_campaign(ln_org, api, acct["id"], **_ALWAYS)
+    contact = _mk_contact(
+        ln_org, api, mobile_phone="4805557960", first="Robin", company_name="Robin HVAC"
+    )
+    _set_steps(ln_org, api, camp["id"], _NOTIFY_ON_YES)
+    assert _activate(ln_org, api, camp["id"]).status_code == 200
+    _enroll(ln_org, api, camp["id"], [contact])
+    _tick()  # opener
+    assert len(captured_sends) == 1
+
+    _reply_and_send(api, acct, "+14805557960", "yes", "SM_notify_yes")
+
+    to_numbers = [s["to"] for s in captured_sends]
+    assert "+14805557960" in to_numbers  # the pitch, to the lead
+    assert "+14805559111" in to_numbers  # the ops alert, to the team
+    alert = next(s for s in captured_sends if s["to"] == "+14805559111")
+    assert "Positive reply" in alert["body"]
+    assert camp["name"] in alert["body"]
+    assert "Robin" in alert["body"]
+    assert '"yes"' in alert["body"]
+
+
+def test_branch_without_notify_flag_sends_no_alert(ln_org, api, twilio_creds_ok, captured_sends):
+    """Only the flagged branch alerts — a match on the "No" branch (no
+    notify flag) sends nothing beyond the automated response itself."""
+    _enable_notifications(api, ln_org, ["+14805559112"])
+    acct = _mk_account(ln_org, api, from_number="+14805550961")
+    camp = _mk_campaign(ln_org, api, acct["id"], **_ALWAYS)
+    contact = _mk_contact(ln_org, api, mobile_phone="4805557961", first="Dana")
+    _set_steps(ln_org, api, camp["id"], _NOTIFY_ON_YES)
+    assert _activate(ln_org, api, camp["id"]).status_code == 200
+    _enroll(ln_org, api, camp["id"], [contact])
+    _tick()  # opener
+    assert len(captured_sends) == 1
+
+    _reply_and_send(api, acct, "+14805557961", "not interested", "SM_notify_no")
+
+    assert len(captured_sends) == 2  # opener + the parting message only
+    assert all(s["to"] != "+14805559112" for s in captured_sends)

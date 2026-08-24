@@ -294,6 +294,64 @@ def notify_new_lead(db: Session, client: Client, contact: Contact) -> None:
         )
 
 
+_BRANCH_REPLY_BODY_LEN = 200  # keep the quoted reply readable, not a full transcript
+
+
+def notify_branch_reply(
+    db: Session,
+    org: Organization,
+    campaign_name: str,
+    contact: Contact,
+    branch_label: str,
+    reply_text: str,
+) -> None:
+    """Ops alert when a lead's reply matches an SMS campaign branch flagged
+    notify=True (services/sms_campaigns._branch_options) — e.g. a "yes"
+    branch on the pitch step, so a positive reply pings a real phone instead
+    of waiting to be noticed in the CRM. Reuses the exact same recipient
+    phones (org-wide + this lead's client, per _recipient_phones) and account
+    failover as notify_new_lead; this is a different TRIGGER (a reply
+    matched a branch, not a lead being created), not a different delivery
+    mechanism. Deliberately no configurable template (unlike the new-lead
+    alert) — this fires from inside the send engine's hot path, so it stays
+    a fixed, simple message rather than adding another render pass there.
+    Called from process_enrollment right after the branch response actually
+    sends; best-effort — never raises, never blocks the send that triggered
+    it."""
+    try:
+        client = db.get(Client, contact.client_id)
+        if client is None:
+            return
+        phones = _recipient_phones(org, client)
+        if not phones:
+            return
+        accounts = candidate_accounts(db, org.id)
+        if not accounts:
+            return
+        name = " ".join(p for p in (contact.first_name, contact.last_name) if p) or "A lead"
+        number = contact.mobile_phone or contact.phone or ""
+        who = f"{name} ({number})" if number else name
+        snippet = (reply_text or "").strip()[:_BRANCH_REPLY_BODY_LEN]
+        body = f"\U0001f525 Positive reply — {campaign_name}\n{who}"
+        body += f'\nSaid: "{snippet}"' if snippet else f"\nMatched: {branch_label}"
+        for phone in phones:
+            sender = _send_with_failover(db, accounts, phone, body)
+            if sender is None:
+                log.warning(
+                    "branch-reply notification to %s failed on every account, org=%s",
+                    phone,
+                    org.id,
+                )
+                continue
+            accounts = [sender] + [a for a in accounts if a.id != sender.id]
+    except Exception:
+        log.exception(
+            "branch-reply notification failed for org=%s, contact=%s",
+            org.id,
+            contact.id,
+        )
+
+
 # --- automatic retry of failed notification texts ----------------------------
 # notify_new_lead / the relay forwards are single-shot best-effort at lead-
 # creation time (a webhook request can't sit in a retry loop), but the

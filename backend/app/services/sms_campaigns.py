@@ -66,6 +66,7 @@ from ..models.sms_outreach import (
 )
 from . import ai_insights, ai_provider
 from . import email_personalize  # reused for token rendering (regex + casing/tidy)
+from . import lead_notify
 from . import sms_consent
 from . import sms_send as gateway
 from . import timezones
@@ -438,7 +439,14 @@ def _branch_options(step: SmsStep) -> list:
         keywords = [
             str(k).strip() for k in (b.get("keywords") or []) if str(k).strip()
         ]
-        out.append({"label": label, "keywords": keywords, "body": b.get("body") or ""})
+        out.append(
+            {
+                "label": label,
+                "keywords": keywords,
+                "body": b.get("body") or "",
+                "notify": bool(b.get("notify")),
+            }
+        )
     return out
 
 
@@ -858,6 +866,17 @@ def retry_errored(
         e.awaiting_reply_since = None
         e.next_run_at = when
     return {"queued": queued, "skipped": skipped}
+
+
+def rearm_campaign(db: Session, campaign: SmsCampaign) -> int:
+    """Re-arm parked enrollments and revive send-FAILURE errors for ONE
+    campaign — the per-campaign counterpart to rearm_account (which does the
+    same across every campaign on a reconnected account). Called when a
+    campaign gets a new account_id via PATCH after its old one was deleted
+    out from under it (api.sms_outreach.delete_account clears account_id to
+    NULL rather than requiring the campaign to be archived first — see the
+    migration f2c9a4e7d1b6 docstring)."""
+    return rearm_parked(db, campaign) + _revive_errored(db, campaign)
 
 
 def rearm_account(db: Session, account_id: str) -> int:
@@ -1367,7 +1386,7 @@ def process_enrollment(db: Session, enrollment: SmsEnrollment) -> None:
     if campaign is None or campaign.status != SMS_CAMPAIGN_ACTIVE:
         enrollment.next_run_at = None  # paused/archived campaign parks its enrollments
         return
-    account = db.get(SmsAccount, campaign.account_id)
+    account = db.get(SmsAccount, campaign.account_id) if campaign.account_id else None
     if account is None or account.status != SMS_ACCOUNT_ACTIVE:
         enrollment.next_run_at = None  # reconnect flow re-arms
         return
@@ -1418,10 +1437,10 @@ def process_enrollment(db: Session, enrollment: SmsEnrollment) -> None:
     # no match (or no branches) sends the step's default body.
     branch_body: Optional[str] = None
     branch_label: Optional[str] = None
+    matched_reply_text: Optional[str] = None
     if (current.trigger or "schedule") == SMS_TRIGGER_REPLY:
-        branch_body, branch_label = select_branch(
-            db, org, current, branch_reply_text(db, enrollment, current)
-        )
+        matched_reply_text = branch_reply_text(db, enrollment, current)
+        branch_body, branch_label = select_branch(db, org, current, matched_reply_text)
     body = render_full(
         db, org, enrollment, current, contact=contact, body_template=branch_body
     )
@@ -1488,6 +1507,19 @@ def process_enrollment(db: Session, enrollment: SmsEnrollment) -> None:
             # on the lead's next message.
             if branch_label is not None:
                 enrollment.branch_sent_at = now
+                matched = next(
+                    (b for b in _branch_options(current) if b["label"] == branch_label),
+                    None,
+                )
+                if matched and matched["notify"] and org is not None:
+                    lead_notify.notify_branch_reply(
+                        db,
+                        org,
+                        campaign.name,
+                        contact,
+                        branch_label,
+                        matched_reply_text or "",
+                    )
         nxt = next((s for s in steps if s.position > current.position), None)
         if nxt is None:
             _end(enrollment, SMS_ENROLL_COMPLETED)

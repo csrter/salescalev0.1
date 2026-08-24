@@ -372,8 +372,12 @@
   border-radius: var(--radius-sm);
 }
 
-.sms-branch > .btn {
-  align-self: flex-start;
+.sms-branch-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  flex-wrap: wrap;
 }
 
 .sms-last-reply {

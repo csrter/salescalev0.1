@@ -2370,7 +2370,9 @@ export interface SmsCampaign extends SmsFunnelStats {
   id: string;
   name: string;
   status: SmsCampaignStatus;
-  account_id: string;
+  /** Null when the account it sent from was deleted — sending is paused
+   * until an admin PATCHes in a replacement account_id. */
+  account_id: string | null;
   steps_count: number;
   /** Failed sends grouped by reason, most common first — send diagnostics. */
   failure_reasons: SmsFailureReason[];
@@ -2381,6 +2383,10 @@ export interface SmsStepBranch {
   label: string;
   keywords: string[];
   body: string;
+  /** Alert the configured lead-notification phone(s) when a reply matches
+   * this branch (e.g. flag "yes" so a positive reply to the pitch texts a
+   * real phone). Defaults to false. */
+  notify?: boolean;
 }
 
 export interface SmsStepStats {

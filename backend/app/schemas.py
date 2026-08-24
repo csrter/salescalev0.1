@@ -1739,6 +1739,11 @@ class SmsStepBranchIn(BaseModel):
     label: str = Field(min_length=1, max_length=40)
     keywords: List[str] = Field(default_factory=list, max_length=20)
     body: str = Field(min_length=1, max_length=1600)
+    # When true, a reply matching this branch also fires an ops SMS alert
+    # (services/lead_notify.notify_branch_reply) to the org's/client's
+    # configured lead-notification numbers — e.g. flag "yes" so a positive
+    # reply to the pitch pings a real phone.
+    notify: bool = False
 
     @field_validator("keywords")
     @classmethod

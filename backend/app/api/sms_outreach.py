@@ -17,7 +17,7 @@ from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.orm import Session
 
 from ..db import get_db
@@ -350,13 +350,19 @@ def delete_account(
     db: Session = Depends(get_db),
 ):
     account = _scoped_get(db, scope, SmsAccount, account_id)
-    in_use = db.execute(
-        select(SmsCampaign.id).where(SmsCampaign.account_id == account.id).limit(1)
-    ).scalar_one_or_none()
-    if in_use is not None:
-        raise HTTPException(
-            409, "A campaign still uses this number — archive it first."
-        )
+    # Deleting an account no longer requires archiving campaigns that use it
+    # — a campaign keeps whatever status it already had (active/paused/etc.),
+    # it just stops being able to send until an admin PATCHes in a
+    # replacement account_id. process_enrollment already parks an active
+    # campaign's enrollments when its account is missing (see the comment
+    # there — "reconnect flow re-arms"), so this reuses that existing,
+    # already-tested path rather than adding a new one. Reassigning a new
+    # account re-arms via rearm_campaign (see update_campaign).
+    db.execute(
+        update(SmsCampaign)
+        .where(SmsCampaign.account_id == account.id)
+        .values(account_id=None)
+    )
     db.delete(account)
     db.commit()
 
@@ -954,9 +960,17 @@ def update_campaign(
 ):
     campaign = _scoped_get(db, scope, SmsCampaign, campaign_id)
     data = body.model_dump(exclude_unset=True)
+    was_unassigned = campaign.account_id is None
     if "account_id" in data:
-        # Changing the sending number is only safe before the campaign runs.
-        if campaign.status == SMS_CAMPAIGN_ACTIVE:
+        if not data["account_id"]:
+            raise HTTPException(422, "account_id cannot be cleared directly")
+        # Changing the sending number mid-flight is only safe before the
+        # campaign runs — EXCEPT when it currently has no account at all
+        # (its account was deleted out from under it). That's a repair, not
+        # a swap: nothing is "running" on this number to disrupt, and
+        # requiring a pause first would force the exact deactivation this
+        # flow exists to avoid.
+        if campaign.status == SMS_CAMPAIGN_ACTIVE and not was_unassigned:
             raise HTTPException(409, "Pause the campaign before changing its number")
         _scoped_get(db, scope, SmsAccount, data["account_id"])
     if "client_id" in data and data["client_id"]:
@@ -978,6 +992,11 @@ def update_campaign(
         )
     for field, value in data.items():
         setattr(campaign, field, value)
+    if was_unassigned and campaign.account_id and campaign.status == SMS_CAMPAIGN_ACTIVE:
+        # Same "reconnect flow re-arms" contract as reconnecting an account —
+        # this campaign was parked with no account to send from; give it one
+        # and its enrollments schedule again instead of sitting dormant.
+        sms_campaigns.rearm_campaign(db, campaign)
     db.commit()
     # Config edits apply on the next scheduler tick.
     return _campaign_out(db, campaign, full=True)
@@ -1091,9 +1110,9 @@ def activate_campaign(
     )
     if steps == 0:
         raise HTTPException(422, "Add at least one step before activating")
-    account = db.get(SmsAccount, campaign.account_id)
+    account = db.get(SmsAccount, campaign.account_id) if campaign.account_id else None
     if account is None or account.status != SMS_ACCOUNT_ACTIVE:
-        raise HTTPException(422, "The campaign's Twilio number is not connected")
+        raise HTTPException(422, "The campaign's number is not connected")
     campaign.status = SMS_CAMPAIGN_ACTIVE
     campaign.activated_at = utcnow()
     # Enrollments a tick parked while paused/disconnected stay dormant
