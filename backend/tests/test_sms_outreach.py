@@ -2912,6 +2912,58 @@ def test_reply_branch_keyword_word_boundaries():
     assert sms_campaigns.match_branch_keywords(step, "") is None
 
 
+def test_reply_branch_specificity_beats_declaration_order():
+    """A longer, more specific keyword wins over a shorter generic one that
+    also matches, regardless of which branch was configured first — this is
+    the exact class of bug that used to require hand-curating keyword lists
+    to avoid collisions (e.g. "interested" as a yes-keyword swallowing "not
+    interested")."""
+    step = SmsStep(
+        organization_id="o",
+        campaign_id="c",
+        position=2,
+        trigger="reply",
+        branches=[
+            {"label": "Yes", "keywords": ["interested", "yes"], "body": "great"},
+            {"label": "No", "keywords": ["not interested", "no"], "body": "ok"},
+        ],
+    )
+    assert sms_campaigns.match_branch_keywords(step, "not interested")["label"] == "No"
+    assert (
+        sms_campaigns.match_branch_keywords(step, "very interested actually")["label"]
+        == "Yes"
+    )
+    # Reordering the branches must not change the outcome — specificity, not
+    # declaration order, decides when both are present.
+    step.branches = list(reversed(step.branches))
+    assert sms_campaigns.match_branch_keywords(step, "not interested")["label"] == "No"
+
+
+def test_reply_branch_keyword_normalizes_real_sms_noise():
+    """Curly iOS apostrophes, stretched-out typing, and extra whitespace must
+    not defeat a keyword match."""
+    step = SmsStep(
+        organization_id="o",
+        campaign_id="c",
+        position=2,
+        trigger="reply",
+        branches=[
+            {"label": "No", "keywords": ["no", "can't"], "body": "ok"},
+            {"label": "Yes", "keywords": ["yes", "sure"], "body": "great"},
+        ],
+    )
+    assert sms_campaigns.match_branch_keywords(step, "yesss!!")["label"] == "Yes"
+    assert sms_campaigns.match_branch_keywords(step, "nooooo")["label"] == "No"
+    assert (
+        sms_campaigns.match_branch_keywords(step, "can’t talk right now")["label"]
+        == "No"
+    )
+    assert (
+        sms_campaigns.match_branch_keywords(step, "yes    definitely")["label"]
+        == "Yes"
+    )
+
+
 def test_is_auto_reply_detects_out_of_office_but_not_real_replies():
     """The auto-responder detector classifies unattended out-of-office texts but
     never a short genuine reply (STRONG phrase alone, or 2+ MEDIUM phrases)."""

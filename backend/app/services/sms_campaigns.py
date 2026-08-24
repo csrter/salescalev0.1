@@ -394,6 +394,37 @@ _CLASSIFY_REPLY_SYSTEM = (
 )
 
 
+_CURLY_QUOTES = str.maketrans(
+    {
+        "‘": "'",
+        "’": "'",
+        "‚": "'",
+        "‛": "'",
+        "“": '"',
+        "”": '"',
+        "„": '"',
+        "‟": '"',
+    }
+)
+_STRETCHED_LETTER_RE = re.compile(r"(.)\1{2,}")  # 3+ of the same char in a row
+_WHITESPACE_RE = re.compile(r"\s+")
+
+
+def _normalize_for_match(text: str) -> str:
+    """Lowercase + normalize a reply (and, symmetrically, a configured
+    keyword) so word-boundary matching survives real SMS noise: iOS's curly
+    apostrophe ("can't" sent from an iPhone must still match a "can't"
+    keyword typed with a straight quote), stretched-out typing ("yesss",
+    "nooo", "sureeee" collapse toward their base word — a genuine English
+    double letter like "sorry"'s "rr" is untouched since this only folds
+    runs of 3+), and inconsistent whitespace/line breaks."""
+    if not text:
+        return ""
+    text = text.strip().lower().translate(_CURLY_QUOTES)
+    text = _STRETCHED_LETTER_RE.sub(r"\1", text)
+    return _WHITESPACE_RE.sub(" ", text)
+
+
 def _branch_options(step: SmsStep) -> list:
     """The step's branches as a sanitized list of dicts (defensive against
     hand-edited JSON: non-dict entries and blank labels are skipped)."""
@@ -412,17 +443,42 @@ def _branch_options(step: SmsStep) -> list:
 
 
 def match_branch_keywords(step: SmsStep, reply_text: str) -> Optional[dict]:
-    """First branch (in order) with a keyword appearing in the reply as a
-    whole word, case-insensitive. Word boundaries matter: a "no" branch must
-    not fire on "know"."""
-    text = (reply_text or "").lower()
+    """The best-matching branch for `reply_text`.
+
+    Every branch is checked, not just the first that hits — the MOST
+    SPECIFIC match wins, ranked by (a) longest matched keyword, so a
+    multi-word phrase like "not interested" beats a shorter, more generic
+    "interested" keyword on the same reply regardless of which branch was
+    configured first (the exact failure class that used to require
+    hand-curating keyword lists to avoid collisions), then (b) earliest
+    position in the reply, then (c) branch declaration order — preserving
+    today's configured-priority behavior as the final tiebreak when two
+    keywords are equally specific.
+
+    Matching is case-insensitive, whole-word/phrase (word boundaries: a "no"
+    branch must not fire on "know"), and normalized against real SMS noise —
+    curly apostrophes, stretched-out typing ("yesss"), extra whitespace — via
+    _normalize_for_match, applied symmetrically to both the reply and every
+    configured keyword.
+    """
+    text = _normalize_for_match(reply_text)
     if not text:
         return None
-    for branch in _branch_options(step):
+    best_key = None
+    best_branch = None
+    for idx, branch in enumerate(_branch_options(step)):
         for kw in branch["keywords"]:
-            if re.search(r"(?<!\w)" + re.escape(kw.lower()) + r"(?!\w)", text):
-                return branch
-    return None
+            norm_kw = _normalize_for_match(kw)
+            if not norm_kw:
+                continue
+            m = re.search(r"(?<!\w)" + re.escape(norm_kw) + r"(?!\w)", text)
+            if not m:
+                continue
+            key = (len(norm_kw), -m.start(), -idx)
+            if best_key is None or key > best_key:
+                best_key = key
+                best_branch = branch
+    return best_branch
 
 
 def classify_reply(
