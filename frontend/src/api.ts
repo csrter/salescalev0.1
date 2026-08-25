@@ -2387,6 +2387,12 @@ export interface SmsStepBranch {
    * this branch (e.g. flag "yes" so a positive reply to the pitch texts a
    * real phone). Defaults to false. */
   notify?: boolean;
+  /** Drop the contact into the client's CRM sales pipeline when a reply
+   * matches this branch. Defaults to false. */
+  add_to_pipeline?: boolean;
+  /** Deal value in dollars for add_to_pipeline; defaults to 2000 server-side
+   * when on and left blank. */
+  deal_value?: number | null;
 }
 
 export interface SmsStepStats {

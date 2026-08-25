@@ -4559,3 +4559,182 @@ def test_branch_without_notify_flag_sends_no_alert(ln_org, api, twilio_creds_ok,
 
     assert len(captured_sends) == 2  # opener + the parting message only
     assert all(s["to"] != "+14805559112" for s in captured_sends)
+
+
+# --- branch-matched replies can auto-create a CRM pipeline deal --------------
+
+
+_ADD_TO_PIPELINE = [
+    {"position": 1, "body": "Hey is this {{company}}?"},
+    {
+        "position": 2,
+        "trigger": "reply",
+        "wait_minutes": 0,
+        "body": "Thanks for getting back to me!",
+        "branches": [
+            {
+                "label": "Yes",
+                "keywords": ["yes"],
+                "body": "Here is the pitch.",
+                "add_to_pipeline": True,
+            },
+            {"label": "No", "keywords": ["not interested"], "body": "My apologies!"},
+        ],
+    },
+]
+
+
+def test_positive_branch_reply_creates_pipeline_deal(sc_org, api, twilio_creds_ok, captured_sends):
+    """A reply matching a branch flagged add_to_pipeline drops the contact
+    into that client's CRM sales pipeline at the default $2,000 value."""
+    from app.models.crm import Deal
+
+    acct = _mk_account(sc_org, api, from_number="+14805550970")
+    camp = _mk_campaign(sc_org, api, acct["id"], **_ALWAYS)
+    contact = _mk_contact(sc_org, api, mobile_phone="4805557970", first="Morgan")
+    _set_steps(sc_org, api, camp["id"], _ADD_TO_PIPELINE)
+    assert _activate(sc_org, api, camp["id"]).status_code == 200
+    _enroll(sc_org, api, camp["id"], [contact])
+    _tick()  # opener
+
+    _reply_and_send(api, acct, "+14805557970", "yes", "SM_deal_yes")
+
+    db = SessionLocal()
+    try:
+        deals = db.execute(
+            select(Deal).where(Deal.contact_id == contact)
+        ).scalars().all()
+        assert len(deals) == 1
+        assert deals[0].value_cents == 200_000
+        assert deals[0].status == "open"
+        assert "Yes" in deals[0].name
+    finally:
+        db.close()
+
+
+def test_add_to_pipeline_skips_duplicate_and_respects_custom_value(
+    sc_org, api, twilio_creds_ok, captured_sends
+):
+    """A custom deal_value is honored, and a contact who already has an open
+    deal in the pipeline doesn't get a second one from a repeat match
+    (e.g. resume-completed / catch-up re-firing the same branch)."""
+    from app.models.crm import Deal
+
+    acct = _mk_account(sc_org, api, from_number="+14805550971")
+    camp = _mk_campaign(sc_org, api, acct["id"], **_ALWAYS)
+    contact = _mk_contact(sc_org, api, mobile_phone="4805557971", first="Alexis")
+    steps = [
+        _ADD_TO_PIPELINE[0],
+        {
+            **_ADD_TO_PIPELINE[1],
+            "branches": [
+                {**_ADD_TO_PIPELINE[1]["branches"][0], "deal_value": 7500},
+                _ADD_TO_PIPELINE[1]["branches"][1],
+            ],
+        },
+    ]
+    _set_steps(sc_org, api, camp["id"], steps)
+    assert _activate(sc_org, api, camp["id"]).status_code == 200
+    _enroll(sc_org, api, camp["id"], [contact])
+    _tick()  # opener
+
+    _reply_and_send(api, acct, "+14805557971", "yes", "SM_deal_custom_1")
+
+    db = SessionLocal()
+    try:
+        deals = db.execute(
+            select(Deal).where(Deal.contact_id == contact)
+        ).scalars().all()
+        assert len(deals) == 1
+        assert deals[0].value_cents == 750_000
+    finally:
+        db.close()
+
+    # Re-open the enrollment at the reply step and match "yes" again — must
+    # not create a second deal for the same contact.
+    e = _get_enrollment(camp["id"], contact)
+    db = SessionLocal()
+    try:
+        row = db.get(SmsEnrollment, e.id)
+        row.current_position = 2
+        row.status = SMS_ENROLL_ACTIVE
+        row.branch_sent_at = None
+        row.awaiting_reply_since = None
+        db.commit()
+    finally:
+        db.close()
+    _reply_and_send(api, acct, "+14805557971", "yes", "SM_deal_custom_2")
+
+    db = SessionLocal()
+    try:
+        deals = db.execute(
+            select(Deal).where(Deal.contact_id == contact)
+        ).scalars().all()
+        assert len(deals) == 1  # still just the one
+    finally:
+        db.close()
+
+
+# --- completed-enrollment reopen tries AI branching, not just keywords ------
+
+
+def test_completed_enrollment_reopen_uses_ai_branching_not_just_keywords(
+    sc_org, api, twilio_creds_ok, captured_sends, monkeypatch
+):
+    """A reply that doesn't hit a keyword but WOULD classify via AI must still
+    reopen a completed enrollment when ai_branching is on — this is the real
+    production gap: handle_reply's completed-reopen path used to call bare
+    match_branch_keywords, so a step with AI branching turned on classified
+    an ambiguous reply correctly while the enrollment was still active, but
+    went silent on the identical kind of text once the sequence had
+    completed (found live on az paint, a multi-turn stop_after_branch=False
+    campaign whose reply steps all have ai_branching on)."""
+    acct = _mk_account(sc_org, api, from_number="+14805550972")
+    camp = _mk_campaign(sc_org, api, acct["id"], stop_after_branch=False, **_ALWAYS)
+    contact = _mk_contact(sc_org, api, mobile_phone="4805557972", first="Robin")
+    _set_steps(
+        sc_org,
+        api,
+        camp["id"],
+        [
+            {"position": 1, "body": "Hey is this {{company}}?"},
+            {
+                "position": 2,
+                "trigger": "reply",
+                "wait_minutes": 0,
+                "ai_branching": True,
+                "body": "Thanks for getting back to me!",
+                "branches": [
+                    {"label": "Interested", "keywords": ["yes"], "body": "Great, here's the pitch."}
+                ],
+            },
+        ],
+    )
+    assert _activate(sc_org, api, camp["id"]).status_code == 200
+    _enroll(sc_org, api, camp["id"], [contact])
+    _tick()  # opener
+    assert len(captured_sends) == 1
+
+    # First reply matches the keyword directly -- branch fires, and with no
+    # step 3 the enrollment completes (mirrors az paint's real shape).
+    _reply_and_send(api, acct, "+14805557972", "yes", "SM_reopen_1")
+    assert len(captured_sends) == 2
+    assert "pitch" in captured_sends[-1]["body"]
+    assert _get_enrollment(camp["id"], contact).status == "completed"
+
+    # A second, later reply carries no literal keyword -- before the fix this
+    # was silently dropped (bare match_branch_keywords). Stub the model call
+    # the same way the live-reply AI-branching test does.
+    monkeypatch.setattr(
+        sms_campaigns, "classify_reply", lambda db, org, step, text: "Interested"
+    )
+    r = _inbound_reply(
+        api, acct, "+14805557972", "Sounds great, when can we start?", sid="SM_reopen_2"
+    )
+    assert r.status_code == 200
+    e = _get_enrollment(camp["id"], contact)
+    assert e.status == "active"  # reopened
+    _force_due(e.id)
+    _tick()
+    assert len(captured_sends) == 3
+    assert "pitch" in captured_sends[-1]["body"]

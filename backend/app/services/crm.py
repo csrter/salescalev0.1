@@ -175,6 +175,58 @@ def stages_for(db: Session, pipeline: Pipeline) -> List[PipelineStage]:
     )
 
 
+DEFAULT_REPLY_DEAL_VALUE_CENTS = 200_000  # $2,000 — the fallback when a
+# notify-flagged branch turns on "add to pipeline" but leaves the value blank
+
+
+def create_deal_from_reply(
+    db: Session,
+    client: Client,
+    contact: Contact,
+    *,
+    name: str,
+    value_cents: Optional[int] = None,
+) -> Optional[Deal]:
+    """Auto-create a deal for a contact whose SMS reply matched a campaign
+    branch flagged add_to_pipeline (services/sms_campaigns._branch_options)
+    — e.g. a "yes" branch drops the prospect straight into the pipeline
+    instead of a human adding it by hand. Lands in the pipeline's FIRST
+    stage, same default create_deal (api/crm.py) uses when no stage is
+    picked. Skips (returns None) if the contact already has an OPEN deal in
+    this client's default pipeline — a repeat positive reply (the branch
+    re-opening, catch_up_past_replies) must not spawn duplicate cards."""
+    pipeline = get_or_create_pipeline(db, client)
+    existing = db.execute(
+        select(Deal.id)
+        .where(
+            Deal.contact_id == contact.id,
+            Deal.pipeline_id == pipeline.id,
+            Deal.status == "open",
+        )
+        .limit(1)
+    ).scalar_one_or_none()
+    if existing is not None:
+        return None
+    stages = stages_for(db, pipeline)
+    if not stages:
+        return None
+    stage = stages[0]
+    deal = Deal(
+        organization_id=client.organization_id,
+        client_id=client.id,
+        contact_id=contact.id,
+        pipeline_id=pipeline.id,
+        stage_id=stage.id,
+        name=name,
+        value_cents=value_cents if value_cents is not None else DEFAULT_REPLY_DEAL_VALUE_CENTS,
+    )
+    db.add(deal)
+    if stage.is_qualified_stage:
+        # Landed straight into a qualified stage — same event as a drag.
+        set_qualified(db, client, contact, True)
+    return deal
+
+
 def get_or_create_company(
     db: Session, organization_id: str, client_id: str, name: str
 ) -> Optional[str]:

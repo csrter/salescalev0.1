@@ -45,7 +45,7 @@ from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session
 
 from ..models.base import utcnow
-from ..models.core import Organization
+from ..models.core import Client, Organization
 from ..models.crm import Company, Contact
 from ..models.sms_outreach import (
     SMS_ACCOUNT_ACTIVE,
@@ -65,6 +65,7 @@ from ..models.sms_outreach import (
     SmsStep,
 )
 from . import ai_insights, ai_provider
+from . import crm as crm_svc
 from . import email_personalize  # reused for token rendering (regex + casing/tidy)
 from . import lead_notify
 from . import sms_consent
@@ -439,12 +440,19 @@ def _branch_options(step: SmsStep) -> list:
         keywords = [
             str(k).strip() for k in (b.get("keywords") or []) if str(k).strip()
         ]
+        deal_value = b.get("deal_value")
+        try:
+            deal_value = float(deal_value) if deal_value is not None else None
+        except (TypeError, ValueError):
+            deal_value = None
         out.append(
             {
                 "label": label,
                 "keywords": keywords,
                 "body": b.get("body") or "",
                 "notify": bool(b.get("notify")),
+                "add_to_pipeline": bool(b.get("add_to_pipeline")),
+                "deal_value": deal_value,
             }
         )
     return out
@@ -1083,15 +1091,21 @@ def handle_reply(
             _end(e, SMS_ENROLL_EXITED, "replied")
 
     # A COMPLETED enrollment is not a conversational dead end. If the lead
-    # texts again and the campaign author wrote a response branch for THAT
-    # kind of reply (deterministic keyword match ONLY — e.g. "Not interested"
-    # → the parting message), re-open the enrollment and send it. No branch
-    # match means no re-open: repeating the step's default body at a lead who
-    # said something new would be a robotic re-pitch, and auto-responder
-    # texts ("we're closed, we'll get back to you") deserve silence. Only
-    # clean completions re-open — exited/opted_out/manual stay terminal, and
-    # so is an enrollment that already sent its branch response (below): this
-    # path may deliver the answer, but only once.
+    # texts again and it matches a response branch — keyword first, then AI
+    # classification when the step has ai_branching on (the SAME select_branch
+    # an ACTIVE enrollment's reply step already uses; this path used to call
+    # bare match_branch_keywords only, so a step with AI branching turned on
+    # would classify "You do meta ads or google ads?" correctly while still
+    # active but go silent on the identical text once the sequence had
+    # completed — found live on az paint, where every reply step already had
+    # ai_branching enabled) — re-open the enrollment and send it. No match at
+    # all (keywords AND AI both miss, or AI is off and keywords miss) means no
+    # re-open: repeating the step's default body at a lead who said something
+    # new would be a robotic re-pitch, and auto-responder texts ("we're
+    # closed, we'll get back to you") deserve silence. Only clean completions
+    # re-open — exited/opted_out/manual stay terminal, and so is an enrollment
+    # that already sent its branch response (below): this path may deliver
+    # the answer, but only once.
     completed = (
         db.execute(
             select(SmsEnrollment).where(
@@ -1104,6 +1118,9 @@ def handle_reply(
         .scalars()
         .all()
     )
+    org: Optional[Organization] = None
+    if completed:
+        org = db.get(Organization, contact.organization_id)
     for e in completed:
         campaign = db.get(SmsCampaign, e.campaign_id)
         if campaign is None:
@@ -1121,7 +1138,8 @@ def handle_reply(
         )
         if reply_step is None:
             continue
-        if match_branch_keywords(reply_step, reply_body) is None:
+        _, matched_label = select_branch(db, org, reply_step, reply_body)
+        if matched_label is None:
             continue
         e.status = SMS_ENROLL_ACTIVE
         e.ended_at = None
@@ -1520,6 +1538,30 @@ def process_enrollment(db: Session, enrollment: SmsEnrollment) -> None:
                         branch_label,
                         matched_reply_text or "",
                     )
+                if matched and matched["add_to_pipeline"]:
+                    # Best-effort, like the notify call above: the message
+                    # already went out via the provider, so a CRM write
+                    # failure here must never roll back the enrollment's own
+                    # (already real) progress.
+                    try:
+                        deal_client = db.get(Client, contact.client_id)
+                        if deal_client is not None:
+                            value = matched["deal_value"]
+                            crm_svc.create_deal_from_reply(
+                                db,
+                                deal_client,
+                                contact,
+                                name=f"{campaign.name} — {branch_label}",
+                                value_cents=(
+                                    int(round(value * 100))
+                                    if value is not None
+                                    else None
+                                ),
+                            )
+                    except Exception:
+                        log.exception(
+                            "add-to-pipeline failed for enrollment %s", enrollment.id
+                        )
         nxt = next((s for s in steps if s.position > current.position), None)
         if nxt is None:
             _end(enrollment, SMS_ENROLL_COMPLETED)

@@ -1744,6 +1744,13 @@ class SmsStepBranchIn(BaseModel):
     # configured lead-notification numbers — e.g. flag "yes" so a positive
     # reply to the pitch pings a real phone.
     notify: bool = False
+    # When true, a reply matching this branch also drops the contact into
+    # the client's CRM sales pipeline (services/crm.create_deal_from_reply)
+    # at deal_value (dollars; defaults to 2000 when on and left blank) —
+    # e.g. flag "yes" so a positive reply becomes a pipeline card without a
+    # human having to add it manually.
+    add_to_pipeline: bool = False
+    deal_value: Optional[float] = Field(default=None, ge=0, le=10_000_000)
 
     @field_validator("keywords")
     @classmethod

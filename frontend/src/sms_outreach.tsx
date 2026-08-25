@@ -1976,10 +1976,32 @@ function BranchesEditor({
               onChange={(v) => update(i, { ...b, notify: v })}
               label="Text me when a reply matches this branch"
             />
+            <Switch
+              checked={!!b.add_to_pipeline}
+              onChange={(v) => update(i, { ...b, add_to_pipeline: v })}
+              label="Add to CRM pipeline"
+            />
             <Button variant="danger-outline" size="sm" onClick={() => remove(i)}>
               Remove branch
             </Button>
           </div>
+          {b.add_to_pipeline && (
+            <Field label="Deal value ($)">
+              <input
+                type="number"
+                min={0}
+                step={100}
+                value={b.deal_value ?? ""}
+                onChange={(e) =>
+                  update(i, {
+                    ...b,
+                    deal_value: e.target.value === "" ? null : Number(e.target.value),
+                  })
+                }
+                placeholder="2000"
+              />
+            </Field>
+          )}
         </div>
       ))}
       <Button variant="ghost" size="sm" onClick={add}>
