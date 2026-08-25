@@ -4216,6 +4216,42 @@ live activation + the entitlement flip, the Outreach module build
       webhook to write a placeholder row that the send path then adopts by
       guid; worth building, but not worth guessing at.
 
+- [x] SMS failed-send retry, today's batch (2026-08-25, prod ops, NO code
+      change): user asked to retry today's failed/undelivered SMS. Audit of
+      4,451 outbound messages found 4,404 fine, 0 unconfirmed (every send was
+      verified — the re-poll pass is doing its job), and 45 failures: 15 error
+      22 (recipient not on iMessage — account +14803700796 has
+      bluebubbles_force_sms FALSE so it tries iMessage first), 14 error 4 in a
+      single 60-second burst at 17:25-17:26 UTC (paired iPhone asleep / Text
+      Message Forwarding down), 11 relay timeouts, 3 "[500] Message sent with
+      an error". The 2 failed NOTIFICATIONS needed nothing — the failover
+      chain worked exactly as designed (BlueBubbles -> dead second relay ->
+      Sendblue, delivered 16:28). Those 45 touched 40 enrollments: 6 had
+      already succeeded on a later attempt, 20 were parked-active at step 1
+      (they re-arm on campaign reactivate), and 14 were stranded in error
+      status — retry_errored applied to all four campaigns (ca paint 6, east
+      coast remodel 6, az remodel 1, az paint 1), dry-run first, 0 consent
+      skips, each had only 1-2 prior attempts so none was near the 3-retry
+      cap. THE CONTEXT THAT DECIDES EVERYTHING HERE: all four campaigns are
+      PAUSED (5,143 parked enrollments), which is why sending stopped at
+      17:26 — not the relay, which probes healthy (imsg2.atlasreach.io,
+      private_api + helper connected; the OLD imessage-relay.salescale.lol is
+      still 502). So the retry deliberately sent nothing and could not have:
+      process_enrollment parks any enrollment whose campaign is not ACTIVE.
+      Its whole value is that campaign-reactivate re-arms PARKED enrollments
+      but never revives ERRORED ones, so those 14 would have been stranded
+      permanently once the audience resumed. Verified after: 0 outbound
+      messages in the window, error count 0 on all four. Left alone
+      deliberately: the campaigns stay paused (user's call — resuming is what
+      actually texts ~800 leads who have never received an opener, and the
+      error-4 burst means iPhone forwarding can't be confirmed without a live
+      send), and the 918 older errored enrollments in ppf/tint (850) +
+      ppf/vinyl (68), which are not from today. FLAGGED: the 15 error-22
+      failures are a config lever, not an outage — setting
+      bluebubbles_force_sms on that account pins sends to SMS and skips the
+      iMessage attempt, the same fix already applied to the other BlueBubbles
+      account.
+
 - [ ] Stripe live activation + entitlement flip (after 12–14, so real
       limits land everywhere in one pass)
 - [ ] Outreach module build (dev-mode) — go-live gated on Meta App
