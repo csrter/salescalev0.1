@@ -4252,6 +4252,60 @@ live activation + the entitlement flip, the Outreach module build
       iMessage attempt, the same fix already applied to the other BlueBubbles
       account.
 
+- [x] BlueBubbles sends green-bubble SMS only, never iMessage (2026-08-25,
+      d937833, web-only deploy — no migration): user asked why some iMessage
+      sends succeed and some fail. Diagnosed live on prod, two causes.
+      (1) EPISODIC + the reason for this change: the sending Mac's Private API
+      helper disconnected (server/info private_api=false, helper_connected=
+      false). /handle/availability/imessage REQUIRES that helper, so it began
+      returning HTTP 500 for every number — and sms_send._bluebubbles_resolve_
+      service failed OPEN to "iMessage" on any non-2xx (deliberate: "don't
+      downgrade everyone during a transient blip"). That put a ~95%-green-bubble
+      audience on a service the host could not carry. Failure rate went 0.9%
+      (00:00-19:30) to 92% (19:30+), error 22 "recipient not reachable on
+      iMessage" + "Failed to find all handles". The relay's OWN message store
+      proved the flip: hour 17 = 163 sends on service SMS, hour 19 = 29 on
+      iMessage. (2) STRUCTURAL, all day at ~0.9%: iMessage-first routing on a
+      cold list means stale Apple registrations fail per-recipient (33 that day,
+      276 over 14 days) — looks random, isn't.
+      FIX: services/sms_send.BLUEBUBBLES_SERVICE = "SMS", used unconditionally.
+      The availability lookup is GONE from the send path (dead function removed;
+      services/imessage_check.py keeps its own copy for segmentation), as is the
+      SMS->iMessage rescue retry — a "find all handles" failure means the host
+      lost its Text Message Forwarding link, a host problem that must surface
+      rather than be rerouted onto a service reaching even fewer leads. The
+      per-account bluebubbles_force_sms toggle it all hung off is deprecated:
+      unread, stripped from AccountIn/AccountPatch/_account_out and from the
+      connect dialog + api.ts, COLUMN KEPT so this needs no migration (and so
+      the desktop app is not stale-revision exposed). Pydantic default
+      extra="ignore" means an older client still posting the field is harmless.
+      Two knock-ons handled: _can_report_read is Sendblue-only now (green-bubble
+      SMS never yields a read receipt, so a BlueBubbles read rate must render
+      "-", not 0.0%), and channel_health's `downgraded` signal is Sendblue-only
+      (every BlueBubbles send is now intentionally SMS — counting it would mark
+      every such account permanently degraded). Tests 769, count unchanged: the
+      SMS->iMessage rescue test is replaced by test_bluebubbles_never_routes_a_
+      send_over_imessage, which pins the exact incident (asserts the send path
+      NEVER probes availability and never attempts iMessage) and was verified to
+      FAIL against the pre-change tree.
+      PROD: both BlueBubbles accounts flipped to force_sms before the deploy to
+      stop the bleeding; deploy verified in-container (BLUEBUBBLES_SERVICE=SMS,
+      resolver gone), health green, zero boot errors.
+      STILL BROKEN, USER-SIDE — the host Mac behind imsg2.atlasreach.io (relay
+      #3, the salescale MacBook Air, tunnel :12346) has BOTH legs down: the
+      Private API helper is disconnected AND every SMS-service send errors 4
+      (paired iPhone asleep/offline or Text Message Forwarding off). Always-SMS
+      is correct routing but delivers nothing until that Mac + its paired iPhone
+      are healthy — see [[salescale-imessage-tunnel-recovery]] for the
+      messaging-stack recovery (restart helper/Messages, reboot if imagent shows
+      xpc_error 159).
+      NOT DONE, needs the user's call: "east coast remodel" has 65 leads stuck
+      in enrollment status=error that never received their opener (+1 at step 2).
+      sms_campaigns.retry_errored re-queues them, but they will just re-fail
+      until the Mac is fixed. Its other 1,544 active enrollments are NOT stuck —
+      they already got the opener and are parked awaiting_reply, which is the
+      designed state.
+
 - [ ] Stripe live activation + entitlement flip (after 12–14, so real
       limits land everywhere in one pass)
 - [ ] Outreach module build (dev-mode) — go-live gated on Meta App
