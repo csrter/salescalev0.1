@@ -4052,6 +4052,40 @@ live activation + the entitlement flip, the Outreach module build
       the yes and no branch, i.e. were pitched and then sent the parting
       message.
 
+- [x] Campaign duplication + reusable templates, SMS + email outreach
+      (2026-08-25): POST .../campaigns/{id}/duplicate clones a campaign's
+      config + steps into a new draft (never audience/enrollments). Templates
+      are the same table with is_template=true (migration b3e6d1c8f9a4,
+      additive nullable-false-with-default on both sms_campaigns and
+      email_campaigns) — excluded from the normal campaign list
+      (GET .../campaigns/templates instead), refused by activate/enroll
+      (422, "create a campaign from this template first"), and hard-
+      deletable (DELETE .../campaigns/{id}, template-only — a real campaign's
+      send history stays archive-only, same reasoning as always). Creating a
+      campaign with template_id clones the template's full config + steps
+      server-side (_clone_sms_steps / _clone_email_steps, shared with
+      duplicate); email also re-clones the sending pool. Duplicating a
+      template makes another template; duplicating a real campaign still
+      makes a draft. Frontend: Copy-icon duplicate action on every campaign/
+      template row; a Campaigns/Templates Segmented toggle in both Campaigns
+      tabs (own "New template" flow when on Templates); "Start from
+      template" picker in New Campaign; the editor hides Audience/Review and
+      swaps Archive/Activate for a two-step "Delete template" when editing a
+      template. New Copy icon added to components/icons.ts. 20 new tests
+      (757 total passing). tsc + vite build clean. Verified live end-to-end
+      on alt3 for both modules: built a template, saved a step, created a
+      real campaign from it, confirmed the step content cloned byte-for-byte
+      and the source template stayed untouched. DEPLOYED to production
+      2026-08-25 (7feed0d), web + desktop: migration b3e6d1c8f9a4 applied to
+      the live Supabase DB via the container-boot flow (alembic current =
+      b3e6d1c8f9a4 head), /api/health 200, zero boot errors, both new
+      /campaigns/templates routes live + auth-gated (401); desktop
+      PyInstaller backend (59MB) + DMG (148MB, backend binary hash-matched
+      into the app bundle) rebuilt in lockstep per the standing migration
+      rule, installed to /Applications and launch-verified (own backend
+      bound :8000, health 200, the new template route 401 rather than 404 on
+      the packaged backend). Pushed to GitHub (feature/ui-revamp, SSH remote).
+
 - [ ] Stripe live activation + entitlement flip (after 12–14, so real
       limits land everywhere in one pass)
 - [ ] Outreach module build (dev-mode) — go-live gated on Meta App
