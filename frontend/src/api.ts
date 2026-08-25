@@ -2576,14 +2576,20 @@ export type SmsRateBlock = SmsFunnelStats;
 export interface SmsAnalytics {
   /** False when no AI key resolves for the org — {{ai_snippet}} renders empty. */
   ai_configured?: boolean;
-  /** The window these figures cover, echoed back for labelling. */
+  /** The window these figures cover, echoed back for labelling. `days` is the
+   * whole-day equivalent (rounded up) when an hours window was requested. */
   days: number;
+  hours: number;
+  /** Bucket width of by_day — "hour" on short windows, where daily buckets
+   * would collapse the chart to a single point. */
+  granularity: "hour" | "day";
   since: string;
   totals: SmsRateBlock;
   by_day: {
+    /** ISO date, or ISO hour when granularity is "hour". */
     date: string;
     sent: number;
-    /** Bucketed on the day the receipt landed, not the send day. */
+    /** Bucketed on when the receipt landed, not the send time. */
     delivered: number;
     read: number;
     replied: number;
@@ -2779,8 +2785,21 @@ export const deleteSmsSuppression = (id: string) =>
   api(`${SO}/suppression/${id}`, { method: "DELETE" });
 
 // --- analytics & usage ---
-export const smsAnalytics = (campaignId?: string, days = 30) =>
-  api<SmsAnalytics>(`${SO}/analytics${q({ campaign_id: campaignId, days: String(days) })}`);
+/** `range` is either whole calendar days back to midnight UTC, or a rolling
+ * window of the last N hours (for watching a send in flight — at 00:15 UTC a
+ * day-aligned "last day" is fifteen minutes of data). */
+export const smsAnalytics = (
+  campaignId?: string,
+  range: { days: number } | { hours: number } = { days: 30 },
+) =>
+  api<SmsAnalytics>(
+    `${SO}/analytics${q({
+      campaign_id: campaignId,
+      ...("hours" in range
+        ? { hours: String(range.hours) }
+        : { days: String(range.days) }),
+    })}`,
+  );
 export const smsUsage = () => api<SmsUsage>(`${SO}/usage`);
 
 /** The two per-account Twilio webhook URLs the user must paste into their

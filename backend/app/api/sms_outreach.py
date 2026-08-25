@@ -546,6 +546,11 @@ def _campaign_can_report_read(
     return any(_can_report_read(db.get(SmsAccount, aid)) for aid in ids)
 
 
+# Windows at or under this length plot hourly instead of daily. 48h keeps the
+# point count sane (≤48 buckets, same order as a 30-day daily chart) while
+# covering every sub-day range the dashboard offers plus "last 24 hours".
+_HOURLY_SERIES_MAX_HOURS = 48
+
 # Latency samples are read into Python; bound the scan so a campaign with a
 # six-figure ledger can't turn a dashboard load into a full-table read.
 _LATENCY_SAMPLE_CAP = 2000
@@ -1747,16 +1752,27 @@ def list_conversations(
 def analytics(
     campaign_id: Optional[str] = None,
     days: int = 30,
+    hours: Optional[int] = None,
     db: Session = Depends(get_db),
     user: User = Depends(require_team),
     scope: TenantScope = Depends(get_scope),
 ):
-    """Windowed analytics. `days` is the selected range and it applies to
-    EVERYTHING here — the headline totals, the by-campaign table, the daily
-    series and the per-number rollup all cover the same window, so nothing on
-    this screen is an all-time figure sitting under a control that says
-    "7 days". Lifetime stats live on the campaign list/detail routes."""
-    days = max(1, min(days, 365))
+    """Windowed analytics. The selected range applies to EVERYTHING here — the
+    headline totals, the by-campaign table, the time series and the per-number
+    rollup all cover the same window, so nothing on this screen is an all-time
+    figure sitting under a control that says "7 days". Lifetime stats live on
+    the campaign list/detail routes.
+
+    Two ways to say it, because they answer different questions:
+      days  — whole CALENDAR days back to midnight UTC, today included. "Last
+              7 days" should mean seven complete days, not a ragged window
+              ending wherever the clock happens to be.
+      hours — a ROLLING window ending now, for watching a send in flight
+              ("what has this campaign done in the last hour?"). Calendar
+              alignment would be actively wrong here: at 00:15 UTC a
+              day-aligned "last 1 day" is fifteen minutes of data.
+    hours wins when both are given. Sub-day windows bucket the series hourly —
+    a one-hour range plotted in day buckets is a single bar."""
     campaigns = db.execute(
         scope.filter(select(SmsCampaign), SmsCampaign)
     ).scalars().all()
@@ -1766,9 +1782,19 @@ def analytics(
             raise HTTPException(404, "Not found")
     cids = [c.id for c in campaigns]
 
-    since = utcnow().replace(hour=0, minute=0, second=0, microsecond=0) - dt.timedelta(
-        days=days - 1
-    )
+    now = utcnow()
+    if hours is not None:
+        hours = max(1, min(hours, 365 * 24))
+        since = now - dt.timedelta(hours=hours)
+        days = math.ceil(hours / 24)
+    else:
+        days = max(1, min(days, 365))
+        hours = days * 24
+        since = now.replace(hour=0, minute=0, second=0, microsecond=0) - dt.timedelta(
+            days=days - 1
+        )
+    # Hourly resolution only where daily buckets would collapse the chart.
+    hourly = (now - since) <= dt.timedelta(hours=_HOURLY_SERIES_MAX_HOURS)
 
     agg = {
         k: 0
@@ -1808,11 +1834,15 @@ def analytics(
         "median_reply_seconds": _reply_latency(db, cids, since),
     }
 
-    by_day = _analytics_by_day(db, cids, since)
+    by_day = _analytics_by_day(db, cids, since, hourly=hourly)
     accounts = _analytics_accounts(db, scope, since)
     org = db.get(Organization, scope.organization_id)
     return {
         "days": days,
+        "hours": hours,
+        # Bucket width of by_day, so the chart can label its axis correctly
+        # instead of inferring it from the range.
+        "granularity": "hour" if hourly else "day",
         "since": since.isoformat(),
         "totals": totals,
         "by_day": by_day,
@@ -1825,18 +1855,29 @@ def analytics(
     }
 
 
-def _day_key(value: Optional[dt.datetime]) -> Optional[str]:
+def _day_key(
+    value: Optional[dt.datetime], hourly: bool = False
+) -> Optional[str]:
+    """Bucket key for the time series: an ISO date, or an ISO hour when the
+    window is short enough to warrant hourly resolution. Both sort
+    lexicographically, which is what the caller orders on."""
     if value is None:
         return None
-    return _aware(value).astimezone(dt.timezone.utc).date().isoformat()
+    utc = _aware(value).astimezone(dt.timezone.utc)
+    if hourly:
+        return utc.replace(minute=0, second=0, microsecond=0).isoformat()
+    return utc.date().isoformat()
 
 
-def _analytics_by_day(db: Session, cids: list, since: dt.datetime) -> list:
-    """Daily series. Each event buckets on the day it ACTUALLY happened —
-    a delivery on delivered_at, a read on read_at — not on the send day, so a
-    bar stops mutating retroactively days after it was drawn. Legacy rows that
-    carry a delivered status but no delivered_at (they predate the column)
-    fall back to the send day, which is the best they can do."""
+def _analytics_by_day(
+    db: Session, cids: list, since: dt.datetime, hourly: bool = False
+) -> list:
+    """Time series, bucketed by day or (for short windows) by hour. Each event
+    buckets on the moment it ACTUALLY happened — a delivery on delivered_at, a
+    read on read_at — not on the send day, so a bar stops mutating
+    retroactively after it was drawn. Legacy rows that carry a delivered status
+    but no delivered_at (they predate the column) fall back to the send time,
+    which is the best they can do."""
     if not cids:
         return []
     buckets: dict = {}
@@ -1878,20 +1919,20 @@ def _analytics_by_day(db: Session, cids: list, since: dt.datetime) -> list:
         aware = _aware(created_at)
         if aware >= since:
             if status in _SENT_STATUSES:
-                _b(_day_key(aware))["sent"] += 1
+                _b(_day_key(aware, hourly))["sent"] += 1
             if status == SMS_MSG_FAILED:
-                _b(_day_key(aware))["failed"] += 1
+                _b(_day_key(aware, hourly))["failed"] += 1
         if status in _DELIVERED_STATUSES:
-            # Bucket on the confirmation, falling back to the send day only
+            # Bucket on the confirmation, falling back to the send time only
             # for rows written before delivered_at existed.
             when = _aware(delivered_at) if delivered_at is not None else aware
             if when >= since:
-                _b(_day_key(when))["delivered"] += 1
-        # Reads bucket on the day the RECIPIENT read it, not the send day.
+                _b(_day_key(when, hourly))["delivered"] += 1
+        # Reads bucket on when the RECIPIENT read it, not the send time.
         if status == SMS_MSG_READ and read_at is not None:
             read_aware = _aware(read_at)
             if read_aware >= since:
-                _b(_day_key(read_aware))["read"] += 1
+                _b(_day_key(read_aware, hourly))["read"] += 1
     replies = db.execute(
         select(SmsEnrollment.replied_at).where(
             SmsEnrollment.campaign_id.in_(cids),
@@ -1901,7 +1942,7 @@ def _analytics_by_day(db: Session, cids: list, since: dt.datetime) -> list:
     for (replied_at,) in replies:
         if replied_at is None:
             continue
-        _b(_day_key(_aware(replied_at)))["replied"] += 1
+        _b(_day_key(_aware(replied_at), hourly))["replied"] += 1
     return [buckets[k] for k in sorted(buckets)]
 
 

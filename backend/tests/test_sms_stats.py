@@ -156,8 +156,9 @@ def _add_enrollment(st_org, *, campaign_id, contact_id, **over):
         db.close()
 
 
-def _analytics(st_org, api, campaign_id=None, days=30):
-    q = f"?days={days}" + (f"&campaign_id={campaign_id}" if campaign_id else "")
+def _analytics(st_org, api, campaign_id=None, days=30, hours=None):
+    q = f"?hours={hours}" if hours is not None else f"?days={days}"
+    q += f"&campaign_id={campaign_id}" if campaign_id else ""
     r = api.get(f"/api/sms/analytics{q}", headers=st_org["headers"])
     assert r.status_code == 200, r.text
     return r.json()
@@ -671,3 +672,89 @@ def test_analytics_stays_org_scoped(st_org, api, creds_ok, seeded):
     finally:
         db.close()
     assert ours.isdisjoint(set(foreign))
+
+
+# --- 8. sub-day windows ------------------------------------------------------
+
+
+def test_hours_window_is_rolling_and_excludes_older_sends(st_org, api, creds_ok):
+    """`hours` is a rolling window ending NOW, not a calendar day. Two sends
+    inside the last hour and two well outside it: the hour window sees only
+    the recent pair, the day window sees all four."""
+    acct = _mk_account(st_org, api)
+    camp = _mk_campaign(st_org, api, acct["id"], name="Rolling window")
+    now = utcnow()
+    for minutes in (5, 30):
+        _add_message(
+            st_org,
+            account_id=acct["id"],
+            campaign_id=camp["id"],
+            created_at=now - dt.timedelta(minutes=minutes),
+        )
+    for hours_ago in (3, 6):
+        _add_message(
+            st_org,
+            account_id=acct["id"],
+            campaign_id=camp["id"],
+            created_at=now - dt.timedelta(hours=hours_ago),
+        )
+
+    hour = _analytics(st_org, api, camp["id"], hours=1)
+    assert hour["hours"] == 1
+    assert _campaign_row(hour, camp["id"])["sent"] == 2
+
+    # A 12-hour window reaches back over all four.
+    half_day = _analytics(st_org, api, camp["id"], hours=12)
+    assert _campaign_row(half_day, camp["id"])["sent"] == 4
+
+
+def test_short_windows_bucket_the_series_hourly(st_org, api, creds_ok):
+    """A one-hour range plotted in day buckets is a single bar. Sub-day
+    windows switch the series to hourly resolution, and the day-based ranges
+    keep their date buckets."""
+    acct = _mk_account(st_org, api)
+    camp = _mk_campaign(st_org, api, acct["id"], name="Hourly buckets")
+    now = utcnow()
+    for hours_ago in (1, 2, 3):
+        _add_message(
+            st_org,
+            account_id=acct["id"],
+            campaign_id=camp["id"],
+            created_at=now - dt.timedelta(hours=hours_ago, minutes=5),
+        )
+
+    short = _analytics(st_org, api, camp["id"], hours=12)
+    assert short["granularity"] == "hour"
+    # Three sends an hour apart land in three distinct buckets, each an ISO
+    # timestamp rather than a bare date.
+    buckets = [b for b in short["by_day"] if b["sent"]]
+    assert len(buckets) == 3
+    assert all("T" in b["date"] for b in buckets)
+
+    long = _analytics(st_org, api, camp["id"], days=30)
+    assert long["granularity"] == "day"
+    assert all("T" not in b["date"] for b in long["by_day"])
+
+
+def test_hours_beats_days_and_is_clamped(st_org, api, creds_ok):
+    """Both params given → hours wins (it is the more specific ask), and an
+    absurd value is clamped rather than rejected."""
+    acct = _mk_account(st_org, api)
+    camp = _mk_campaign(st_org, api, acct["id"], name="Clamped")
+    _add_message(
+        st_org,
+        account_id=acct["id"],
+        campaign_id=camp["id"],
+        created_at=utcnow() - dt.timedelta(hours=6),
+    )
+
+    r = api.get(
+        f"/api/sms/analytics?days=90&hours=1&campaign_id={camp['id']}",
+        headers=st_org["headers"],
+    )
+    assert r.status_code == 200
+    assert r.json()["hours"] == 1
+    assert _campaign_row(r.json(), camp["id"])["sent"] == 0  # the 6h-old send
+
+    assert _analytics(st_org, api, camp["id"], hours=0)["hours"] == 1
+    assert _analytics(st_org, api, camp["id"], hours=10**6)["hours"] == 365 * 24

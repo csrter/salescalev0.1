@@ -180,6 +180,24 @@ const enrollmentSourceLabel = (e: {
  * email module's bounce red line. */
 const OPT_OUT_RED_LINE = 0.05;
 
+/** Analytics ranges. Sub-day windows are ROLLING (last N hours ending now) —
+ * a send in flight is watched against the clock, and a calendar-aligned
+ * "last 1 day" is fifteen minutes of data at 00:15 UTC. The multi-day ones
+ * stay calendar-aligned so "7 days" means seven complete days. */
+const SMS_RANGES = {
+  "1h": { label: "last hour", query: { hours: 1 } },
+  "4h": { label: "last 4 hours", query: { hours: 4 } },
+  "12h": { label: "last 12 hours", query: { hours: 12 } },
+  "24h": { label: "last 24 hours", query: { hours: 24 } },
+  "7d": { label: "last 7 days", query: { days: 7 } },
+  "30d": { label: "last 30 days", query: { days: 30 } },
+  "90d": { label: "last 90 days", query: { days: 90 } },
+} as const satisfies Record<
+  string,
+  { label: string; query: { days: number } | { hours: number } }
+>;
+type SmsRangeKey = keyof typeof SMS_RANGES;
+
 // send_days is a 0–6 array; 0 = Monday (Python date.weekday()).
 const WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 const HOURS = Array.from({ length: 24 }, (_, i) => i);
@@ -377,7 +395,7 @@ function DashboardPanel({
   isOwner: boolean;
 }) {
   const [campaignId, setCampaignId] = useState<string>("");
-  const [days, setDays] = useState(30);
+  const [range, setRange] = useState<SmsRangeKey>("30d");
   const [campaigns, setCampaigns] = useState<SmsCampaign[]>([]);
   const [data, setData] = useState<SmsAnalytics | null>(null);
 
@@ -385,9 +403,21 @@ function DashboardPanel({
     listSmsCampaigns().then(setCampaigns).catch(() => {});
   }, []);
   useEffect(() => {
+    // Responses can land out of order — a 1h query is far cheaper than a 90d
+    // one, so switching quickly used to let the slower previous request
+    // resolve LAST and overwrite the newer data. That put one window's numbers
+    // under another window's label, which is worse than a slow render.
+    let cancelled = false;
     setData(null);
-    smsAnalytics(campaignId || undefined, days).then(setData).catch(() => {});
-  }, [campaignId, days]);
+    smsAnalytics(campaignId || undefined, SMS_RANGES[range].query)
+      .then((d) => {
+        if (!cancelled) setData(d);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [campaignId, range]);
 
   const loading = data === null;
   const t = data?.totals;
@@ -395,7 +425,7 @@ function DashboardPanel({
   // under-fired by roughly the step count — on exactly the long campaigns
   // most at risk of carrier filtering.
   const optOutOver = (t?.opt_out_rate_per_lead ?? 0) >= OPT_OUT_RED_LINE;
-  const windowLabel = `last ${days} days`;
+  const windowLabel = SMS_RANGES[range].label;
 
   const campaignColumns: Column<SmsAnalytics["by_campaign"][number]>[] = [
     { key: "name", header: "Campaign", render: (c) => c.name, sortValue: (c) => c.name },
@@ -459,7 +489,18 @@ function DashboardPanel({
     },
   ];
 
-  const chartLabels = data?.by_day.map((d) => d.date) ?? [];
+  // Hourly buckets come back as ISO timestamps; render them as a local clock
+  // time, since "2026-08-25T15:00:00+00:00" is not an axis label.
+  const hourly = data?.granularity === "hour";
+  const chartLabels =
+    data?.by_day.map((d) =>
+      hourly
+        ? new Date(d.date).toLocaleTimeString(undefined, {
+            hour: "numeric",
+            hour12: true,
+          })
+        : d.date,
+    ) ?? [];
   const hasChart = chartLabels.length > 1;
 
   // Numbers whose STOP-capture webhook was never wired (see SmsAccount
@@ -504,12 +545,16 @@ function DashboardPanel({
         </select>
         <Segmented
           ariaLabel="Analytics date range"
-          value={String(days)}
-          onChange={(v) => setDays(Number(v))}
+          value={range}
+          onChange={(v) => setRange(v as SmsRangeKey)}
           options={[
-            { value: "7", label: "7 days" },
-            { value: "30", label: "30 days" },
-            { value: "90", label: "90 days" },
+            { value: "1h", label: "1h" },
+            { value: "4h", label: "4h" },
+            { value: "12h", label: "12h" },
+            { value: "24h", label: "24h" },
+            { value: "7d", label: "7d" },
+            { value: "30d", label: "30d" },
+            { value: "90d", label: "90d" },
           ]}
         />
       </div>
@@ -668,14 +713,15 @@ function DashboardPanel({
                 { name: "Failed", data: data!.by_day.map((d) => d.failed) },
               ]}
               height={220}
-              ariaLabel={`Daily SMS volume over ${chartLabels.length} days`}
+              ariaLabel={`SMS volume by ${hourly ? "hour" : "day"} over the ${windowLabel}`}
             />
           </GlassCard>
         ) : (
           <GlassCard>
             <EmptyState title="Not enough data yet">
-              Send activity charts here once campaigns have run for a couple of
-              days.
+              {hourly
+                ? `Nothing sent in the ${windowLabel} — widen the range, or wait for the next tick.`
+                : "Send activity charts here once campaigns have run for a couple of days."}
             </EmptyState>
           </GlassCard>
         )}
