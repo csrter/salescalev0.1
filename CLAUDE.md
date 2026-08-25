@@ -4107,12 +4107,28 @@ live activation + the entitlement flip, the Outreach module build
       branch of all six active campaigns (east coast remodel, epoxy tx,
       epoxy tx2, q3 epoxy, az paint, ca paint) via a dry-run-first prod
       write, re-read and verified persisted; step-3 "interested" alerts
-      unchanged. An engaged lead ("yes" → pitch sent) now fires the 🔥
-      alert alongside the generic 📩 relay forward. Still open if wanted:
-      the three epoxy campaigns and q3 rentals have no step-3 "interested"
-      reply step, so a positive reply TO THE PITCH there only arrives via
-      the relay — adding an interested branch step (paint-campaign pattern)
-      is the fix. DESKTOP rebuilt same day per the lockstep habit
+      unchanged. REVERSED same day on user direction: "positive replies
+      should only register when the lead replies positively to the actual
+      pitch" — a step-2 "yes" is identity confirmation, not interest — so
+      the step-2 flips were turned back off (verified) and the 🔥 alert
+      lives ONLY on step-3 "interested" branches (east coast remodel /
+      az paint / ca paint). COVERAGE GAP, flagged to user: epoxy tx /
+      epoxy tx2 / q3 epoxy / q3 rentals have no step-3 "interested" reply
+      step, so a positive reply to the pitch can never fire an alert there
+      (notify only fires when a branch response actually SENDS —
+      process_enrollment calls notify_branch_reply after the send, so
+      there is no notify-without-response mechanism); adding an interested
+      reply step (paint-campaign pattern) texts real leads and awaits the
+      user's call. Same-day diagnosis of "missing replies from
+      remodelers": proven a non-issue end-to-end with zero mocks — east
+      coast remodel started sending 08-25 ~9am ET (1,025 openers), 19
+      replies in the first ~90 min, ALL attributed + forwarded (105/105
+      of the day's forwards device-verified, 0 failed); paginated the
+      BlueBubbles Mac's own message store and diffed against the DB: 106
+      device inbound today, 106 in the DB, zero webhook drops. Today's
+      only unattributed inbound = 2 STOPs + the Mac's personal/spam
+      traffic (the account's Apple ID number receives non-Salescale
+      texts; they ingest as house-CRM contacts — noise, flagged). DESKTOP rebuilt same day per the lockstep habit
       (PyInstaller backend picking up c704fdb's cold-drip fix, which
       post-dated the last DMG; frontend with the Replied-only toggle
       verified inside app.asar; DMG 155MB, backend binary hash-matched),
