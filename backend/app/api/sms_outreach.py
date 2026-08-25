@@ -355,6 +355,18 @@ def delete_account(
         .where(SmsCampaign.account_id == account.id)
         .values(account_id=None)
     )
+    # DETACH the send ledger rather than deleting it. SmsMessage is
+    # append-only: the audit trail of what was actually sent, and what the
+    # monthly send meter counts (by organization_id, so detaching costs it
+    # nothing). Deleting an account must not erase months of outreach history
+    # — the same reasoning services/crm._cascade_contact_refs applies to these
+    # rows on contact deletion. Until sms_messages.account_id was made
+    # nullable this was impossible and the FK simply 500'd the request.
+    db.execute(
+        update(SmsMessage)
+        .where(SmsMessage.account_id == account.id)
+        .values(account_id=None)
+    )
     db.delete(account)
     db.commit()
 

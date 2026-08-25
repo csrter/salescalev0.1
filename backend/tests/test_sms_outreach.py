@@ -29,6 +29,7 @@ from app.models.core import Organization
 from app.models.crm import Contact
 from app.models.sms_outreach import (
     SMS_ENROLL_ACTIVE,
+    SmsAccount,
     SmsCampaign,
     SmsEnrollment,
     SmsMessage,
@@ -4659,6 +4660,64 @@ def test_stop_after_branch_off_keeps_the_multi_turn_behavior(
 
 
 # --- deleting an in-use account no longer forces campaigns to archive -------
+
+
+def test_delete_account_detaches_its_send_ledger_instead_of_blocking(
+    sc_org, api, twilio_creds_ok, captured_sends
+):
+    """An account that has ever SENT must still be deletable, and its history
+    must survive the delete.
+
+    sms_messages.account_id was NOT NULL, so deleting any account with a send
+    history died on a ForeignKeyViolation and reached the browser as a generic
+    500 (9,161 rows blocked one real account on prod). NOTE this could never
+    have been caught here: SQLite does not enforce foreign keys, so the delete
+    "worked" in tests and only failed on Postgres — the same trap as the CSV
+    column caps. So this asserts the ROW-LEVEL contract instead, which is what
+    actually matters: the ledger rows still exist, detached, because SmsMessage
+    is the append-only audit trail of what was really sent AND the source of
+    the monthly send meter (counted by organization_id, so detaching is free).
+    """
+    acct = _mk_account(sc_org, api, from_number="+14805550900")
+    camp = _mk_campaign(sc_org, api, acct["id"], **_ALWAYS)
+    contact = _mk_contact(sc_org, api, mobile_phone="4805550901", first="Wren")
+    _set_steps(
+        sc_org,
+        api,
+        camp["id"],
+        [{"position": 1, "trigger": "schedule", "wait_days": 0, "body": "Hi there"}],
+    )
+    assert _activate(sc_org, api, camp["id"]).status_code == 200
+    _enroll(sc_org, api, camp["id"], [contact])
+    assert _tick() == 1
+    assert any(m["account_id"] == acct["id"] for m in captured_sends)
+
+    db = SessionLocal()
+    try:
+        before = db.execute(
+            select(SmsMessage).where(SmsMessage.account_id == acct["id"])
+        ).scalars().all()
+        assert before, "expected a ledger row to exist before the delete"
+        msg_ids = [m.id for m in before]
+    finally:
+        db.close()
+
+    r = api.delete(f"/api/sms/accounts/{acct['id']}", headers=sc_org["headers"])
+    assert r.status_code == 204, r.text
+
+    db = SessionLocal()
+    try:
+        assert db.get(SmsAccount, acct["id"]) is None
+        rows = db.execute(
+            select(SmsMessage).where(SmsMessage.id.in_(msg_ids))
+        ).scalars().all()
+        # Kept, not cascaded away — and detached from the account that is gone.
+        assert len(rows) == len(msg_ids)
+        assert all(m.account_id is None for m in rows)
+        # Still the org's history, so the monthly meter is untouched.
+        assert all(m.organization_id == sc_org["org"] for m in rows)
+    finally:
+        db.close()
 
 
 def test_delete_account_clears_campaign_and_parks_it_without_archiving(

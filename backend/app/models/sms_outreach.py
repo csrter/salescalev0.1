@@ -411,8 +411,12 @@ class SmsMessage(Base):
     organization_id: Mapped[str] = mapped_column(
         ForeignKey("organizations.id"), nullable=False, index=True
     )
-    account_id: Mapped[str] = mapped_column(
-        ForeignKey("sms_accounts.id"), nullable=False, index=True
+    # Nullable so an account can be DELETED without destroying its send
+    # history: the delete detaches these rows (account_id = None) rather than
+    # removing them, the same posture services/crm._cascade_contact_refs takes
+    # for this ledger on contact deletion. Always set on write.
+    account_id: Mapped[Optional[str]] = mapped_column(
+        ForeignKey("sms_accounts.id"), nullable=True, index=True
     )
     campaign_id: Mapped[Optional[str]] = mapped_column(
         ForeignKey("sms_campaigns.id"), index=True
