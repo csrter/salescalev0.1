@@ -189,14 +189,11 @@ class SmsAccount(Base):
     # randomized range rather than a floor scaled by a fixed jitter factor.
     # Null falls back to the older floor*1.0-1.8x jitter behavior.
     max_send_spacing_seconds: Mapped[Optional[int]] = mapped_column(Integer)
-    # BlueBubbles only: force every send to the green-bubble SMS service and
-    # skip the iMessage availability probe. Needed on hosts where iMessage
-    # sending doesn't work but Text Message Forwarding does — notably AWS EC2
-    # Macs, where SIP can't be disabled (no Private API) AND Apple blocks
-    # iMessage sends from the datacenter environment. There, an iMessage send
-    # returns a guid (fake success) but silently never delivers, so we must
-    # route through SMS (which reaches iMessage users as a green bubble too).
-    # Default false = probe-and-prefer-iMessage, the original behavior.
+    # DEPRECATED (2026-08-25) — no longer read anywhere. BlueBubbles now sends
+    # EVERY message on the green-bubble SMS service unconditionally; see
+    # services/sms_send.BLUEBUBBLES_SERVICE for why the per-account toggle and
+    # the iMessage routing it guarded were removed. Kept as a column so no
+    # migration is needed; drop it in a later sweep.
     bluebubbles_force_sms: Mapped[bool] = mapped_column(
         Boolean, default=False, server_default=text("false"), nullable=False
     )

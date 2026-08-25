@@ -230,9 +230,10 @@ def _avail_get(available, private_api=True):
 
 
 def test_bluebubbles_first_message_creates_chat_when_missing(monkeypatch):
-    """A first-ever message to an iMessage recipient 500s with 'Chat does not
-    exist!' on message/text; the transport must fall back to chat/new and
-    succeed, instead of surfacing a hard FAILED."""
+    """A first-ever message to a recipient 500s with 'Chat does not exist!' on
+    message/text; the transport must fall back to chat/new (on the SMS service,
+    the only one BlueBubbles sends on) and succeed, instead of surfacing a hard
+    FAILED."""
     calls = []
 
     def _fake_post(url, params=None, json=None, timeout=None):
@@ -247,7 +248,7 @@ def test_bluebubbles_first_message_creates_chat_when_missing(monkeypatch):
                 },
             )
         if url.endswith("/chat/new"):
-            assert json["service"] == "iMessage"
+            assert json["service"] == "SMS"
             return _FakeResp(
                 200,
                 {"status": 200, "data": {"messages": [{"guid": "NEWCHAT_guid"}]}},
@@ -263,10 +264,10 @@ def test_bluebubbles_first_message_creates_chat_when_missing(monkeypatch):
     assert any(u.endswith("/chat/new") for u, _ in calls)
 
 
-def test_bluebubbles_force_sms_pins_service_and_skips_availability(monkeypatch):
-    """An account with bluebubbles_force_sms sends via service SMS on the
-    FIRST attempt with NO availability probe (that probe needs a Private API
-    the host doesn't have) — for EC2 Macs where iMessage silently drops."""
+def test_bluebubbles_sends_via_sms_service_with_no_availability_probe(monkeypatch):
+    """Every BlueBubbles send uses service SMS on the FIRST attempt with NO
+    availability probe (that probe needs a Private API helper the host may not
+    have, and it 500s for every number when the helper drops)."""
     seen = {}
 
     def _no_get(url, params=None, timeout=None):
@@ -282,7 +283,6 @@ def test_bluebubbles_force_sms_pins_service_and_skips_availability(monkeypatch):
         return _FakeResp(200, {"status": 200, "data": {"guid": "SMS_direct"}})
 
     acct = _bb_account()
-    acct.bluebubbles_force_sms = True
     monkeypatch.setattr(gateway.httpx, "get", _no_get)
     monkeypatch.setattr(gateway.httpx, "post", _fake_post)
     monkeypatch.setattr(gateway, "decrypt_secret", lambda s: "pw")
@@ -292,10 +292,9 @@ def test_bluebubbles_force_sms_pins_service_and_skips_availability(monkeypatch):
     assert seen["method"] == "apple-script"  # no private_api -> apple-script
 
 
-def test_bluebubbles_force_sms_does_not_retry_as_imessage(monkeypatch):
-    """A force_sms 'find all handles' failure must NOT retry as iMessage (that
-    retry rescues a flapping availability lookup — irrelevant when SMS is
-    forced and iMessage can't send at all)."""
+def test_bluebubbles_find_all_handles_failure_does_not_retry_as_imessage(monkeypatch):
+    """A 'find all handles' failure means the host lost its Text Message
+    Forwarding link — it must surface, not be rerouted onto iMessage."""
     calls = []
 
     def _fake_post(url, params=None, json=None, timeout=None):
@@ -309,7 +308,6 @@ def test_bluebubbles_force_sms_does_not_retry_as_imessage(monkeypatch):
         )
 
     acct = _bb_account()
-    acct.bluebubbles_force_sms = True
     monkeypatch.setattr(
         gateway.httpx, "get",
         lambda url, params=None, timeout=None: _FakeResp(
@@ -596,8 +594,14 @@ def test_channel_health_healthy_degraded_blocked(im_org, api, bb_creds_ok):
         _seed_outbound(db, account, status=SMS_MSG_SENT, n=3)
         assert gateway.channel_health(db, account)["status"] == "healthy"
 
-        # an iMessage-capable provider falling back to green/SMS = degraded
+        # BlueBubbles sends EVERY message on the SMS service by design, so a
+        # green-bubble send is the expected outcome, not a downgrade — it must
+        # not mark the account degraded (that signal is Sendblue-only now).
         _seed_outbound(db, account, status=SMS_MSG_SENT, service="SMS", n=1)
+        assert gateway.channel_health(db, account)["status"] == "healthy"
+
+        # a real failure still degrades it
+        _seed_outbound(db, account, status=SMS_MSG_FAILED, n=1)
         assert gateway.channel_health(db, account)["status"] == "degraded"
 
         # account not active = blocked, regardless of message history
@@ -828,40 +832,47 @@ def test_sendblue_imessage_alias_bad_token_403(im_org, api, bb_creds_ok):
     assert resp.status_code == 403
 
 
-def test_bluebubbles_sms_handles_failure_retries_as_imessage(monkeypatch):
-    """The availability lookup can flap (observed live after an account
-    re-registration: iMessage-capable numbers resolve unavailable). A
-    mislabeled recipient goes down the SMS path, which without Text Message
-    Forwarding fails 'Failed to find all handles' — the transport must retry
-    ONCE as iMessage and rescue the send."""
-    calls = []
+def test_bluebubbles_never_routes_a_send_over_imessage(monkeypatch):
+    """The 2026-08-25 regression, pinned: the sending Mac's Private API helper
+    dropped, so the iMessage availability lookup 500'd for every number and the
+    old routing failed OPEN to iMessage — putting a 95%-green-bubble audience
+    on a service that could not carry it (0.9% -> 92% failure in an hour).
+
+    Sends now go out on the SMS service unconditionally: no availability probe
+    at all, and no iMessage retry when the SMS leg fails (that means the host
+    lost Text Message Forwarding — a host problem, not a routing one)."""
+    services = []
+
+    def _get(url, params=None, timeout=None):
+        if "availability" in url:
+            raise AssertionError("the send path must never probe availability")
+        return _FakeResp(
+            200, {"status": 200, "data": {"private_api": True, "helper_connected": True}}
+        )
 
     def _fake_post(url, params=None, json=None, timeout=None):
         if url.endswith("/message/text"):
+            services.append(json["chatGuid"].split(";")[0])
             return _FakeResp(
                 500,
                 {"status": 500, "message": "Message Send Error",
                  "error": {"message": "Chat does not exist!"}},
             )
         if url.endswith("/chat/new"):
-            calls.append(json["service"])
-            if json["service"] == "SMS":
-                return _FakeResp(
-                    500,
-                    {"status": 500, "message": "Message Send Error",
-                     "error": {"message": "Failed to find all handles for specified service!"}},
-                )
+            services.append(json["service"])
             return _FakeResp(
-                200, {"status": 200, "data": {"messages": [{"guid": "RESCUED_guid"}]}}
+                500,
+                {"status": 500, "message": "Message Send Error",
+                 "error": {"message": "Failed to find all handles for specified service!"}},
             )
         raise AssertionError(url)
 
-    monkeypatch.setattr(gateway.httpx, "get", _avail_get(False))  # flapping lookup says SMS
+    monkeypatch.setattr(gateway.httpx, "get", _get)
     monkeypatch.setattr(gateway.httpx, "post", _fake_post)
     monkeypatch.setattr(gateway, "decrypt_secret", lambda s: "pw")
     guid, code, detail = gateway._bluebubbles_send(_bb_account(), "+14805559998", "hi")
-    assert guid == "RESCUED_guid" and code is None
-    assert calls == ["SMS", "iMessage"]
+    assert code == "500" and "find all handles" in (detail or "").lower()
+    assert services == ["SMS", "SMS"]  # never an iMessage attempt
 
 
 def test_bluebubbles_true_sms_failure_still_surfaces(monkeypatch):
@@ -934,7 +945,6 @@ def test_bluebubbles_ambiguous_error_rescued_by_device_probe(monkeypatch):
     monkeypatch.setattr(gateway.httpx, "get", _fake_get)
     monkeypatch.setattr(gateway, "decrypt_secret", lambda s: "pw")
     acct = _bb_account()
-    acct.bluebubbles_force_sms = True
     guid, code, detail = gateway._bluebubbles_send(acct, "+14805559999", "hello there")
     assert (guid, code, detail) == ("RESCUED_guid", None, None)
 
@@ -958,7 +968,6 @@ def test_bluebubbles_real_failure_still_fails_when_device_has_no_message(monkeyp
     monkeypatch.setattr(gateway.httpx, "get", _fake_get)
     monkeypatch.setattr(gateway, "decrypt_secret", lambda s: "pw")
     acct = _bb_account()
-    acct.bluebubbles_force_sms = True
     guid, code, detail = gateway._bluebubbles_send(acct, "+14805559999", "hello there")
     assert guid == ""
     assert code == "500"

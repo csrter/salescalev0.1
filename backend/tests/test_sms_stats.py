@@ -319,7 +319,6 @@ def test_green_bubble_delivery_rate_counts_anything_not_failed(
         provider="bluebubbles",
         account_sid=None,
         relay_url="https://relay.example.com",
-        bluebubbles_force_sms=True,
     )
     camp = _mk_campaign(st_org, api, acct["id"], name="Green bubble")
     for _ in range(3):
@@ -348,7 +347,6 @@ def test_delivery_rate_is_dragged_down_only_by_real_failures(
         provider="bluebubbles",
         account_sid=None,
         relay_url="https://relay.example.com",
-        bluebubbles_force_sms=True,
     )
     camp = _mk_campaign(st_org, api, acct["id"], name="One bad number")
     for _ in range(3):
@@ -402,7 +400,6 @@ def test_an_observed_receipt_always_beats_the_capability_table(
         provider="bluebubbles",
         account_sid=None,
         relay_url="https://relay.example.com",
-        bluebubbles_force_sms=True,
     )
     camp = _mk_campaign(st_org, api, acct["id"], name="Observed anyway")
     _add_message(

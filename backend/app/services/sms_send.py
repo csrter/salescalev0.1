@@ -352,8 +352,9 @@ def _verify_sendblue(account: SmsAccount) -> Tuple[bool, str]:
     return False, f"Sendblue HTTP {resp.status_code}"
 
 
-# --- BlueBubbles transport (self-hosted iMessage, dev/prototype provider;
-# thin httpx client against the org's own VPS relay) ---
+# --- BlueBubbles transport (self-hosted, dev/prototype provider; thin httpx
+# client against the org's own VPS relay). Sends are green-bubble SMS only —
+# see BLUEBUBBLES_SERVICE. ---
 
 
 def _bb_json(resp) -> dict:
@@ -387,25 +388,25 @@ def _bb_chat_missing(resp, payload: dict) -> bool:
     return "chat does not exist" in text.lower()
 
 
-def _bluebubbles_resolve_service(base: str, pw: str, to_number: str) -> str:
-    """iMessage where the number is registered, SMS otherwise. Cold-outreach
-    lists are mostly plain cell numbers (not on iMessage); with Text Message
-    Forwarding enabled on the host Mac (a paired iPhone), BlueBubbles sends
-    those as green-bubble SMS via service 'SMS'. On any lookup failure we
-    default to iMessage (the premium attempt) rather than silently downgrading
-    everyone during a transient blip."""
-    try:
-        resp = httpx.get(
-            f"{base}/api/v1/handle/availability/imessage",
-            params={"password": pw, "address": to_number},
-            timeout=12,
-        )
-    except httpx.HTTPError:
-        return "iMessage"
-    if resp.status_code // 100 == 2:
-        available = (_bb_json(resp).get("data") or {}).get("available")
-        return "iMessage" if available else "SMS"
-    return "iMessage"
+# Every BlueBubbles send goes out as green-bubble SMS through the host Mac's
+# Text Message Forwarding. iMessage routing was removed deliberately: it made
+# each send depend on TWO fragile things a cold-outreach blast should not
+# depend on — an iMessage availability lookup (which itself requires the host's
+# Private API helper) and the host's ability to send iMessage at all.
+#
+# Both failed in production. On 2026-08-25 the helper on the sending Mac
+# disconnected, so the availability lookup started returning HTTP 500 for every
+# number; the lookup failed OPEN to "iMessage", which routed a 95%-green-bubble
+# audience onto a service that could not carry it, and the failure rate went
+# from 0.9% to 92% in one hour (error 22 "recipient not reachable on iMessage",
+# "Failed to find all handles"). Earlier, EC2 Mac hosts returned a guid for
+# iMessage sends that silently never delivered.
+#
+# SMS reaches iMessage users too, just as a green bubble. Giving that up buys
+# one routing decision that cannot fail, which on this channel is worth more
+# than the blue bubble. The trade-off: no delivery/read receipts on this
+# provider (see api/sms_outreach._can_report_read).
+BLUEBUBBLES_SERVICE = "SMS"
 
 
 # Cache for the server-capability probe below: {relay_base: (expires_at, method)}.
@@ -463,9 +464,9 @@ def _probe_bluebubbles_method(base: str, pw: str) -> str:
 def _bluebubbles_send(
     account: SmsAccount, to_number: str, body: str
 ) -> Tuple[str, Optional[str], Optional[str]]:
-    """Send via the org's BlueBubbles relay. The recipient's service (iMessage
-    vs green-bubble SMS) is resolved first, so the chat guid uses the right
-    service. For an EXISTING conversation we POST message/text (follow-up steps
+    """Send via the org's BlueBubbles relay, always on the green-bubble SMS
+    service (see BLUEBUBBLES_SERVICE for why iMessage routing was removed).
+    For an EXISTING conversation we POST message/text (follow-up steps
     stay threaded); for a first-time recipient that chat doesn't exist yet
     (BlueBubbles 500s 'Chat does not exist!'), we fall back to chat/new which
     creates the conversation AND sends the opener in one call. Returns (message
@@ -475,15 +476,7 @@ def _bluebubbles_send(
     if not base:
         return "", "config", "No relay URL configured"
     pw = decrypt_secret(account.auth_token_encrypted or "")
-    # Some hosts can't send iMessage at all (EC2 Macs: no Private API + Apple
-    # blocks datacenter iMessage), where an iMessage send returns a guid but
-    # silently never delivers. force_sms pins every send to green-bubble SMS
-    # (delivered via the Mac's Text Message Forwarding), skipping the iMessage
-    # availability probe — which needs the Private API anyway.
-    if getattr(account, "bluebubbles_force_sms", False):
-        service = "SMS"
-    else:
-        service = _bluebubbles_resolve_service(base, pw, to_number)
+    service = BLUEBUBBLES_SERVICE
     method = _bluebubbles_method(base, pw)
     data = {
         "chatGuid": f"{service};-;{to_number}",
@@ -514,24 +507,12 @@ def _bluebubbles_send(
             str(payload.get("status") or resp.status_code),
             _bb_error_message(payload) or f"BlueBubbles HTTP {resp.status_code}",
         )
-    # The iMessage-availability lookup can flap (observed live right after an
-    # account re-registration: numbers that deliver blue-bubble fine resolve
-    # as unavailable). A mislabeled recipient then goes down the SMS-service
-    # path, which needs Text Message Forwarding — and without it fails with
-    # "Failed to find all handles". Before accepting that failure, retry ONCE
-    # as iMessage: it rescues every iMessage-capable recipient, and a true
-    # green-bubble number just fails the same way it already had.
-    if (
-        service == "SMS"
-        and not getattr(account, "bluebubbles_force_sms", False)
-        and result[1] is not None
-        and "find all handles" in (result[2] or "").lower()
-    ):
-        retry = _bluebubbles_create_chat_send(
-            base, pw, to_number, body, "iMessage", method
-        )
-        if retry[1] is None:
-            return retry
+    # NOTE: there is deliberately no iMessage retry here. A "Failed to find all
+    # handles" on the SMS service means the host Mac has lost its paired
+    # iPhone / Text Message Forwarding link — a host problem to fix, not one to
+    # paper over by rerouting the lead onto a service that reaches even fewer
+    # of them.
+    #
     # BlueBubbles' AppleScript path can error AFTER Messages.app accepted the
     # text ("[500] Message sent with an error", no guid returned) — the
     # recipient still gets it, so treating the error as a failure makes every
@@ -580,14 +561,13 @@ def _bluebubbles_create_chat_send(
     pw: str,
     to_number: str,
     body: str,
-    service: str = "iMessage",
+    service: str = BLUEBUBBLES_SERVICE,
     method: str = "private-api",
 ) -> Tuple[str, Optional[str], Optional[str]]:
     """POST {relay}/api/v1/chat/new — creates the conversation and sends the
-    first message on the resolved service. An iMessage attempt to a non-iMessage
-    number, or an SMS attempt on a Mac without Text Message Forwarding, still
-    fails here — a recipient-reachability / host-setup fact, not a transport
-    bug — and surfaces the relay's own reason."""
+    first message. An SMS attempt on a Mac without a working Text Message
+    Forwarding link still fails here — a host-setup fact, not a transport bug —
+    and surfaces the relay's own reason."""
     data = {
         "addresses": [to_number],
         "message": body,
@@ -822,7 +802,11 @@ def channel_health(db: Session, account: SmsAccount) -> dict:
     downgraded = sum(
         1 for _, service in rows if service and service.upper() == "SMS"
     )
-    imessage_capable = account.provider in ("sendblue", "bluebubbles")
+    # Sendblue only. BlueBubbles now sends every message on the SMS service by
+    # design (BLUEBUBBLES_SERVICE), so a green-bubble "downgrade" is the
+    # intended outcome there, not a signal — counting it would mark every
+    # BlueBubbles account permanently degraded.
+    imessage_capable = account.provider == "sendblue"
 
     if sampled == 0:
         return {

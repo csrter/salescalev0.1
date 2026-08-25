@@ -144,7 +144,6 @@ def _account_out(db: Session, a: SmsAccount) -> dict:
         "relay_url": a.relay_url,
         "min_send_spacing_seconds": a.min_send_spacing_seconds,
         "max_send_spacing_seconds": a.max_send_spacing_seconds,
-        "bluebubbles_force_sms": a.bluebubbles_force_sms,
         "channel_health": sms_send.channel_health(db, a),
         "last_inbound_at": last_inbound_at.isoformat() if last_inbound_at else None,
         "inbound_webhook_stale": inbound_webhook_stale,
@@ -175,7 +174,6 @@ class AccountIn(BaseModel):
     relay_url: Optional[str] = Field(default=None, max_length=500)
     min_send_spacing_seconds: Optional[int] = Field(default=None, ge=0, le=3600)
     max_send_spacing_seconds: Optional[int] = Field(default=None, ge=0, le=3600)
-    bluebubbles_force_sms: bool = False
 
 
 class AccountPatch(BaseModel):
@@ -187,7 +185,6 @@ class AccountPatch(BaseModel):
     relay_url: Optional[str] = Field(default=None, max_length=500)
     min_send_spacing_seconds: Optional[int] = Field(default=None, ge=0, le=3600)
     max_send_spacing_seconds: Optional[int] = Field(default=None, ge=0, le=3600)
-    bluebubbles_force_sms: Optional[bool] = None
 
 
 @router.get("/accounts")
@@ -289,9 +286,6 @@ def create_account(
         relay_url=(body.relay_url or "").strip() or None,
         min_send_spacing_seconds=_spacing_min,
         max_send_spacing_seconds=_spacing_max,
-        bluebubbles_force_sms=(
-            body.bluebubbles_force_sms and body.provider == "bluebubbles"
-        ),
         # URL secret for unsigned-webhook providers (Sendblue, BlueBubbles);
         # minted for every account so a later provider switch never leaves a
         # gap.
@@ -330,8 +324,6 @@ def update_account(
         account.min_send_spacing_seconds = body.min_send_spacing_seconds
     if body.max_send_spacing_seconds is not None:
         account.max_send_spacing_seconds = body.max_send_spacing_seconds
-    if body.bluebubbles_force_sms is not None:
-        account.bluebubbles_force_sms = body.bluebubbles_force_sms
     if (
         account.min_send_spacing_seconds is not None
         and account.max_send_spacing_seconds is not None
@@ -519,8 +511,9 @@ def _can_report_read(account: Optional[SmsAccount]) -> bool:
     if account is None:
         # Unknown account (deleted row) — don't suppress a real measurement.
         return True
-    if account.provider == "bluebubbles":
-        return not account.bluebubbles_force_sms
+    # BlueBubbles sends every message on the green-bubble SMS service
+    # (services/sms_send.BLUEBUBBLES_SERVICE), which never produces a read
+    # receipt — so a read rate there is 0 by construction and must render "—".
     return account.provider == "sendblue"
 
 
