@@ -747,6 +747,7 @@ def _campaign_out(db: Session, c: EmailCampaign, *, full: bool = False) -> dict:
         "require_approval": c.require_approval,
         "ai_tone": c.ai_tone,
         "ai_example": c.ai_example,
+        "is_template": c.is_template,
         "activated_at": c.activated_at.isoformat() if c.activated_at else None,
         "created_at": c.created_at.isoformat(),
         **_campaign_stats(db, c),
@@ -769,10 +770,40 @@ def list_campaigns(
     user: User = Depends(require_team),
     scope: TenantScope = Depends(get_scope),
 ):
-    stmt = scope.filter(select(EmailCampaign), EmailCampaign).order_by(
-        EmailCampaign.created_at.desc()
-    )
+    stmt = scope.filter(
+        select(EmailCampaign).where(EmailCampaign.is_template.is_(False)), EmailCampaign
+    ).order_by(EmailCampaign.created_at.desc())
     return [_campaign_out(db, c) for c in db.execute(stmt).scalars().all()]
+
+
+@router.get("/campaigns/templates")
+def list_campaign_templates(
+    db: Session = Depends(get_db),
+    user: User = Depends(require_team),
+    scope: TenantScope = Depends(get_scope),
+):
+    stmt = scope.filter(
+        select(EmailCampaign).where(EmailCampaign.is_template.is_(True)), EmailCampaign
+    ).order_by(EmailCampaign.created_at.desc())
+    return [_campaign_out(db, c, full=True) for c in db.execute(stmt).scalars().all()]
+
+
+def _clone_email_steps(db: Session, organization_id: str, source_id: str, target_id: str) -> None:
+    steps = db.execute(
+        select(EmailStep).where(EmailStep.campaign_id == source_id).order_by(EmailStep.position)
+    ).scalars()
+    for s in steps:
+        db.add(
+            EmailStep(
+                organization_id=organization_id,
+                campaign_id=target_id,
+                position=s.position,
+                wait_days=s.wait_days,
+                subject_template=s.subject_template,
+                body_template=s.body_template,
+                ai_instructions=s.ai_instructions,
+            )
+        )
 
 
 @router.post("/campaigns", status_code=201)
@@ -784,6 +815,40 @@ def create_campaign(
 ):
     pool_ids = body.account_ids or [body.account_id]
     accounts = [_scoped_get(db, scope, EmailAccount, aid) for aid in pool_ids]
+
+    if body.template_id:
+        # Clone a template's full config + steps into a new real campaign —
+        # the mailbox pool comes from THIS request (not inherited — a
+        # template's mailboxes may not be the ones you want to send this
+        # particular campaign from), everything else (window, days, cap,
+        # compliance/AI settings) is inherited verbatim, same fields
+        # duplicate_campaign copies. Editable after via the normal PATCH.
+        template = _scoped_get(db, scope, EmailCampaign, body.template_id)
+        if not template.is_template:
+            raise HTTPException(422, "template_id does not refer to a template")
+        campaign = EmailCampaign(
+            organization_id=scope.organization_id,
+            name=body.name,
+            status=CAMPAIGN_DRAFT,
+            account_id=accounts[0].id,
+            timezone=template.timezone,
+            send_window_start=template.send_window_start,
+            send_window_end=template.send_window_end,
+            send_days=template.send_days,
+            daily_cap=template.daily_cap,
+            open_tracking=template.open_tracking,
+            exit_on_reply=template.exit_on_reply,
+            require_approval=template.require_approval,
+            ai_tone=template.ai_tone,
+            ai_example=template.ai_example,
+        )
+        db.add(campaign)
+        db.flush()
+        _set_campaign_pool(db, scope, campaign, [a.id for a in accounts])
+        _clone_email_steps(db, scope.organization_id, template.id, campaign.id)
+        db.commit()
+        return _campaign_out(db, campaign, full=True)
+
     if body.send_window_start >= body.send_window_end:
         raise HTTPException(422, "send_window_start must be before send_window_end")
     # Explicit tz (normalized by the schema validator) wins; else inherit the
@@ -808,6 +873,7 @@ def create_campaign(
         require_approval=body.require_approval,
         ai_tone=body.ai_tone,
         ai_example=body.ai_example,
+        is_template=body.is_template,
     )
     db.add(campaign)
     db.flush()
@@ -825,6 +891,68 @@ def get_campaign(
 ):
     campaign = _scoped_get(db, scope, EmailCampaign, campaign_id)
     return _campaign_out(db, campaign, full=True)
+
+
+@router.post("/campaigns/{campaign_id}/duplicate", status_code=201)
+def duplicate_campaign(
+    campaign_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_admin),
+    scope: TenantScope = Depends(get_scope),
+):
+    """Clone a campaign's config + sending pool + steps into a new draft
+    (same is_template as the source — duplicating a real campaign makes a
+    draft, duplicating a template makes another template). Never copies
+    audience/enrollments; a duplicate always starts empty and inert (draft,
+    no activated_at) until an admin reviews and activates it."""
+    source = _scoped_get(db, scope, EmailCampaign, campaign_id)
+    pool_ids = _campaign_pool_ids(db, source)
+    copy = EmailCampaign(
+        organization_id=scope.organization_id,
+        name=f"{source.name} (copy)",
+        status=CAMPAIGN_DRAFT,
+        account_id=source.account_id,
+        timezone=source.timezone,
+        send_window_start=source.send_window_start,
+        send_window_end=source.send_window_end,
+        send_days=source.send_days,
+        daily_cap=source.daily_cap,
+        open_tracking=source.open_tracking,
+        exit_on_reply=source.exit_on_reply,
+        require_approval=source.require_approval,
+        ai_tone=source.ai_tone,
+        ai_example=source.ai_example,
+        is_template=source.is_template,
+    )
+    db.add(copy)
+    db.flush()
+    _set_campaign_pool(db, scope, copy, pool_ids)
+    _clone_email_steps(db, scope.organization_id, source.id, copy.id)
+    db.commit()
+    return _campaign_out(db, copy, full=True)
+
+
+@router.delete("/campaigns/{campaign_id}", status_code=204)
+def delete_campaign(
+    campaign_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_admin),
+    scope: TenantScope = Depends(get_scope),
+):
+    """Hard-delete — templates only. A real campaign's send history is an
+    audit record, so it can only be archived, never deleted; a template
+    never sends anything and never gets enrollments, so nothing is lost."""
+    campaign = _scoped_get(db, scope, EmailCampaign, campaign_id)
+    if not campaign.is_template:
+        raise HTTPException(422, "Only templates can be deleted — archive a real campaign instead")
+    db.execute(EmailStep.__table__.delete().where(EmailStep.campaign_id == campaign.id))
+    db.execute(
+        EmailCampaignAccount.__table__.delete().where(
+            EmailCampaignAccount.campaign_id == campaign.id
+        )
+    )
+    db.delete(campaign)
+    db.commit()
 
 
 @router.patch("/campaigns/{campaign_id}")
@@ -956,6 +1084,10 @@ def activate_campaign(
     scope: TenantScope = Depends(get_scope),
 ):
     campaign = _scoped_get(db, scope, EmailCampaign, campaign_id)
+    if campaign.is_template:
+        raise HTTPException(
+            422, "Templates can't be activated — create a campaign from this template first"
+        )
     if campaign.status not in (CAMPAIGN_DRAFT, CAMPAIGN_PAUSED):
         raise HTTPException(409, "Only a draft or paused campaign can activate")
     steps = _count(
@@ -1022,6 +1154,10 @@ def enroll_campaign(
     scope: TenantScope = Depends(get_scope),
 ):
     campaign = _scoped_get(db, scope, EmailCampaign, campaign_id)
+    if campaign.is_template:
+        raise HTTPException(
+            422, "Templates can't be enrolled — create a campaign from this template first"
+        )
     org = db.get(Organization, scope.organization_id)
     # Enrollment implies future sends — gate on the monthly send quota up front
     # (402 when already exhausted) so an org can't queue what it can't send.

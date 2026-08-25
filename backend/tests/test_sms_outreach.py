@@ -470,6 +470,224 @@ def test_activate_guard(sc_org, api, twilio_creds_ok):
     assert _activate(sc_org, api, camp["id"]).status_code == 200
 
 
+# --- duplicate campaign: save-as-template ------------------------------------
+
+
+def test_duplicate_campaign_clones_config_and_steps_as_new_draft(
+    sc_org, api, twilio_creds_ok
+):
+    acct = _mk_account(sc_org, api, from_number="+14805550990")
+    camp = _mk_campaign(
+        sc_org,
+        api,
+        acct["id"],
+        client_id=sc_org["client"],
+        daily_cap=42,
+        exit_on_reply=False,
+        include_compliance_footer=False,
+        stop_after_branch=False,
+        auto_enroll_new_leads=True,
+    )
+    _set_steps(
+        sc_org,
+        api,
+        camp["id"],
+        [
+            {"position": 1, "body": "Hey {{first_name}}, still interested?"},
+            {
+                "position": 2,
+                "trigger": "reply",
+                "wait_minutes": 5,
+                "body": "Thanks for getting back to me!",
+                "branches": [
+                    {"label": "yes", "keywords": ["yes", "yeah"], "body": "Great, when works?"}
+                ],
+                "ai_branching": True,
+            },
+        ],
+    )
+    _activate(sc_org, api, camp["id"])
+
+    r = api.post(f"/api/sms/campaigns/{camp['id']}/duplicate", headers=sc_org["headers"])
+    assert r.status_code == 201, r.text
+    copy = r.json()
+
+    assert copy["id"] != camp["id"]
+    assert copy["name"] == "Fall Promo (copy)"
+    assert copy["status"] == "draft"
+    assert copy["activated_at"] is None
+    assert copy["client_id"] == sc_org["client"]
+    assert copy["account_id"] == acct["id"]
+    assert copy["daily_cap"] == 42
+    assert copy["exit_on_reply"] is False
+    assert copy["include_compliance_footer"] is False
+    assert copy["stop_after_branch"] is False
+    assert copy["auto_enroll_new_leads"] is True
+
+    steps = sorted(copy["steps"], key=lambda s: s["position"])
+    assert len(steps) == 2
+    assert steps[0]["id"] is not None
+    assert steps[0]["body"] == "Hey {{first_name}}, still interested?"
+    assert steps[1]["trigger"] == "reply"
+    assert steps[1]["wait_minutes"] == 5
+    assert steps[1]["ai_branching"] is True
+    assert steps[1]["branches"][0]["label"] == "yes"
+
+    # The source campaign is untouched — still active with its own steps.
+    src = api.get(f"/api/sms/campaigns/{camp['id']}", headers=sc_org["headers"]).json()
+    assert src["status"] == "active"
+    assert len(src["steps"]) == 2
+
+    # The duplicate has no enrollments — it's a template, not a clone of the
+    # audience.
+    assert copy["active_enrollments"] == 0
+
+
+def test_duplicate_campaign_cross_org_404s(sc_org, api, twilio_creds_ok, team_headers):
+    acct = _mk_account(sc_org, api, from_number="+14805550991")
+    camp = _mk_campaign(sc_org, api, acct["id"], **_ALWAYS)
+    r = api.post(
+        f"/api/sms/campaigns/{camp['id']}/duplicate", headers=team_headers
+    )
+    assert r.status_code == 404
+
+
+# --- campaign templates ------------------------------------------------------
+
+
+def test_templates_listed_separately_from_real_campaigns(sc_org, api, twilio_creds_ok):
+    acct = _mk_account(sc_org, api, from_number="+14805550992")
+    real = _mk_campaign(sc_org, api, acct["id"], **_ALWAYS)
+    tmpl = _mk_campaign(sc_org, api, acct["id"], is_template=True, **_ALWAYS)
+    assert tmpl["is_template"] is True
+    assert real["is_template"] is False
+
+    campaigns = api.get("/api/sms/campaigns", headers=sc_org["headers"]).json()
+    campaign_ids = {c["id"] for c in campaigns}
+    assert real["id"] in campaign_ids
+    assert tmpl["id"] not in campaign_ids
+
+    templates = api.get("/api/sms/campaigns/templates", headers=sc_org["headers"]).json()
+    template_ids = {c["id"] for c in templates}
+    assert tmpl["id"] in template_ids
+    assert real["id"] not in template_ids
+
+
+def test_template_cannot_activate_or_enroll(sc_org, api, twilio_creds_ok):
+    acct = _mk_account(sc_org, api, from_number="+14805550993")
+    tmpl = _mk_campaign(sc_org, api, acct["id"], is_template=True, **_ALWAYS)
+    _set_steps(sc_org, api, tmpl["id"], [{"position": 1, "body": "hi"}])
+    contact = _mk_contact(sc_org, api, mobile_phone="+14805551093")
+
+    r = _activate(sc_org, api, tmpl["id"])
+    assert r.status_code == 422
+    assert "template" in r.json()["detail"].lower()
+
+    r2 = _enroll(sc_org, api, tmpl["id"], [contact])
+    assert r2.status_code == 422
+    assert "template" in r2.json()["detail"].lower()
+
+
+def test_create_campaign_from_template_clones_config_and_steps(sc_org, api, twilio_creds_ok):
+    tmpl_acct = _mk_account(sc_org, api, from_number="+14805550994")
+    tmpl = _mk_campaign(
+        sc_org,
+        api,
+        tmpl_acct["id"],
+        is_template=True,
+        client_id=sc_org["client"],
+        daily_cap=17,
+        exit_on_reply=False,
+        include_compliance_footer=False,
+        stop_after_branch=False,
+        **_ALWAYS,
+    )
+    _set_steps(
+        sc_org,
+        api,
+        tmpl["id"],
+        [
+            {"position": 1, "body": "Hey {{first_name}}, quick question"},
+            {"position": 2, "wait_days": 2, "body": "Following up"},
+        ],
+    )
+
+    real_acct = _mk_account(sc_org, api, from_number="+14805550995")
+    r = api.post(
+        "/api/sms/campaigns",
+        json={
+            "name": "From the template",
+            "account_id": real_acct["id"],
+            "template_id": tmpl["id"],
+        },
+        headers=sc_org["headers"],
+    )
+    assert r.status_code == 201, r.text
+    created = r.json()
+
+    assert created["is_template"] is False
+    assert created["name"] == "From the template"
+    assert created["account_id"] == real_acct["id"]  # from the request, not the template
+    assert created["client_id"] == sc_org["client"]
+    assert created["daily_cap"] == 17
+    assert created["exit_on_reply"] is False
+    assert created["include_compliance_footer"] is False
+    assert created["stop_after_branch"] is False
+
+    steps = sorted(created["steps"], key=lambda s: s["position"])
+    assert len(steps) == 2
+    assert steps[0]["body"] == "Hey {{first_name}}, quick question"
+    assert steps[1]["wait_days"] == 2
+
+    # Independent copy — editing the new campaign's steps doesn't touch the
+    # template.
+    _set_steps(sc_org, api, created["id"], [{"position": 1, "body": "Changed"}])
+    tmpl_after = api.get(f"/api/sms/campaigns/{tmpl['id']}", headers=sc_org["headers"]).json()
+    assert len(tmpl_after["steps"]) == 2
+    assert tmpl_after["steps"][0]["body"] == "Hey {{first_name}}, quick question"
+
+    # The new campaign shows up in the real list and activates normally.
+    assert _activate(sc_org, api, created["id"]).status_code == 200
+
+
+def test_create_campaign_with_non_template_id_422s(sc_org, api, twilio_creds_ok):
+    acct = _mk_account(sc_org, api, from_number="+14805550996")
+    real = _mk_campaign(sc_org, api, acct["id"], **_ALWAYS)
+    r = api.post(
+        "/api/sms/campaigns",
+        json={"name": "Nope", "account_id": acct["id"], "template_id": real["id"]},
+        headers=sc_org["headers"],
+    )
+    assert r.status_code == 422
+
+
+def test_delete_template_but_not_real_campaign(sc_org, api, twilio_creds_ok):
+    acct = _mk_account(sc_org, api, from_number="+14805550997")
+    tmpl = _mk_campaign(sc_org, api, acct["id"], is_template=True, **_ALWAYS)
+    _set_steps(sc_org, api, tmpl["id"], [{"position": 1, "body": "hi"}])
+    real = _mk_campaign(sc_org, api, acct["id"], **_ALWAYS)
+
+    r = api.delete(f"/api/sms/campaigns/{tmpl['id']}", headers=sc_org["headers"])
+    assert r.status_code == 204
+    assert api.get(
+        f"/api/sms/campaigns/{tmpl['id']}", headers=sc_org["headers"]
+    ).status_code == 404
+
+    r2 = api.delete(f"/api/sms/campaigns/{real['id']}", headers=sc_org["headers"])
+    assert r2.status_code == 422
+
+
+def test_duplicate_template_stays_a_template(sc_org, api, twilio_creds_ok):
+    acct = _mk_account(sc_org, api, from_number="+14805550998")
+    tmpl = _mk_campaign(sc_org, api, acct["id"], is_template=True, **_ALWAYS)
+    r = api.post(f"/api/sms/campaigns/{tmpl['id']}/duplicate", headers=sc_org["headers"])
+    assert r.status_code == 201
+    copy = r.json()
+    assert copy["is_template"] is True
+    templates = api.get("/api/sms/campaigns/templates", headers=sc_org["headers"]).json()
+    assert copy["id"] in {t["id"] for t in templates}
+
+
 # --- run_due: advances positions and completes ------------------------------
 
 

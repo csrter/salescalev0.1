@@ -25,7 +25,9 @@ import {
   createSmsAccount,
   createSmsCampaign,
   deleteSmsAccount,
+  deleteSmsCampaignTemplate,
   deleteSmsSuppression,
+  duplicateSmsCampaign,
   enrollSmsContacts,
   featureEnabled,
   getHouseClient,
@@ -38,6 +40,7 @@ import {
   listContactLists,
   listSmsAccounts,
   listSmsCampaigns,
+  listSmsCampaignTemplates,
   listSmsCrmContactsForClient,
   listSmsEnrollments,
   listSmsMessages,
@@ -93,7 +96,7 @@ import {
   Tabs,
   keepEqual,
 } from "./components/ui";
-import { Plus, Send } from "./components/icons";
+import { Copy, Plus, Send } from "./components/icons";
 import { useToast } from "./components/Toast";
 import "./styles/views/sms_outreach.css";
 
@@ -1040,14 +1043,32 @@ function LeadRelayCard({ hasBlueBubbles }: { hasBlueBubbles: boolean }) {
 
 function CampaignsPanel({ accounts }: { accounts: SmsAccount[] }) {
   const toast = useToast();
+  const [view, setView] = useState<"campaigns" | "templates">("campaigns");
   const [campaigns, setCampaigns] = useState<SmsCampaign[] | null>(null);
+  const [templates, setTemplates] = useState<SmsCampaignDetail[] | null>(null);
   const [creating, setCreating] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [duplicatingId, setDuplicatingId] = useState<string | null>(null);
 
   const refresh = useCallback(() => {
     listSmsCampaigns().then(setCampaigns).catch(() => {});
+    listSmsCampaignTemplates().then(setTemplates).catch(() => {});
   }, []);
   useEffect(refresh, [refresh]);
+
+  const duplicate = async (c: SmsCampaign) => {
+    setDuplicatingId(c.id);
+    try {
+      const copy = await duplicateSmsCampaign(c.id);
+      toast(`Duplicated as "${copy.name}"`, "ok");
+      refresh();
+      setEditingId(copy.id);
+    } catch (e) {
+      toast(e instanceof Error ? e.message : "Duplicate failed", "error");
+    } finally {
+      setDuplicatingId(null);
+    }
+  };
 
   const columns: Column<SmsCampaign>[] = [
     { key: "name", header: "Campaign", render: (c) => c.name, sortValue: (c) => c.name },
@@ -1123,9 +1144,57 @@ function CampaignsPanel({ accounts }: { accounts: SmsAccount[] }) {
       header: "",
       align: "right",
       render: (c) => (
-        <Button variant="ghost" onClick={() => setEditingId(c.id)}>
-          Open
-        </Button>
+        <div className="sms-row-actions">
+          <Button
+            variant="ghost"
+            busy={duplicatingId === c.id}
+            title="Duplicate this campaign into a new draft"
+            onClick={() => duplicate(c)}
+          >
+            <Copy size={16} />
+          </Button>
+          <Button variant="ghost" onClick={() => setEditingId(c.id)}>
+            Open
+          </Button>
+        </div>
+      ),
+    },
+  ];
+
+  const templateColumns: Column<SmsCampaignDetail>[] = [
+    { key: "name", header: "Template", render: (c) => c.name, sortValue: (c) => c.name },
+    {
+      key: "steps",
+      header: "Steps",
+      align: "right",
+      render: (c) => int(c.steps_count),
+      sortValue: (c) => c.steps_count,
+    },
+    {
+      key: "created",
+      header: "Created",
+      align: "right",
+      render: (c) => new Date(c.created_at).toLocaleDateString(),
+      sortValue: (c) => c.created_at,
+    },
+    {
+      key: "manage",
+      header: "",
+      align: "right",
+      render: (c) => (
+        <div className="sms-row-actions">
+          <Button
+            variant="ghost"
+            busy={duplicatingId === c.id}
+            title="Duplicate this template"
+            onClick={() => duplicate(c)}
+          >
+            <Copy size={16} />
+          </Button>
+          <Button variant="ghost" onClick={() => setEditingId(c.id)}>
+            Edit
+          </Button>
+        </div>
       ),
     },
   ];
@@ -1134,18 +1203,39 @@ function CampaignsPanel({ accounts }: { accounts: SmsAccount[] }) {
     <div>
       <div className="sms-head">
         <p className="sms-sub">
-          Multi-step cold-SMS sequences. Every audience passes the SMS consent
-          gate — only opted-in contacts are enrolled — and STOP replies land
-          on the suppression list automatically.
+          {view === "campaigns" ? (
+            <>
+              Multi-step cold-SMS sequences. Every audience passes the SMS
+              consent gate — only opted-in contacts are enrolled — and STOP
+              replies land on the suppression list automatically.
+            </>
+          ) : (
+            <>
+              Reusable sequence structures — config + steps, no audience.
+              Build one from scratch or duplicate an existing campaign, then
+              start new campaigns from it.
+            </>
+          )}
         </p>
-        <Button
-          variant="primary"
-          disabled={accounts.length === 0}
-          onClick={() => setCreating(true)}
-        >
-          <Plus size={16} />
-          New campaign
-        </Button>
+        <div className="sms-row-actions">
+          <Segmented
+            ariaLabel="Campaigns or templates"
+            options={[
+              { value: "campaigns", label: "Campaigns" },
+              { value: "templates", label: "Templates" },
+            ]}
+            value={view}
+            onChange={(v) => setView(v)}
+          />
+          <Button
+            variant="primary"
+            disabled={accounts.length === 0}
+            onClick={() => setCreating(true)}
+          >
+            <Plus size={16} />
+            {view === "campaigns" ? "New campaign" : "New template"}
+          </Button>
+        </div>
       </div>
 
       {accounts.length === 0 ? (
@@ -1155,7 +1245,7 @@ function CampaignsPanel({ accounts }: { accounts: SmsAccount[] }) {
             come back to build a sequence.
           </EmptyState>
         </GlassCard>
-      ) : (
+      ) : view === "campaigns" ? (
         <DataTable
           columns={columns}
           rows={campaigns ?? []}
@@ -1164,11 +1254,22 @@ function CampaignsPanel({ accounts }: { accounts: SmsAccount[] }) {
           initialSort="-sent"
           emptyMessage="No campaigns yet — create one to start reaching prospects."
         />
+      ) : (
+        <DataTable
+          columns={templateColumns}
+          rows={templates ?? []}
+          rowKey={(c) => c.id}
+          loading={templates === null}
+          initialSort="-created"
+          emptyMessage="No templates yet — build one, or duplicate a campaign into a template."
+        />
       )}
 
       {creating && (
         <CreateCampaignDialog
           accounts={accounts}
+          templates={templates ?? []}
+          creatingTemplate={view === "templates"}
           onClose={() => setCreating(false)}
           onCreated={(id) => {
             setCreating(false);
@@ -1195,16 +1296,21 @@ function CampaignsPanel({ accounts }: { accounts: SmsAccount[] }) {
 
 function CreateCampaignDialog({
   accounts,
+  templates,
+  creatingTemplate = false,
   onClose,
   onCreated,
 }: {
   accounts: SmsAccount[];
+  templates: SmsCampaignDetail[];
+  creatingTemplate?: boolean;
   onClose: () => void;
   onCreated: (id: string) => void;
 }) {
   const toast = useToast();
   const [name, setName] = useState("");
   const [accountId, setAccountId] = useState(accounts[0]?.id ?? "");
+  const [templateId, setTemplateId] = useState("");
   const [busy, setBusy] = useState(false);
 
   const create = async () => {
@@ -1214,8 +1320,13 @@ function CreateCampaignDialog({
     }
     setBusy(true);
     try {
-      const c = await createSmsCampaign({ name: name.trim(), account_id: accountId });
-      toast("Campaign created", "ok");
+      const c = await createSmsCampaign({
+        name: name.trim(),
+        account_id: accountId,
+        is_template: creatingTemplate,
+        template_id: templateId || undefined,
+      });
+      toast(creatingTemplate ? "Template created" : "Campaign created", "ok");
       onCreated(c.id);
     } catch (e) {
       toast(e instanceof Error ? e.message : "Create failed", "error");
@@ -1228,7 +1339,7 @@ function CreateCampaignDialog({
     <Dialog
       open
       onClose={onClose}
-      title="New campaign"
+      title={creatingTemplate ? "New template" : "New campaign"}
       footer={
         <>
           <Button variant="ghost" onClick={onClose}>
@@ -1241,13 +1352,25 @@ function CreateCampaignDialog({
       }
     >
       <div className="sms-form">
-        <Field label="Campaign name">
+        <Field label={creatingTemplate ? "Template name" : "Campaign name"}>
           <input
             value={name}
             onChange={(e) => setName(e.target.value)}
             placeholder="Q3 HVAC contractors"
           />
         </Field>
+        {!creatingTemplate && templates.length > 0 && (
+          <Field label="Start from template">
+            <select value={templateId} onChange={(e) => setTemplateId(e.target.value)}>
+              <option value="">Blank campaign</option>
+              {templates.map((t) => (
+                <option key={t.id} value={t.id}>
+                  {t.name} ({t.steps_count} step{t.steps_count === 1 ? "" : "s"})
+                </option>
+              ))}
+            </select>
+          </Field>
+        )}
         <Field label="Send from number">
           <select value={accountId} onChange={(e) => setAccountId(e.target.value)}>
             {accounts.map((a) => (
@@ -1285,6 +1408,9 @@ function CampaignEditor({
   const [preview, setPreview] = useState<{ position: number } | null>(null);
   const [enrolling, setEnrolling] = useState(false);
   const [archiveConfirm, setArchiveConfirm] = useState(false);
+  const [deleteConfirm, setDeleteConfirm] = useState(false);
+
+  const isTemplate = detail?.is_template ?? false;
 
   const load = useCallback(() => {
     getSmsCampaign(campaignId)
@@ -1397,6 +1523,19 @@ function CampaignEditor({
     }
   };
 
+  const deleteTemplate = async () => {
+    if (!detail) return;
+    setBusy(true);
+    try {
+      await deleteSmsCampaignTemplate(detail.id);
+      onToast("Template deleted", "ok");
+      onClose();
+    } catch (e) {
+      onToast(e instanceof Error ? e.message : "Delete failed", "error");
+      setBusy(false);
+    }
+  };
+
   return (
     <Dialog
       open
@@ -1409,35 +1548,58 @@ function CampaignEditor({
           <Button variant="ghost" onClick={onClose}>
             Close
           </Button>
-          {detail && (detail.status === "draft" || detail.status === "paused") && (
-            archiveConfirm ? (
+          {isTemplate ? (
+            deleteConfirm ? (
               <>
-                <Button variant="danger-outline" busy={busy} onClick={archive}>
-                  Really archive?
+                <Button variant="danger-outline" busy={busy} onClick={deleteTemplate}>
+                  Really delete?
                 </Button>
                 <Button
                   variant="ghost"
                   disabled={busy}
-                  onClick={() => setArchiveConfirm(false)}
+                  onClick={() => setDeleteConfirm(false)}
                 >
                   Keep it
                 </Button>
               </>
             ) : (
-              <Button variant="ghost" onClick={() => setArchiveConfirm(true)}>
-                Archive
+              <Button variant="danger-outline" onClick={() => setDeleteConfirm(true)}>
+                Delete template
               </Button>
             )
+          ) : (
+            <>
+              {detail && (detail.status === "draft" || detail.status === "paused") && (
+                archiveConfirm ? (
+                  <>
+                    <Button variant="danger-outline" busy={busy} onClick={archive}>
+                      Really archive?
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      disabled={busy}
+                      onClick={() => setArchiveConfirm(false)}
+                    >
+                      Keep it
+                    </Button>
+                  </>
+                ) : (
+                  <Button variant="ghost" onClick={() => setArchiveConfirm(true)}>
+                    Archive
+                  </Button>
+                )
+              )}
+              {detail && detail.status === "active" ? (
+                <Button variant="danger-outline" busy={busy} onClick={pause}>
+                  Pause campaign
+                </Button>
+              ) : detail && detail.status !== "archived" ? (
+                <Button variant="primary" busy={busy} onClick={activate}>
+                  Activate campaign
+                </Button>
+              ) : null}
+            </>
           )}
-          {detail && detail.status === "active" ? (
-            <Button variant="danger-outline" busy={busy} onClick={pause}>
-              Pause campaign
-            </Button>
-          ) : detail && detail.status !== "archived" ? (
-            <Button variant="primary" busy={busy} onClick={activate}>
-              Activate campaign
-            </Button>
-          ) : null}
         </>
       }
     >
@@ -1446,13 +1608,19 @@ function CampaignEditor({
       ) : (
         <>
           <div className="sms-editor-head">
-            <Badge tone={detail.status}>{detail.status}</Badge>
+            {isTemplate ? (
+              <Badge tone="neutral">Template</Badge>
+            ) : (
+              <Badge tone={detail.status}>{detail.status}</Badge>
+            )}
             <Tabs
               ariaLabel="Campaign editor sections"
               tabs={[
                 { id: "config", label: "Config" },
                 { id: "steps", label: `Steps (${steps.length})` },
-                { id: "audience", label: `Audience (${detail.enrolled})` },
+                ...(isTemplate
+                  ? []
+                  : [{ id: "audience", label: `Audience (${detail.enrolled})` }]),
               ]}
               active={tab}
               onChange={(id) => setTab(id as EditorTab)}

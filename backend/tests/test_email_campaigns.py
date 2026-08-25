@@ -954,6 +954,227 @@ def test_steps_must_be_contiguous_and_not_while_active(cc_org, api, probe_ok):
     assert r2.json()["steps"][0]["body"] == "changed"
 
 
+# --- duplicate campaign: save-as-template ------------------------------------
+
+
+def test_duplicate_campaign_clones_config_pool_and_steps_as_new_draft(
+    cc_org, api, probe_ok
+):
+    a = _mk_account(cc_org, api, from_email="dup-a@campaignco.com")
+    b = _mk_account(cc_org, api, from_email="dup-b@campaignco.com")
+    camp = _mk_campaign(
+        cc_org,
+        api,
+        a["id"],
+        account_ids=[a["id"], b["id"]],
+        daily_cap=17,
+        exit_on_reply=False,
+        require_approval=True,
+        ai_tone="friendly, brief",
+        **_ALWAYS,
+    )
+    _set_steps(
+        cc_org,
+        api,
+        camp["id"],
+        [
+            {"position": 1, "subject": "Hi {{first_name}}", "body": "Intro"},
+            {"position": 2, "subject": None, "body": "Follow up", "wait_days": 3},
+        ],
+    )
+    _activate(cc_org, api, camp["id"])
+
+    r = api.post(
+        f"/api/email-outreach/campaigns/{camp['id']}/duplicate",
+        headers=cc_org["headers"],
+    )
+    assert r.status_code == 201, r.text
+    copy = r.json()
+
+    assert copy["id"] != camp["id"]
+    assert copy["name"] == "Q3 Roofers (copy)"
+    assert copy["status"] == "draft"
+    assert copy["activated_at"] is None
+    assert set(copy["account_ids"]) == {a["id"], b["id"]}
+    assert copy["daily_cap"] == 17
+    assert copy["exit_on_reply"] is False
+    assert copy["require_approval"] is True
+    assert copy["ai_tone"] == "friendly, brief"
+
+    steps = sorted(copy["steps"], key=lambda s: s["position"])
+    assert len(steps) == 2
+    assert steps[0]["subject"] == "Hi {{first_name}}"
+    assert steps[1]["wait_days"] == 3
+    assert steps[1]["body"] == "Follow up"
+
+    # The source campaign is untouched — still active with its own steps.
+    src = api.get(
+        f"/api/email-outreach/campaigns/{camp['id']}", headers=cc_org["headers"]
+    ).json()
+    assert src["status"] == "active"
+    assert len(src["steps"]) == 2
+
+    # A template, not a clone of the audience.
+    assert copy["active_enrollments"] == 0
+
+
+def test_duplicate_campaign_cross_org_404s(cc_org, api, probe_ok, team_headers):
+    acct = _mk_account(cc_org, api, from_email="dup-iso@campaignco.com")
+    camp = _mk_campaign(cc_org, api, acct["id"], **_ALWAYS)
+    r = api.post(
+        f"/api/email-outreach/campaigns/{camp['id']}/duplicate", headers=team_headers
+    )
+    assert r.status_code == 404
+
+
+# --- campaign templates ------------------------------------------------------
+
+
+def test_templates_listed_separately_from_real_campaigns(cc_org, api, probe_ok):
+    acct = _mk_account(cc_org, api, from_email="tmpl-list@campaignco.com")
+    real = _mk_campaign(cc_org, api, acct["id"], **_ALWAYS)
+    tmpl = _mk_campaign(cc_org, api, acct["id"], is_template=True, **_ALWAYS)
+    assert tmpl["is_template"] is True
+    assert real["is_template"] is False
+
+    campaigns = api.get("/api/email-outreach/campaigns", headers=cc_org["headers"]).json()
+    campaign_ids = {c["id"] for c in campaigns}
+    assert real["id"] in campaign_ids
+    assert tmpl["id"] not in campaign_ids
+
+    templates = api.get(
+        "/api/email-outreach/campaigns/templates", headers=cc_org["headers"]
+    ).json()
+    template_ids = {c["id"] for c in templates}
+    assert tmpl["id"] in template_ids
+    assert real["id"] not in template_ids
+
+
+def test_template_cannot_activate_or_enroll(cc_org, api, probe_ok):
+    acct = _mk_account(cc_org, api, from_email="tmpl-guard@campaignco.com")
+    tmpl = _mk_campaign(cc_org, api, acct["id"], is_template=True, **_ALWAYS)
+    _set_steps(cc_org, api, tmpl["id"], [{"position": 1, "body": "hi"}])
+    contact = _mk_contact(cc_org, api, email_addr="tmpl-guard-lead@example.com")
+
+    r = _activate(cc_org, api, tmpl["id"])
+    assert r.status_code == 422
+    assert "template" in r.json()["detail"].lower()
+
+    r2 = api.post(
+        f"/api/email-outreach/campaigns/{tmpl['id']}/enroll",
+        json={"contact_ids": [contact]},
+        headers=cc_org["headers"],
+    )
+    assert r2.status_code == 422
+    assert "template" in r2.json()["detail"].lower()
+
+
+def test_create_campaign_from_template_clones_config_pool_and_steps(cc_org, api, probe_ok):
+    tmpl_a = _mk_account(cc_org, api, from_email="tmpl-a@campaignco.com")
+    tmpl_b = _mk_account(cc_org, api, from_email="tmpl-b@campaignco.com")
+    tmpl = _mk_campaign(
+        cc_org,
+        api,
+        tmpl_a["id"],
+        account_ids=[tmpl_a["id"], tmpl_b["id"]],
+        is_template=True,
+        daily_cap=17,
+        exit_on_reply=False,
+        require_approval=True,
+        ai_tone="friendly, brief",
+        **_ALWAYS,
+    )
+    _set_steps(
+        cc_org,
+        api,
+        tmpl["id"],
+        [
+            {"position": 1, "subject": "Hi {{first_name}}", "body": "Intro"},
+            {"position": 2, "subject": None, "body": "Follow up", "wait_days": 3},
+        ],
+    )
+
+    real_acct = _mk_account(cc_org, api, from_email="from-tmpl@campaignco.com")
+    r = api.post(
+        "/api/email-outreach/campaigns",
+        json={
+            "name": "From the template",
+            "account_id": real_acct["id"],
+            "template_id": tmpl["id"],
+        },
+        headers=cc_org["headers"],
+    )
+    assert r.status_code == 201, r.text
+    created = r.json()
+
+    assert created["is_template"] is False
+    assert created["name"] == "From the template"
+    # Pool comes from the request, not inherited from the template.
+    assert created["account_ids"] == [real_acct["id"]]
+    assert created["daily_cap"] == 17
+    assert created["exit_on_reply"] is False
+    assert created["require_approval"] is True
+    assert created["ai_tone"] == "friendly, brief"
+
+    steps = sorted(created["steps"], key=lambda s: s["position"])
+    assert len(steps) == 2
+    assert steps[0]["subject"] == "Hi {{first_name}}"
+    assert steps[1]["wait_days"] == 3
+
+    # Independent copy — editing the new campaign's steps doesn't touch the
+    # template.
+    _set_steps(cc_org, api, created["id"], [{"position": 1, "body": "Changed"}])
+    tmpl_after = api.get(
+        f"/api/email-outreach/campaigns/{tmpl['id']}", headers=cc_org["headers"]
+    ).json()
+    assert len(tmpl_after["steps"]) == 2
+    assert tmpl_after["steps"][0]["subject"] == "Hi {{first_name}}"
+
+    assert _activate(cc_org, api, created["id"]).status_code == 200
+
+
+def test_create_campaign_with_non_template_id_422s(cc_org, api, probe_ok):
+    acct = _mk_account(cc_org, api, from_email="not-a-tmpl@campaignco.com")
+    real = _mk_campaign(cc_org, api, acct["id"], **_ALWAYS)
+    r = api.post(
+        "/api/email-outreach/campaigns",
+        json={"name": "Nope", "account_id": acct["id"], "template_id": real["id"]},
+        headers=cc_org["headers"],
+    )
+    assert r.status_code == 422
+
+
+def test_delete_template_but_not_real_campaign(cc_org, api, probe_ok):
+    acct = _mk_account(cc_org, api, from_email="tmpl-del@campaignco.com")
+    tmpl = _mk_campaign(cc_org, api, acct["id"], is_template=True, **_ALWAYS)
+    _set_steps(cc_org, api, tmpl["id"], [{"position": 1, "body": "hi"}])
+    real = _mk_campaign(cc_org, api, acct["id"], **_ALWAYS)
+
+    r = api.delete(f"/api/email-outreach/campaigns/{tmpl['id']}", headers=cc_org["headers"])
+    assert r.status_code == 204
+    assert api.get(
+        f"/api/email-outreach/campaigns/{tmpl['id']}", headers=cc_org["headers"]
+    ).status_code == 404
+
+    r2 = api.delete(f"/api/email-outreach/campaigns/{real['id']}", headers=cc_org["headers"])
+    assert r2.status_code == 422
+
+
+def test_duplicate_template_stays_a_template(cc_org, api, probe_ok):
+    acct = _mk_account(cc_org, api, from_email="tmpl-dup@campaignco.com")
+    tmpl = _mk_campaign(cc_org, api, acct["id"], is_template=True, **_ALWAYS)
+    r = api.post(
+        f"/api/email-outreach/campaigns/{tmpl['id']}/duplicate", headers=cc_org["headers"]
+    )
+    assert r.status_code == 201
+    copy = r.json()
+    assert copy["is_template"] is True
+    templates = api.get(
+        "/api/email-outreach/campaigns/templates", headers=cc_org["headers"]
+    ).json()
+    assert copy["id"] in {t["id"] for t in templates}
+
+
 # --- analytics + usage ------------------------------------------------------
 
 

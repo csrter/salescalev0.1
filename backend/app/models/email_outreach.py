@@ -211,6 +211,15 @@ class EmailCampaign(Base):
     # prompt (which stays byte-stable for prompt caching).
     ai_tone: Mapped[Optional[str]] = mapped_column(String(200))
     ai_example: Mapped[Optional[str]] = mapped_column(Text)
+    # A template holds config + pool + steps for reuse but is otherwise inert:
+    # the API refuses to activate it or enroll anyone into it (see
+    # api/email_outreach.activate_campaign / enroll_contacts). "Create from
+    # template" clones a template into a normal is_template=False campaign
+    # (create_campaign's template_id path), mirroring the duplicate-campaign
+    # endpoint.
+    is_template: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False, server_default="0"
+    )
     settings: Mapped[Optional[dict]] = mapped_column(JSON)
     activated_at: Mapped[Optional[dt.datetime]] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[dt.datetime] = created_at_column()

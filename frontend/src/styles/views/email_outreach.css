@@ -20,6 +20,13 @@
   margin-left: var(--space-2);
 }
 
+.eml-row-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  justify-content: flex-end;
+}
+
 .eml-subnav {
   display: flex;
   align-items: center;

@@ -1522,6 +1522,12 @@ class EmailCampaignIn(BaseModel):
     # AI writing controls (Feature C), threaded into generate_ai_snippet.
     ai_tone: Optional[str] = Field(default=None, max_length=200)
     ai_example: Optional[str] = Field(default=None, max_length=10000)
+    # True saves this as a reusable template instead of a real campaign — see
+    # api.email_outreach.create_campaign. template_id, if given, clones an
+    # existing template's config + pool + steps into this (real) campaign;
+    # the source must itself have is_template=True.
+    is_template: bool = False
+    template_id: Optional[str] = None
 
     @field_validator("send_days")
     @classmethod
@@ -1683,6 +1689,12 @@ class SmsCampaignIn(BaseModel):
     name: str = Field(min_length=1, max_length=200)
     account_id: str
     client_id: Optional[str] = None
+    # True saves this as a reusable template instead of a real campaign — see
+    # api.sms_outreach.create_campaign. template_id, if given, clones an
+    # existing template's config + steps into this (real) campaign; the
+    # source must itself have is_template=True.
+    is_template: bool = False
+    template_id: Optional[str] = None
     # None = inherit (client tz → org tz → "America/New_York"), resolved in the
     # create endpoint. An explicit value still wins.
     timezone: Optional[str] = Field(default=None, max_length=64)

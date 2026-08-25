@@ -1877,6 +1877,10 @@ export interface EmailCampaign {
   /** When on, an enrollment's next step is held (deferred, not skipped) until
    * a team member approves it on the Review tab. */
   require_approval: boolean;
+  /** A template holds config + pool + steps for reuse; it never activates or
+   * accepts enrollments. Templates never appear in listEmailCampaigns() —
+   * see listEmailCampaignTemplates(). */
+  is_template: boolean;
   created_at: string;
 }
 
@@ -2058,10 +2062,21 @@ export const testEmailAccount = (id: string) =>
 
 // --- campaigns ---
 export const listEmailCampaigns = () => api<EmailCampaign[]>(`${EO}/campaigns`);
+// Templates hold config + pool + steps for reuse; excluded from listEmailCampaigns().
+export const listEmailCampaignTemplates = () =>
+  api<EmailCampaignDetail[]>(`${EO}/campaigns/templates`);
 export const getEmailCampaign = (id: string) =>
   api<EmailCampaignDetail>(`${EO}/campaigns/${id}`);
-export const createEmailCampaign = (body: EmailCampaignBody & { name: string; account_ids: string[] }) =>
-  api<EmailCampaignDetail>(`${EO}/campaigns`, { method: "POST", body: JSON.stringify(body) });
+export const createEmailCampaign = (
+  body: EmailCampaignBody & {
+    name: string;
+    account_ids: string[];
+    /** Save as a reusable template instead of a real campaign. */
+    is_template?: boolean;
+    /** Clone an existing template's config + steps into this campaign. */
+    template_id?: string;
+  },
+) => api<EmailCampaignDetail>(`${EO}/campaigns`, { method: "POST", body: JSON.stringify(body) });
 export const updateEmailCampaign = (id: string, body: EmailCampaignBody) =>
   api<EmailCampaignDetail>(`${EO}/campaigns/${id}`, {
     method: "PATCH",
@@ -2078,6 +2093,12 @@ export const pauseEmailCampaign = (id: string) =>
   api<EmailCampaignDetail>(`${EO}/campaigns/${id}/pause`, { method: "POST" });
 export const archiveEmailCampaign = (id: string) =>
   api<EmailCampaignDetail>(`${EO}/campaigns/${id}/archive`, { method: "POST" });
+export const duplicateEmailCampaign = (id: string) =>
+  api<EmailCampaignDetail>(`${EO}/campaigns/${id}/duplicate`, { method: "POST" });
+// Templates only — a real campaign's send history means it can only be
+// archived, never deleted.
+export const deleteEmailCampaignTemplate = (id: string) =>
+  api<void>(`${EO}/campaigns/${id}`, { method: "DELETE" });
 export const enrollEmailContacts = (
   id: string,
   body: { contact_ids: string[] } | { list_id: string },
@@ -2376,6 +2397,10 @@ export interface SmsCampaign extends SmsFunnelStats {
   steps_count: number;
   /** Failed sends grouped by reason, most common first — send diagnostics. */
   failure_reasons: SmsFailureReason[];
+  /** A template holds config + steps for reuse; it never activates or
+   * accepts enrollments. Templates never appear in listSmsCampaigns() —
+   * see listSmsCampaignTemplates(). */
+  is_template: boolean;
   created_at: string;
 }
 
@@ -2606,10 +2631,21 @@ export const testSmsAccount = (id: string) =>
 
 // --- campaigns ---
 export const listSmsCampaigns = () => api<SmsCampaign[]>(`${SO}/campaigns`);
+// Templates hold config + steps for reuse; excluded from listSmsCampaigns().
+export const listSmsCampaignTemplates = () =>
+  api<SmsCampaignDetail[]>(`${SO}/campaigns/templates`);
 export const getSmsCampaign = (id: string) =>
   api<SmsCampaignDetail>(`${SO}/campaigns/${id}`);
-export const createSmsCampaign = (body: SmsCampaignBody & { name: string; account_id: string }) =>
-  api<SmsCampaignDetail>(`${SO}/campaigns`, { method: "POST", body: JSON.stringify(body) });
+export const createSmsCampaign = (
+  body: SmsCampaignBody & {
+    name: string;
+    account_id: string;
+    /** Save as a reusable template instead of a real campaign. */
+    is_template?: boolean;
+    /** Clone an existing template's config + steps into this campaign. */
+    template_id?: string;
+  },
+) => api<SmsCampaignDetail>(`${SO}/campaigns`, { method: "POST", body: JSON.stringify(body) });
 export const updateSmsCampaign = (id: string, body: SmsCampaignBody) =>
   api<SmsCampaignDetail>(`${SO}/campaigns/${id}`, {
     method: "PATCH",
@@ -2626,6 +2662,12 @@ export const pauseSmsCampaign = (id: string) =>
   api<SmsCampaignDetail>(`${SO}/campaigns/${id}/pause`, { method: "POST" });
 export const archiveSmsCampaign = (id: string) =>
   api<SmsCampaignDetail>(`${SO}/campaigns/${id}/archive`, { method: "POST" });
+export const duplicateSmsCampaign = (id: string) =>
+  api<SmsCampaignDetail>(`${SO}/campaigns/${id}/duplicate`, { method: "POST" });
+// Templates only — a real campaign's send history means it can only be
+// archived, never deleted.
+export const deleteSmsCampaignTemplate = (id: string) =>
+  api<void>(`${SO}/campaigns/${id}`, { method: "DELETE" });
 export const enrollSmsContacts = (
   id: string,
   body: { contact_ids?: string[]; client_id?: string; list_id?: string },

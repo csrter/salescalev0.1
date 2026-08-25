@@ -857,6 +857,7 @@ def _campaign_out(db: Session, c: SmsCampaign, *, full: bool = False) -> dict:
         "include_compliance_footer": c.include_compliance_footer,
         "stop_after_branch": c.stop_after_branch,
         "auto_enroll_new_leads": c.auto_enroll_new_leads,
+        "is_template": c.is_template,
         "activated_at": c.activated_at.isoformat() if c.activated_at else None,
         "created_at": c.created_at.isoformat(),
         # Campaign list/detail always reports LIFETIME stats — the dashboard's
@@ -882,10 +883,43 @@ def list_campaigns(
     user: User = Depends(require_team),
     scope: TenantScope = Depends(get_scope),
 ):
-    stmt = scope.filter(select(SmsCampaign), SmsCampaign).order_by(
-        SmsCampaign.created_at.desc()
-    )
+    stmt = scope.filter(
+        select(SmsCampaign).where(SmsCampaign.is_template.is_(False)), SmsCampaign
+    ).order_by(SmsCampaign.created_at.desc())
     return [_campaign_out(db, c) for c in db.execute(stmt).scalars().all()]
+
+
+@router.get("/campaigns/templates")
+def list_campaign_templates(
+    db: Session = Depends(get_db),
+    user: User = Depends(require_team),
+    scope: TenantScope = Depends(get_scope),
+):
+    stmt = scope.filter(
+        select(SmsCampaign).where(SmsCampaign.is_template.is_(True)), SmsCampaign
+    ).order_by(SmsCampaign.created_at.desc())
+    return [_campaign_out(db, c, full=True) for c in db.execute(stmt).scalars().all()]
+
+
+def _clone_sms_steps(db: Session, organization_id: str, source_id: str, target_id: str) -> None:
+    steps = db.execute(
+        select(SmsStep).where(SmsStep.campaign_id == source_id).order_by(SmsStep.position)
+    ).scalars()
+    for s in steps:
+        db.add(
+            SmsStep(
+                organization_id=organization_id,
+                campaign_id=target_id,
+                position=s.position,
+                wait_days=s.wait_days,
+                wait_minutes=s.wait_minutes,
+                trigger=s.trigger,
+                body_template=s.body_template,
+                branches=s.branches,
+                ai_branching=s.ai_branching,
+                ai_instructions=s.ai_instructions,
+            )
+        )
 
 
 @router.post("/campaigns", status_code=201)
@@ -896,6 +930,38 @@ def create_campaign(
     scope: TenantScope = Depends(get_scope),
 ):
     account = _scoped_get(db, scope, SmsAccount, body.account_id)
+
+    if body.template_id:
+        # Clone a template's full config + steps into a new real campaign —
+        # name/account come from this request, everything else (client,
+        # window, days, cap, compliance/branch settings) is inherited
+        # verbatim, same fields duplicate_campaign copies. Editable after via
+        # the normal PATCH.
+        template = _scoped_get(db, scope, SmsCampaign, body.template_id)
+        if not template.is_template:
+            raise HTTPException(422, "template_id does not refer to a template")
+        campaign = SmsCampaign(
+            organization_id=scope.organization_id,
+            client_id=template.client_id,
+            name=body.name,
+            status=SMS_CAMPAIGN_DRAFT,
+            account_id=account.id,
+            timezone=template.timezone,
+            send_window_start=template.send_window_start,
+            send_window_end=template.send_window_end,
+            send_days=template.send_days,
+            daily_cap=template.daily_cap,
+            exit_on_reply=template.exit_on_reply,
+            include_compliance_footer=template.include_compliance_footer,
+            stop_after_branch=template.stop_after_branch,
+            auto_enroll_new_leads=template.auto_enroll_new_leads,
+        )
+        db.add(campaign)
+        db.flush()
+        _clone_sms_steps(db, scope.organization_id, template.id, campaign.id)
+        db.commit()
+        return _campaign_out(db, campaign, full=True)
+
     if body.send_window_start >= body.send_window_end:
         raise HTTPException(422, "send_window_start must be before send_window_end")
     client = None
@@ -933,6 +999,7 @@ def create_campaign(
         include_compliance_footer=body.include_compliance_footer,
         stop_after_branch=body.stop_after_branch,
         auto_enroll_new_leads=body.auto_enroll_new_leads,
+        is_template=body.is_template,
     )
     db.add(campaign)
     db.commit()
@@ -948,6 +1015,61 @@ def get_campaign(
 ):
     campaign = _scoped_get(db, scope, SmsCampaign, campaign_id)
     return _campaign_out(db, campaign, full=True)
+
+
+@router.post("/campaigns/{campaign_id}/duplicate", status_code=201)
+def duplicate_campaign(
+    campaign_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_admin),
+    scope: TenantScope = Depends(get_scope),
+):
+    """Clone a campaign's config + steps into a new draft (same is_template as
+    the source — duplicating a real campaign makes a draft, duplicating a
+    template makes another template). Never copies audience/enrollments; a
+    duplicate always starts empty and inert (draft, no activated_at) until an
+    admin reviews and activates it."""
+    source = _scoped_get(db, scope, SmsCampaign, campaign_id)
+    copy = SmsCampaign(
+        organization_id=scope.organization_id,
+        client_id=source.client_id,
+        name=f"{source.name} (copy)",
+        status=SMS_CAMPAIGN_DRAFT,
+        account_id=source.account_id,
+        timezone=source.timezone,
+        send_window_start=source.send_window_start,
+        send_window_end=source.send_window_end,
+        send_days=source.send_days,
+        daily_cap=source.daily_cap,
+        exit_on_reply=source.exit_on_reply,
+        include_compliance_footer=source.include_compliance_footer,
+        stop_after_branch=source.stop_after_branch,
+        auto_enroll_new_leads=source.auto_enroll_new_leads,
+        is_template=source.is_template,
+    )
+    db.add(copy)
+    db.flush()
+    _clone_sms_steps(db, scope.organization_id, source.id, copy.id)
+    db.commit()
+    return _campaign_out(db, copy, full=True)
+
+
+@router.delete("/campaigns/{campaign_id}", status_code=204)
+def delete_campaign(
+    campaign_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_admin),
+    scope: TenantScope = Depends(get_scope),
+):
+    """Hard-delete — templates only. A real campaign's send history is an
+    audit record, so it can only be archived, never deleted; a template
+    never sends anything and never gets enrollments, so nothing is lost."""
+    campaign = _scoped_get(db, scope, SmsCampaign, campaign_id)
+    if not campaign.is_template:
+        raise HTTPException(422, "Only templates can be deleted — archive a real campaign instead")
+    db.execute(SmsStep.__table__.delete().where(SmsStep.campaign_id == campaign.id))
+    db.delete(campaign)
+    db.commit()
 
 
 @router.patch("/campaigns/{campaign_id}")
@@ -1103,6 +1225,10 @@ def activate_campaign(
     scope: TenantScope = Depends(get_scope),
 ):
     campaign = _scoped_get(db, scope, SmsCampaign, campaign_id)
+    if campaign.is_template:
+        raise HTTPException(
+            422, "Templates can't be activated — create a campaign from this template first"
+        )
     if campaign.status not in (SMS_CAMPAIGN_DRAFT, SMS_CAMPAIGN_PAUSED):
         raise HTTPException(409, "Only a draft or paused campaign can activate")
     steps = _count(
@@ -1160,6 +1286,10 @@ def enroll_campaign(
     scope: TenantScope = Depends(get_scope),
 ):
     campaign = _scoped_get(db, scope, SmsCampaign, campaign_id)
+    if campaign.is_template:
+        raise HTTPException(
+            422, "Templates can't be enrolled — create a campaign from this template first"
+        )
     org = db.get(Organization, scope.organization_id)
     # Enrollment implies future sends — gate on the monthly send quota up
     # front (402 when already exhausted) so an org can't queue what it can't
