@@ -303,12 +303,15 @@ def test_fully_dead_number_reports_100_percent_not_nothing(st_org, api, creds_ok
 # --- 4. provider-blind rates must not render as confident zeros --------------
 
 
-def test_green_bubble_bluebubbles_reports_null_delivery_and_read(
+def test_green_bubble_delivery_rate_counts_anything_not_failed(
     st_org, api, creds_ok
 ):
-    """A BlueBubbles mailbox pinned to SMS gets no delivery and no read
-    receipt ever — a successful send terminates at "sent". Reporting 0.0%
-    would read as a catastrophic delivery failure."""
+    """A BlueBubbles mailbox pinned to SMS gets no delivery receipt ever — a
+    successful send terminates at "sent". Delivery is therefore measured as
+    "attempted and never reported failed", which is a real signal on that
+    channel (the verify pass flips silent failures to `failed`), so three
+    clean sends read 100%, not 0% and not "—". Read receipts genuinely cannot
+    exist there and still read "—"."""
     acct = _mk_account(
         st_org,
         api,
@@ -325,16 +328,51 @@ def test_green_bubble_bluebubbles_reports_null_delivery_and_read(
 
     row = _campaign_row(_analytics(st_org, api, camp["id"], days=7), camp["id"])
     assert row["sent"] == 3
-    assert row["delivery_measurable"] is False
+    assert row["attempted"] == 3
+    assert row["delivered"] == 0  # confirmed-receipt subset stays honest
+    assert row["delivery_rate"] == 1.0
     assert row["read_measurable"] is False
-    assert row["delivery_rate"] is None
     assert row["read_rate"] is None
     assert _analytics(st_org, api, camp["id"], days=7)["totals"]["read_rate"] is None
 
 
+def test_delivery_rate_is_dragged_down_only_by_real_failures(
+    st_org, api, creds_ok
+):
+    """Failures ARE reported on every channel, so they are what the delivery
+    rate measures. One rejected send out of four attempts is 75%."""
+    acct = _mk_account(
+        st_org,
+        api,
+        provider="bluebubbles",
+        account_sid=None,
+        relay_url="https://relay.example.com",
+        bluebubbles_force_sms=True,
+    )
+    camp = _mk_campaign(st_org, api, acct["id"], name="One bad number")
+    for _ in range(3):
+        _add_message(
+            st_org, account_id=acct["id"], campaign_id=camp["id"], service="SMS"
+        )
+    _add_message(
+        st_org, account_id=acct["id"], campaign_id=camp["id"], status="failed"
+    )
+
+    row = _campaign_row(_analytics(st_org, api, camp["id"], days=7), camp["id"])
+    assert row["sent"] == 3
+    assert row["failed"] == 1
+    assert row["attempted"] == 4
+    assert row["delivery_rate"] == 0.75
+    assert _analytics(st_org, api, camp["id"], days=7)["totals"][
+        "delivery_rate"
+    ] == 0.75
+
+
 def test_twilio_read_rate_is_null_but_delivery_rate_is_real(st_org, api, creds_ok):
-    """Twilio reports delivery and never reports a read — so one is a real
-    measurement and the other is structurally absent."""
+    """Twilio confirms delivery and never reports a read — so the confirmed
+    count is real while the read rate is structurally absent. The delivery
+    rate still measures non-failure, so an unconfirmed-but-unfailed send is
+    not held against it."""
     acct = _mk_account(st_org, api)
     camp = _mk_campaign(st_org, api, acct["id"], name="Twilio split")
     _add_message(
@@ -347,8 +385,8 @@ def test_twilio_read_rate_is_null_but_delivery_rate_is_real(st_org, api, creds_o
     _add_message(st_org, account_id=acct["id"], campaign_id=camp["id"])
 
     row = _campaign_row(_analytics(st_org, api, camp["id"], days=7), camp["id"])
-    assert row["delivery_measurable"] is True
-    assert row["delivery_rate"] == 0.5
+    assert row["delivered"] == 1
+    assert row["delivery_rate"] == 1.0
     assert row["read_measurable"] is False
     assert row["read_rate"] is None
 

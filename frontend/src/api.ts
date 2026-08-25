@@ -2346,6 +2346,11 @@ export interface SmsFunnelStats {
   /** Active enrollments parked at a reply-triggered step, waiting on the lead. */
   awaiting_reply: number;
   sent: number;
+  /** sent + failed — every send the gateway actually attempted. */
+  attempted: number;
+  /** The strict receipt-CONFIRMED subset, not the delivery-rate numerator:
+   * green-bubble SMS never produces a receipt, so this sits near zero on
+   * those numbers even when everything arrived. */
   delivered: number;
   /** iMessage/Sendblue read receipts — the SMS equivalent of "opened". */
   read: number;
@@ -2363,13 +2368,15 @@ export interface SmsFunnelStats {
   /** Inbound automated out-of-office / auto-responder texts (not real replies). */
   auto_replies: number;
   opted_out: number;
-  /** False when no provider in play can emit a delivery receipt (green-bubble
-   * BlueBubbles) and none was ever observed — delivery_rate is then null, and
-   * must render "—" rather than a measured-looking 0.0%. */
-  delivery_measurable: boolean;
   /** False when no provider in play can emit a read receipt (Twilio/Telnyx
-   * never do) and none was ever observed. */
+   * never do) and none was ever observed — read_rate is then null, and must
+   * render "—" rather than a measured-looking 0.0%. */
   read_measurable: boolean;
+  /** sent / attempted — the share of send attempts NOT reported failed.
+   * Deliberately not delivered/sent: only iMessage and the carrier providers
+   * return a delivery receipt, so a receipt-denominated rate reads ~0% on
+   * green-bubble SMS however well it is landing. Failures are reported on
+   * every channel, so this means the same thing everywhere. */
   delivery_rate: number | null;
   read_rate: number | null;
   /** Per MESSAGE — kept for compatibility. On an N-step campaign these divide

@@ -530,7 +530,7 @@ function DashboardPanel({
           ) : (
             <>
               <Kpi label="Sent" value={int(t.sent)} />
-              <Kpi label="Delivered" value={int(t.delivered)} />
+              <Kpi label="Receipt confirmed" value={int(t.delivered)} />
               <Kpi label="Unconfirmed" value={int(t.unconfirmed)} />
               <Kpi label="Failed" value={int(t.failed)} />
               <Kpi label="Delivery rate" value={pct(t.delivery_rate)} />
@@ -550,20 +550,19 @@ function DashboardPanel({
             enrolled in this window — per message they read{" "}
             {pct(t.reply_rate)} reply / {pct(t.opt_out_rate)} opt-out, roughly
             one step's worth of the same thing.
+            {" "}
+            <strong>Delivery rate</strong> is the share of the{" "}
+            {int(t.attempted)} attempted send
+            {t.attempted === 1 ? "" : "s"} that were not reported failed —
+            failures come back on every channel, delivery receipts do not
+            (green-bubble SMS through BlueBubbles never sends one), so “receipt
+            confirmed” only counts iMessage and carrier confirmations.
             {t.unconfirmed > 0 && (
               <>
                 {" "}
                 {int(t.unconfirmed)} send{t.unconfirmed === 1 ? "" : "s"} are
-                still unconfirmed — accepted, with no delivery receipt or
+                still unconfirmed — accepted, with no receipt or device
                 read-back yet.
-              </>
-            )}
-            {!t.delivery_measurable && (
-              <>
-                {" "}
-                Delivery rate reads “—” because no number in play can report a
-                delivery receipt (green-bubble SMS through BlueBubbles never
-                does), not because nothing arrived.
               </>
             )}
             {!t.read_measurable && (
@@ -660,7 +659,10 @@ function DashboardPanel({
               labels={chartLabels}
               series={[
                 { name: "Sent", data: data!.by_day.map((d) => d.sent) },
-                { name: "Delivered", data: data!.by_day.map((d) => d.delivered) },
+                {
+                  name: "Receipt confirmed",
+                  data: data!.by_day.map((d) => d.delivered),
+                },
                 { name: "Read", data: data!.by_day.map((d) => d.read) },
                 { name: "Replied", data: data!.by_day.map((d) => d.replied) },
                 { name: "Failed", data: data!.by_day.map((d) => d.failed) },
@@ -2068,7 +2070,7 @@ function StepStatsLine({ stats }: { stats?: SmsStepStats }) {
     return null;
   return (
     <span className="sms-step-stats">
-      sent {int(stats.sent)} · delivered {int(stats.delivered)} · read{" "}
+      sent {int(stats.sent)} · confirmed {int(stats.delivered)} · read{" "}
       {int(stats.read)} · replies {int(stats.replies)} · failed {int(stats.failed)}
     </span>
   );

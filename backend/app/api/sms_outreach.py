@@ -502,33 +502,32 @@ def _aware(value: dt.datetime) -> dt.datetime:
 
 # --- provider receipt capability ---------------------------------------------
 #
-# Not every channel can report every outcome, and a metric that NO provider in
-# play is able to measure must render as "—", never as a confident 0.0%:
-#   delivery receipt — Twilio/Telnyx/Sendblue all report one. BlueBubbles only
-#     does for iMessage, so a mailbox pinned to green-bubble SMS
-#     (bluebubbles_force_sms) terminates every successful send at "sent" and
-#     structurally cannot produce a delivery rate.
-#   read receipt — iMessage only (Sendblue/BlueBubbles). Twilio and Telnyx
-#     never emit one, so a "read rate" on them is 0 by construction.
+# Read receipts are iMessage-only (Sendblue / BlueBubbles on a blue bubble).
+# Twilio and Telnyx never emit one, so a "read rate" on them is 0 by
+# construction and must render as "—" rather than a confident 0.0%.
+#
+# DELIVERY is deliberately NOT gated the same way. Green-bubble SMS through
+# BlueBubbles never produces a delivery receipt, but the verify pass reads the
+# sending device back and flips genuinely-failed sends to `failed` (see
+# services/sms_verify) — so "accepted and never reported failed" is a checked
+# outcome on every provider, not an assumption. delivery_rate measures exactly
+# that; see _campaign_stats.
 
 
-def _receipt_capabilities(account: Optional[SmsAccount]) -> tuple:
-    """(can_report_delivery, can_report_read) for one sending account."""
+def _can_report_read(account: Optional[SmsAccount]) -> bool:
+    """Whether this sending account's channel can ever report a read receipt."""
     if account is None:
         # Unknown account (deleted row) — don't suppress a real measurement.
-        return True, True
+        return True
     if account.provider == "bluebubbles":
-        imessage = not account.bluebubbles_force_sms
-        return imessage, imessage
-    if account.provider == "sendblue":
-        return True, True
-    return True, False  # twilio / telnyx
+        return not account.bluebubbles_force_sms
+    return account.provider == "sendblue"
 
 
-def _campaign_capabilities(
+def _campaign_can_report_read(
     db: Session, campaign: SmsCampaign, since: Optional[dt.datetime]
-) -> tuple:
-    """Receipt capability rolled up over the accounts that ACTUALLY sent this
+) -> bool:
+    """Read capability rolled up over the accounts that ACTUALLY sent this
     campaign's messages in scope (config can be repointed after the fact),
     falling back to the campaign's configured account when nothing has sent
     yet. Capability is OR-ed: one iMessage account in a mixed campaign makes
@@ -543,9 +542,8 @@ def _campaign_capabilities(
     if not ids and campaign.account_id:
         ids = [campaign.account_id]
     if not ids:
-        return True, True
-    caps = [_receipt_capabilities(db.get(SmsAccount, aid)) for aid in ids]
-    return any(c[0] for c in caps), any(c[1] for c in caps)
+        return True
+    return any(_can_report_read(db.get(SmsAccount, aid)) for aid in ids)
 
 
 # Latency samples are read into Python; bound the scan so a campaign with a
@@ -642,7 +640,12 @@ def _campaign_stats(
 ) -> dict:
     """Computed funnel for one campaign. Definitions (all campaign-scoped):
       sent      = messages the provider accepted (incl. later receipts)
-      delivered = confirmed delivered via the status callback (incl. read)
+      attempted = sent + failed — every send the gateway actually tried
+      delivered = confirmed delivered via the status callback (incl. read).
+                  This is the strict receipt-confirmed subset, NOT the
+                  delivery-rate numerator; green-bubble SMS never produces a
+                  receipt, so on those numbers it sits near zero even when
+                  everything arrived.
       read      = iMessage/Sendblue read receipts — the closest thing SMS has
                   to "opened"; plain carrier SMS never reports this
       failed    = messages the provider (or the network) rejected outright
@@ -666,10 +669,18 @@ def _campaign_stats(
     detail view wants.
 
     Rates are None when the denominator is 0 (undefined, not zero):
-      delivery_rate = delivered/sent, read_rate = read/delivered — each null
-        when no provider in play can emit that receipt type AND none was ever
-        observed (see delivery_measurable/read_measurable), so a structurally
-        impossible metric never renders as a confident 0.0%.
+      delivery_rate = sent/attempted — the fraction of send attempts that were
+        NOT reported failed. Deliberately not delivered/sent: only iMessage
+        and the carrier providers return a delivery receipt, so a
+        receipt-denominated rate reads ~0% on green-bubble SMS however well it
+        is actually landing. A failure, by contrast, IS reported on every
+        channel — carriers and providers return an error, and the BlueBubbles
+        verify pass reads the device back and flips silent failures to
+        `failed` — so "attempted and never reported failed" is the one
+        delivery signal that means the same thing on all of them.
+      read_rate = read/delivered — null when no provider in play can emit a
+        read receipt AND none was ever observed (see read_measurable), so a
+        structurally impossible metric never renders as a confident 0.0%.
       reply_rate / opt_out_rate = per MESSAGE (kept for compatibility).
       reply_rate_per_lead / opt_out_rate_per_lead = per LEAD (÷ enrolled) —
         the honest engagement figures. The message-denominated ones divide
@@ -721,11 +732,10 @@ def _campaign_stats(
     steps_count = _count(
         db, select(func.count(SmsStep.id)).where(SmsStep.campaign_id == cid)
     )
-    delivery_ok, read_ok = _campaign_capabilities(db, campaign, since)
-    # An actual observation always wins over the capability table: if a receipt
-    # of that kind exists, the metric is measured, whatever we assumed about
-    # the provider. The gate only suppresses a rate that is structurally 0.
-    delivery_ok = delivery_ok or delivered > 0
+    read_ok = _campaign_can_report_read(db, campaign, since)
+    # An actual observation always wins over the capability table: if a read
+    # receipt exists, the metric is measured, whatever we assumed about the
+    # provider. The gate only suppresses a rate that is structurally 0.
     read_ok = read_ok or read > 0
     median_delivery, p90_delivery = _delivery_latency(db, cid, since)
     return {
@@ -734,6 +744,7 @@ def _campaign_stats(
         "active_enrollments": active,
         "awaiting_reply": awaiting,
         "sent": sent,
+        "attempted": sent + failed,
         "delivered": delivered,
         "read": read,
         "failed": failed,
@@ -743,9 +754,8 @@ def _campaign_stats(
         "replies": replies,
         "auto_replies": auto_replies,
         "opted_out": opted_out,
-        "delivery_measurable": delivery_ok,
         "read_measurable": read_ok,
-        "delivery_rate": _rate(delivered, sent) if delivery_ok else None,
+        "delivery_rate": _rate(sent, sent + failed),
         "read_rate": _rate(read, delivered) if read_ok else None,
         "reply_rate": _rate(replied, sent),
         "opt_out_rate": _rate(opted_out, sent),
@@ -1763,29 +1773,26 @@ def analytics(
     agg = {
         k: 0
         for k in (
-            "sent", "delivered", "read", "failed", "unconfirmed", "replied",
-            "replies", "auto_replies", "opted_out", "enrolled",
+            "sent", "attempted", "delivered", "read", "failed", "unconfirmed",
+            "replied", "replies", "auto_replies", "opted_out", "enrolled",
             "active_enrollments", "awaiting_reply",
         )
     }
     by_campaign = []
-    # A rate is measurable for the org as a whole if ANY campaign in scope runs
-    # on a provider that can emit that receipt type.
-    delivery_ok = False
+    # The read rate is measurable for the org as a whole if ANY campaign in
+    # scope runs on a provider that can emit a read receipt.
     read_ok = False
     for c in campaigns:
         st = _campaign_stats(db, c, since=since)
         for k in agg:
             agg[k] += st.get(k, 0)
-        delivery_ok = delivery_ok or st["delivery_measurable"]
         read_ok = read_ok or st["read_measurable"]
         by_campaign.append({"campaign_id": c.id, "name": c.name, **st})
     _totals_delivery = _delivery_latency(db, cids, since)
     totals = {
         **agg,
-        "delivery_measurable": delivery_ok,
         "read_measurable": read_ok,
-        "delivery_rate": _rate(agg["delivered"], agg["sent"]) if delivery_ok else None,
+        "delivery_rate": _rate(agg["sent"], agg["attempted"]),
         "read_rate": _rate(agg["read"], agg["delivered"]) if read_ok else None,
         "reply_rate": _rate(agg["replied"], agg["sent"]),
         "opt_out_rate": _rate(agg["opted_out"], agg["sent"]),
