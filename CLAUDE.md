@@ -4102,12 +4102,23 @@ live activation + the entitlement flip, the Outreach module build
       (4 lifetime fires), while every step-2 "yes" branch (where engaged
       leads land, 8–51 sends each) has it OFF and epoxy tx / epoxy tx2 /
       q3 epoxy / q3 rentals have no notify anywhere (q3 rentals' reply step
-      has no branches at all, so nothing can attach). Prepared + dry-ran a
-      prod write enabling notify on the step-2 "yes" branch of all six
-      active campaigns; the commit was blocked by the permission classifier
-      and the user has NOT yet said go — either re-run with approval or the
-      user flips the toggles in the step editor ("Text me when a reply
-      matches this branch").
+      has no branches at all, so nothing can attach). RESOLVED same day
+      with explicit user approval: notify enabled on the step-2 "yes"
+      branch of all six active campaigns (east coast remodel, epoxy tx,
+      epoxy tx2, q3 epoxy, az paint, ca paint) via a dry-run-first prod
+      write, re-read and verified persisted; step-3 "interested" alerts
+      unchanged. An engaged lead ("yes" → pitch sent) now fires the 🔥
+      alert alongside the generic 📩 relay forward. Still open if wanted:
+      the three epoxy campaigns and q3 rentals have no step-3 "interested"
+      reply step, so a positive reply TO THE PITCH there only arrives via
+      the relay — adding an interested branch step (paint-campaign pattern)
+      is the fix. DESKTOP rebuilt same day per the lockstep habit
+      (PyInstaller backend picking up c704fdb's cold-drip fix, which
+      post-dated the last DMG; frontend with the Replied-only toggle
+      verified inside app.asar; DMG 155MB, backend binary hash-matched),
+      installed to /Applications and launch-verified — own backend bound
+      :8000, health 200, /api/sms/campaigns 401 on the packaged backend.
+      Repo-root DMG copy refreshed sha-identical.
 
 - [ ] Stripe live activation + entitlement flip (after 12–14, so real
       limits land everywhere in one pass)
