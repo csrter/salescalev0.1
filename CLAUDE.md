@@ -4306,6 +4306,30 @@ live activation + the entitlement flip, the Outreach module build
       they already got the opener and are parked awaiting_reply, which is the
       designed state.
 
+- [x] All SMS campaigns repointed to the "main" number (2026-08-25, prod ops,
+      NO code change): user asked to reassign every campaign to the account
+      nicknamed "main" — the Sendblue number +16232843671 (Atlas Reach; note
+      every SMS campaign in the platform belongs to Atlas Reach, there are no
+      Salescale-org ones). 18 campaigns moved off "iphone 15" (+14803700796)
+      and "cell" (+14807207351); 27 of 27 non-archived campaigns, INCLUDING the
+      2 templates ("general", "general (copy)" — a template's account seeds
+      campaigns created from it), now sit on main. The 4 ARCHIVED campaigns were
+      deliberately left on their original numbers: their account_id is the
+      record of which number actually ran them. Safe to do in bulk because
+      nothing was active — the API's own guard (409 "Pause the campaign before
+      changing its number") would have refused an active one, and 0 were.
+      FLAGGED to the user, unresolved: (1) the main Sendblue account is in
+      TRIAL/SANDBOX mode — 780 of its 799 lifetime sends failed 400 "This
+      contact must be verified before sending messages to it" (740 in one
+      rejected blast on 08-10, the pattern continuing through 08-19). Activating
+      any of these campaigns against a cold list will fail wholesale until the
+      Sendblue account is upgraded out of trial. (2) Its daily_send_cap is 200,
+      far below what these campaigns run (east coast remodel did ~4,600 in a
+      day). (3) ~2,658 active enrollments were opened from a DIFFERENT number,
+      so their next message arrives in a new thread for the recipient; inbound
+      replies still attribute correctly (matched phone -> contact, not by
+      account).
+
 - [ ] Stripe live activation + entitlement flip (after 12–14, so real
       limits land everywhere in one pass)
 - [ ] Outreach module build (dev-mode) — go-live gated on Meta App
