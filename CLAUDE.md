@@ -4330,6 +4330,47 @@ live activation + the entitlement flip, the Outreach module build
       replies still attribute correctly (matched phone -> contact, not by
       account).
 
+- [x] SMS account deletion was impossible once an account had sent
+      (2026-08-25, 508c3d9, migration c8f1d3b6e720, web + desktop): user could
+      not remove the "iphone 15" BlueBubbles account. DELETE /api/sms/accounts/
+      {id} died on a ForeignKeyViolation — sms_messages.account_id was a NOT
+      NULL FK and the handler only nulled the CAMPAIGNS pointing at the account,
+      never the ledger (9,161 rows blocked this one). Reproduced on prod inside
+      a rolled-back transaction rather than guessed. Reached the browser as the
+      generic 500 the catch-all middleware produces. SAME TRAP AS THE CSV COLUMN
+      CAPS AND THE CONTACT-DELETE CASCADE: SQLite does not enforce FKs, so the
+      existing delete test passed and only Postgres failed — the new test
+      therefore asserts the ROW-LEVEL contract (rows survive, detached, same
+      org) and says so in its docstring, and was verified to FAIL against the
+      pre-change tree. FIX: column made nullable (loosening-only) and the
+      handler now DETACHES the ledger (account_id = None). Detach, not cascade:
+      SmsMessage is append-only — the audit trail of what was really sent and
+      the source of the monthly send meter — which is exactly the posture
+      services/crm._cascade_contact_refs already takes for these same rows on
+      contact deletion. The meter counts by organization_id so detaching costs
+      it nothing, per-row from_number still records which number sent it
+      (verified: all 9,161 carry it), and every per-account reader (channel
+      health, verify poller, lead_notify retry, lead_relay, read-capability)
+      filters by a concrete id so detached rows drop out of views about a
+      channel that no longer exists — _campaign_can_report_read already skipped
+      falsy ids for exactly this case. Tests 769 -> 770. Deployed: migration
+      applied to live Supabase (alembic current = c8f1d3b6e720 head), column
+      confirmed nullable, health green, delete re-simulated on prod (succeeds,
+      9,161 rows survive detached, then rolled back); desktop PyInstaller
+      backend + DMG (155MB, binary hash-matched into the app bundle, the new
+      revision confirmed inside the frozen archive via CArchiveReader) rebuilt
+      in lockstep per the standing migration rule, installed and
+      launch-verified.
+      NOT DELETED — flagged for the user's call: the account itself is still
+      there. Deleting it makes its inbound webhook
+      /api/webhooks/imessage/bluebubbles/{account_id} 404 (the handler resolves
+      the account by id), so a STOP from any of the 6,006 leads ever texted from
+      +14803700796 would no longer be captured — and suppression is org-wide by
+      phone, so a missed STOP means that lead can still be texted from the new
+      number. Either point the BlueBubbles Mac's webhook away first / accept
+      the gap, or simply leave the account connected and unused now that no
+      campaign references it.
+
 - [ ] Stripe live activation + entitlement flip (after 12–14, so real
       limits land everywhere in one pass)
 - [ ] Outreach module build (dev-mode) — go-live gated on Meta App
