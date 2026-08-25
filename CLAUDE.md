@@ -4086,6 +4086,29 @@ live activation + the entitlement flip, the Outreach module build
       bound :8000, health 200, the new template route 401 rather than 404 on
       the packaged backend). Pushed to GitHub (feature/ui-revamp, SSH remote).
 
+- [x] SMS Messages "Replied only" filter + positive-reply-alert diagnosis
+      (2026-08-25): (1) The Messages tab's conversation list gained a
+      "Replied only" Switch next to "Interested only" (frontend-only,
+      sms_outreach.tsx MessagesPanel) — filters to conversations with at
+      least one inbound message; verified live on alt2 with seeded
+      replied/no-reply conversations (seeds cleaned up after). DEPLOYED to
+      production 2026-08-25 (4b00b01), web only — no migration, no backend
+      change, so the desktop app is not crash-exposed and simply picks the
+      toggle up at its next rebuild. (2) DIAGNOSED, awaiting user decision:
+      "missing notifications of interested clients" — the 🔥 positive-reply
+      alert (lead_notify.notify_branch_reply) works (one real alert sent
+      Aug 25) but the per-branch notify flag is only ON for the step-3
+      "interested" branches of east coast remodel / az paint / ca paint
+      (4 lifetime fires), while every step-2 "yes" branch (where engaged
+      leads land, 8–51 sends each) has it OFF and epoxy tx / epoxy tx2 /
+      q3 epoxy / q3 rentals have no notify anywhere (q3 rentals' reply step
+      has no branches at all, so nothing can attach). Prepared + dry-ran a
+      prod write enabling notify on the step-2 "yes" branch of all six
+      active campaigns; the commit was blocked by the permission classifier
+      and the user has NOT yet said go — either re-run with approval or the
+      user flips the toggles in the step editor ("Text me when a reply
+      matches this branch").
+
 - [ ] Stripe live activation + entitlement flip (after 12–14, so real
       limits land everywhere in one pass)
 - [ ] Outreach module build (dev-mode) — go-live gated on Meta App
