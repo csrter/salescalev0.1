@@ -453,6 +453,7 @@ def _branch_options(step: SmsStep) -> list:
                 "notify": bool(b.get("notify")),
                 "add_to_pipeline": bool(b.get("add_to_pipeline")),
                 "deal_value": deal_value,
+                "interested": bool(b.get("interested")),
             }
         )
     return out
@@ -1456,9 +1457,15 @@ def process_enrollment(db: Session, enrollment: SmsEnrollment) -> None:
     branch_body: Optional[str] = None
     branch_label: Optional[str] = None
     matched_reply_text: Optional[str] = None
+    matched: Optional[dict] = None
     if (current.trigger or "schedule") == SMS_TRIGGER_REPLY:
         matched_reply_text = branch_reply_text(db, enrollment, current)
         branch_body, branch_label = select_branch(db, org, current, matched_reply_text)
+        if branch_label is not None:
+            matched = next(
+                (b for b in _branch_options(current) if b["label"] == branch_label),
+                None,
+            )
     body = render_full(
         db, org, enrollment, current, contact=contact, body_template=branch_body
     )
@@ -1509,6 +1516,7 @@ def process_enrollment(db: Session, enrollment: SmsEnrollment) -> None:
         enrollment_id=enrollment.id,
         org_name=(org.name if org else ""),
         now=now,
+        is_interested=bool(matched and matched["interested"]),
     )
     del msg  # the ledger row itself isn't needed by the engine
 
@@ -1525,10 +1533,6 @@ def process_enrollment(db: Session, enrollment: SmsEnrollment) -> None:
             # on the lead's next message.
             if branch_label is not None:
                 enrollment.branch_sent_at = now
-                matched = next(
-                    (b for b in _branch_options(current) if b["label"] == branch_label),
-                    None,
-                )
                 if matched and matched["notify"] and org is not None:
                     lead_notify.notify_branch_reply(
                         db,
@@ -1617,15 +1621,36 @@ def run_due(db: Session, limit: int = 200) -> int:
     Reply-step responses are processed FIRST within the batch: the account
     min-spacing throttle effectively serializes an account to ~one send per
     tick, so plain FIFO would leave a time-sensitive "answer their reply in 3
-    minutes" send queued behind an arbitrary backlog of cold drip sends."""
+    minutes" send queued behind an arbitrary backlog of cold drip sends.
+
+    This prioritization used to happen by sorting AFTER a single `limit`-
+    capped query ordered by next_run_at — which only works if the reply
+    response is actually IN that page. A large cold-drip backlog (thousands
+    of position-1 sends all due within the same window, e.g. right after
+    activating a big campaign) fills the page with earlier next_run_at rows
+    and a reply response due minutes later never gets fetched at all,
+    starving it indefinitely tick after tick regardless of the sort below.
+    Fixed by fetching reply-triggered due enrollments in their OWN query,
+    unbounded by the cold-send batch limit (matches on exact position — the
+    overwhelming common case; the rare position mismatch, e.g. a step
+    deleted out from under an in-flight enrollment, just falls through to
+    the general query and drains on a later tick instead of being dropped)."""
     now = utcnow()
-    due = (
+    reply_due = (
         db.execute(
             select(SmsEnrollment)
+            .join(
+                SmsStep,
+                and_(
+                    SmsStep.campaign_id == SmsEnrollment.campaign_id,
+                    SmsStep.position == SmsEnrollment.current_position,
+                ),
+            )
             .where(
                 SmsEnrollment.status == SMS_ENROLL_ACTIVE,
                 SmsEnrollment.next_run_at.is_not(None),
                 SmsEnrollment.next_run_at <= now,
+                SmsStep.trigger == SMS_TRIGGER_REPLY,
             )
             .order_by(SmsEnrollment.next_run_at)
             .limit(limit)
@@ -1633,6 +1658,23 @@ def run_due(db: Session, limit: int = 200) -> int:
         .scalars()
         .all()
     )
+    reply_ids = {e.id for e in reply_due}
+    remaining = max(limit - len(reply_due), 0)
+    other_due = []
+    if remaining:
+        other_stmt = select(SmsEnrollment).where(
+            SmsEnrollment.status == SMS_ENROLL_ACTIVE,
+            SmsEnrollment.next_run_at.is_not(None),
+            SmsEnrollment.next_run_at <= now,
+        )
+        if reply_ids:
+            other_stmt = other_stmt.where(SmsEnrollment.id.notin_(reply_ids))
+        other_due = (
+            db.execute(other_stmt.order_by(SmsEnrollment.next_run_at).limit(remaining))
+            .scalars()
+            .all()
+        )
+    due = reply_due + other_due
     if due:
         steps_by_campaign = {
             cid: _steps(db, cid) for cid in {e.campaign_id for e in due}

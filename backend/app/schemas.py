@@ -1763,6 +1763,11 @@ class SmsStepBranchIn(BaseModel):
     # human having to add it manually.
     add_to_pipeline: bool = False
     deal_value: Optional[float] = Field(default=None, ge=0, le=10_000_000)
+    # When true, a reply matching this branch stamps the outbound response
+    # message is_interested=true (services/sms_campaigns.py) — the signal the
+    # Messages tab's "interested only" filter reads. E.g. flag the "yes"
+    # branch so a positive reply surfaces there.
+    interested: bool = False
 
     @field_validator("keywords")
     @classmethod

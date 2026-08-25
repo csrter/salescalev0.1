@@ -470,6 +470,14 @@ class SmsMessage(Base):
     is_auto_reply: Mapped[bool] = mapped_column(
         Boolean, default=False, nullable=False, server_default=text("false")
     )
+    # Outbound only: this row is a reply-step branch response whose branch is
+    # flagged `interested` (see SmsStep.branches). Stamped once at send time
+    # from the matched branch — persisted rather than recomputed from the
+    # step's current branches, so it survives later edits to the step. The
+    # Messages tab's "interested only" filter reads this.
+    is_interested: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False, server_default=text("false")
+    )
     created_at: Mapped[dt.datetime] = created_at_column()
 
 

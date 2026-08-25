@@ -890,11 +890,16 @@ def send(
     enrollment_id: Optional[str] = None,
     org_name: str = "",
     now: Optional[dt.datetime] = None,
+    is_interested: bool = False,
 ) -> Tuple[str, Optional[SmsMessage]]:
     """Send one SMS through every guard. Returns (result_code, ledger_row) —
     ledger_row is None only when the send was refused before any attempt
     (blocked/suppressed/cap/window), so refusals never consume quota or leave
-    a false audit trail of provider attempts."""
+    a false audit trail of provider attempts.
+
+    is_interested: stamped on the ledger row as-is — the caller (the reply-
+    branch engine) has already resolved whether the branch being sent is
+    flagged interested; this function doesn't re-derive it."""
     if account.status != SMS_ACCOUNT_ACTIVE:
         return BLOCKED, None
     try:
@@ -966,6 +971,7 @@ def send(
         to_number=to_number,
         from_number=account.from_number,
         body=final_body,
+        is_interested=is_interested,
     )
     try:
         sid, error_code, error_detail = _provider_send(account, to_number, final_body)

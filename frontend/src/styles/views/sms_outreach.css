@@ -573,6 +573,24 @@
   overflow-y: auto;
 }
 
+.sms-thread-filters {
+  position: sticky;
+  top: calc(var(--space-2) * -1);
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  background: var(--card);
+  padding: var(--space-2) var(--space-2) var(--space-3);
+  margin: calc(var(--space-2) * -1) calc(var(--space-2) * -1) 0;
+}
+
+.sms-thread-filters .input {
+  flex: 1;
+  min-width: 160px;
+}
+
 .sms-thread-item {
   appearance: none;
   display: flex;

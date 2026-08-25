@@ -3849,6 +3849,90 @@ def test_reply_response_skips_campaign_cap_but_not_account_cap(
     assert e2.status == "active" and e2.next_run_at is not None  # retries later
 
 
+def test_reply_response_not_starved_by_a_large_cold_backlog(
+    sc_org, api, twilio_creds_ok, captured_sends
+):
+    """Reply-triggered enrollments used to be prioritized only WITHIN a
+    single next_run_at-ordered page capped at `limit` — if more cold-drip
+    sends were due (with an earlier next_run_at) than `limit`, e.g. right
+    after activating a big campaign, a reply response due slightly later
+    never even made it into that page, and was starved indefinitely no
+    matter what the in-batch priority sort did. Reproduced with limit=2 and
+    3 earlier-due cold sends outnumbering it — the production shape (a big
+    east-coast-remodelers campaign had thousands due while a handful of
+    reply responses sat unanswered for 5-9+ minutes)."""
+    acct = _mk_account(sc_org, api, from_number="+14805550726")
+    camp = _mk_campaign(sc_org, api, acct["id"], **_ALWAYS)
+    lead = _mk_contact(sc_org, api, mobile_phone="4805557220", first="Sasha")
+    colds = [
+        _mk_contact(sc_org, api, mobile_phone=f"480555722{i}", first=f"Cold{i}")
+        for i in range(1, 4)
+    ]
+    _set_steps(
+        sc_org, api, camp["id"],
+        [
+            {"position": 1, "body": "First touch"},
+            {"position": 2, "trigger": "reply", "body": "Answered for {{first_name}}"},
+        ],
+    )
+    assert _activate(sc_org, api, camp["id"]).status_code == 200
+    _enroll(sc_org, api, camp["id"], [lead])
+    db = SessionLocal()
+    try:
+        sms_campaigns.run_due(db, limit=1)
+    finally:
+        db.close()
+    assert len(captured_sends) == 1  # lead's step-1 opener
+
+    r = _inbound_reply(api, acct, "+14805557220", "sounds good", sid="SM_starve_1")
+    assert r.status_code == 200
+    lead_e = _get_enrollment(camp["id"], lead)
+    _force_due(lead_e.id)
+
+    # A cold backlog enrolled after the reply, pinned EARLIER than the
+    # reply response so plain next_run_at-ascending-then-limit would fill
+    # the whole page with these before the reply is ever reached.
+    _enroll(sc_org, api, camp["id"], colds)
+    db = SessionLocal()
+    try:
+        import datetime as _dt
+
+        earlier = utcnow() - _dt.timedelta(minutes=5)
+        rows = db.execute(
+            select(SmsEnrollment).where(
+                SmsEnrollment.campaign_id == camp["id"],
+                SmsEnrollment.contact_id.in_(colds),
+            )
+        ).scalars().all()
+        assert len(rows) == 3
+        for row in rows:
+            row.next_run_at = earlier
+        db.commit()
+    finally:
+        db.close()
+
+    # limit=2 is smaller than the 3-strong cold backlog — the bug would drop
+    # the reply response from the query page entirely.
+    db = SessionLocal()
+    try:
+        processed = sms_campaigns.run_due(db, limit=2)
+    finally:
+        db.close()
+    assert processed == 2
+    bodies = [s["body"] for s in captured_sends]
+    assert "Answered for Sasha" in bodies
+
+    # run_due has no org filter (it's the real global scheduler query) and
+    # sc_org is module-scoped — drain the still-due leftover cold sends so
+    # they can't be swept up by a LATER test's own _tick() and pollute its
+    # captured_sends count.
+    db = SessionLocal()
+    try:
+        sms_campaigns.run_due(db, limit=10)
+    finally:
+        db.close()
+
+
 # --- completed is not a dead end: branch re-open + resume-through-new-steps --
 
 
@@ -4891,6 +4975,65 @@ def test_add_to_pipeline_skips_duplicate_and_respects_custom_value(
         assert len(deals) == 1  # still just the one
     finally:
         db.close()
+
+
+# --- interested branch flag surfaces in the Messages list -------------------
+
+
+def test_interested_branch_stamps_outbound_message(
+    sc_org, api, twilio_creds_ok, captured_sends
+):
+    """A reply matching a branch flagged `interested` stamps the outbound
+    response is_interested=true — what the Messages tab's "interested only"
+    filter reads. A reply matching a DIFFERENT (non-flagged) branch leaves it
+    false, and the flag survives into GET /messages."""
+    acct = _mk_account(sc_org, api, from_number="+14805551970")
+    camp = _mk_campaign(sc_org, api, acct["id"], **_ALWAYS)
+    yes_contact = _mk_contact(sc_org, api, mobile_phone="4805551970", first="Yes")
+    no_contact = _mk_contact(sc_org, api, mobile_phone="4805551971", first="No")
+    steps = [
+        {"position": 1, "body": "Hey is this {{company}}?"},
+        {
+            "position": 2,
+            "trigger": "reply",
+            "wait_minutes": 0,
+            "body": "Thanks for getting back to me!",
+            "branches": [
+                {
+                    "label": "Yes",
+                    "keywords": ["yes"],
+                    "body": "Great, when works?",
+                    "interested": True,
+                },
+                {"label": "No", "keywords": ["not interested"], "body": "No worries!"},
+            ],
+        },
+    ]
+    _set_steps(sc_org, api, camp["id"], steps)
+    assert _activate(sc_org, api, camp["id"]).status_code == 200
+    _enroll(sc_org, api, camp["id"], [yes_contact, no_contact])
+    _tick()  # openers
+
+    _reply_and_send(api, acct, "+14805551970", "yes", "SM_interested_yes")
+    _reply_and_send(api, acct, "+14805551971", "not interested", "SM_interested_no")
+
+    rows = api.get("/api/sms/messages", headers=sc_org["headers"]).json()
+    yes_branch_msg = next(
+        m for m in rows if m["contact_id"] == yes_contact and m["body"] == "Great, when works?"
+    )
+    no_branch_msg = next(
+        m for m in rows if m["contact_id"] == no_contact and m["body"] == "No worries!"
+    )
+    assert yes_branch_msg["is_interested"] is True
+    assert no_branch_msg["is_interested"] is False
+
+    # The opener (a schedule step, no branch) is never flagged either.
+    opener = next(
+        m
+        for m in rows
+        if m["contact_id"] == yes_contact and m["id"] != yes_branch_msg["id"] and m["direction"] == "out"
+    )
+    assert opener["is_interested"] is False
 
 
 # --- completed-enrollment reopen tries AI branching, not just keywords ------

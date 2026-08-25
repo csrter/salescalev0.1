@@ -1580,6 +1580,9 @@ def _message_out(m: SmsMessage, contact: Optional[Contact] = None) -> dict:
         # BlueBubbles read-back: null on a "sent" row means the outcome is
         # still provisional, not confirmed.
         "verified_at": m.verified_at.isoformat() if m.verified_at else None,
+        # Outbound only: this is a reply-branch response whose branch is
+        # flagged `interested` — the Messages tab's "interested only" filter.
+        "is_interested": m.is_interested,
         "created_at": m.created_at.isoformat(),
     }
 

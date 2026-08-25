@@ -2418,6 +2418,10 @@ export interface SmsStepBranch {
   /** Deal value in dollars for add_to_pipeline; defaults to 2000 server-side
    * when on and left blank. */
   deal_value?: number | null;
+  /** Stamps the outbound response message is_interested=true when a reply
+   * matches this branch — the Messages tab's "interested only" filter reads
+   * it. Defaults to false. */
+  interested?: boolean;
 }
 
 export interface SmsStepStats {
@@ -2538,6 +2542,10 @@ export interface SmsMessage {
   /** BlueBubbles read-back. Null on a "sent" row means the outcome is still
    * provisional, not confirmed. */
   verified_at: string | null;
+  /** Outbound only: this is a reply-branch response whose branch is flagged
+   * `interested` on the step. Drives the Messages tab's "interested only"
+   * filter. */
+  is_interested: boolean;
 }
 
 export interface SmsSuppression {

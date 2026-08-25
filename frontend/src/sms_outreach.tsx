@@ -2149,6 +2149,11 @@ function BranchesEditor({
               onChange={(v) => update(i, { ...b, add_to_pipeline: v })}
               label="Add to CRM pipeline"
             />
+            <Switch
+              checked={!!b.interested}
+              onChange={(v) => update(i, { ...b, interested: v })}
+              label="Mark as interested"
+            />
             <Button variant="danger-outline" size="sm" onClick={() => remove(i)}>
               Remove branch
             </Button>
@@ -3122,6 +3127,7 @@ const ConversationListItem = memo(function ConversationListItem({
   contact,
   last,
   unread,
+  interested,
   isActive,
   onOpen,
 }: {
@@ -3129,6 +3135,7 @@ const ConversationListItem = memo(function ConversationListItem({
   contact: SmsMessage["contact"];
   last: SmsMessage | undefined;
   unread: boolean;
+  interested: boolean;
   isActive: boolean;
   onOpen: (contactId: string) => void;
 }) {
@@ -3148,6 +3155,7 @@ const ConversationListItem = memo(function ConversationListItem({
         <span className="sms-thread-name">
           <span>{contact ? contactLabel(contact) : "Unknown contact"}</span>
           {unread && <Badge tone="info">new</Badge>}
+          {interested && <Badge tone="ok">interested</Badge>}
         </span>
         {/* A failed send has no sent_at — fall back to created_at so the
             conversation still carries a time. */}
@@ -3176,6 +3184,8 @@ function MessagesPanel({
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
   const [composing, setComposing] = useState(false);
+  const [search, setSearch] = useState("");
+  const [interestedOnly, setInterestedOnly] = useState(false);
 
   const refresh = useCallback(() => {
     // keepEqual: identical poll payloads keep the previous reference, so the
@@ -3206,7 +3216,29 @@ function MessagesPanel({
     return [...byContact.entries()].map(([id, v]) => ({ id, ...v }));
   }, [messages]);
 
-  const selected = conversations.find((c) => c.id === selectedContactId) ?? conversations[0] ?? null;
+  const hasInterested = (c: (typeof conversations)[number]) =>
+    c.messages.some((m) => m.is_interested);
+
+  // Client-side over the conversation list already in memory (no round trip
+  // per keystroke) — search matches the contact's name/phone or any message
+  // body in that conversation.
+  const filteredConversations = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return conversations.filter((c) => {
+      if (interestedOnly && !hasInterested(c)) return false;
+      if (!q) return true;
+      const name = c.contact ? contactLabel(c.contact).toLowerCase() : "";
+      const phone = (c.contact?.phone ?? "").toLowerCase();
+      if (name.includes(q) || phone.includes(q)) return true;
+      return c.messages.some((m) => m.body.toLowerCase().includes(q));
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [conversations, search, interestedOnly]);
+
+  const selected =
+    filteredConversations.find((c) => c.id === selectedContactId) ??
+    filteredConversations[0] ??
+    null;
 
   const hasUnread = (c: (typeof conversations)[number]) =>
     c.messages.some((m) => m.direction === "in" && !m.read_at);
@@ -3285,19 +3317,41 @@ function MessagesPanel({
 
       <div className="sms-inbox">
         <GlassCard className="sms-threads">
+          <div className="sms-thread-filters">
+            <input
+              className="input"
+              placeholder="Search name, number, or message…"
+              aria-label="Search conversations"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+            />
+            <Switch
+              checked={interestedOnly}
+              onChange={setInterestedOnly}
+              label="Interested only"
+            />
+          </div>
           {messages === null && <SkeletonText lines={6} />}
           {messages !== null && conversations.length === 0 && (
             <EmptyState title="No conversations">
               Sent and received texts show up here — nothing yet.
             </EmptyState>
           )}
-          {conversations.map((c) => (
+          {messages !== null && conversations.length > 0 && filteredConversations.length === 0 && (
+            <EmptyState title="No matches">
+              {interestedOnly
+                ? "No conversation has a reply marked interested yet."
+                : "Nothing matches that search."}
+            </EmptyState>
+          )}
+          {filteredConversations.map((c) => (
             <ConversationListItem
               key={c.id}
               id={c.id}
               contact={c.contact}
               last={c.messages[0]}
               unread={hasUnread(c)}
+              interested={hasInterested(c)}
               isActive={selected?.id === c.id}
               onOpen={open}
             />
