@@ -3186,6 +3186,7 @@ function MessagesPanel({
   const [composing, setComposing] = useState(false);
   const [search, setSearch] = useState("");
   const [interestedOnly, setInterestedOnly] = useState(false);
+  const [repliedOnly, setRepliedOnly] = useState(false);
 
   const refresh = useCallback(() => {
     // keepEqual: identical poll payloads keep the previous reference, so the
@@ -3219,6 +3220,9 @@ function MessagesPanel({
   const hasInterested = (c: (typeof conversations)[number]) =>
     c.messages.some((m) => m.is_interested);
 
+  const hasReply = (c: (typeof conversations)[number]) =>
+    c.messages.some((m) => m.direction === "in");
+
   // Client-side over the conversation list already in memory (no round trip
   // per keystroke) — search matches the contact's name/phone or any message
   // body in that conversation.
@@ -3226,6 +3230,7 @@ function MessagesPanel({
     const q = search.trim().toLowerCase();
     return conversations.filter((c) => {
       if (interestedOnly && !hasInterested(c)) return false;
+      if (repliedOnly && !hasReply(c)) return false;
       if (!q) return true;
       const name = c.contact ? contactLabel(c.contact).toLowerCase() : "";
       const phone = (c.contact?.phone ?? "").toLowerCase();
@@ -3233,7 +3238,7 @@ function MessagesPanel({
       return c.messages.some((m) => m.body.toLowerCase().includes(q));
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [conversations, search, interestedOnly]);
+  }, [conversations, search, interestedOnly, repliedOnly]);
 
   const selected =
     filteredConversations.find((c) => c.id === selectedContactId) ??
@@ -3330,6 +3335,11 @@ function MessagesPanel({
               onChange={setInterestedOnly}
               label="Interested only"
             />
+            <Switch
+              checked={repliedOnly}
+              onChange={setRepliedOnly}
+              label="Replied only"
+            />
           </div>
           {messages === null && <SkeletonText lines={6} />}
           {messages !== null && conversations.length === 0 && (
@@ -3341,7 +3351,9 @@ function MessagesPanel({
             <EmptyState title="No matches">
               {interestedOnly
                 ? "No conversation has a reply marked interested yet."
-                : "Nothing matches that search."}
+                : repliedOnly
+                  ? "No lead has replied yet."
+                  : "Nothing matches that search."}
             </EmptyState>
           )}
           {filteredConversations.map((c) => (
