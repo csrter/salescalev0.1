@@ -4135,6 +4135,86 @@ live activation + the entitlement flip, the Outreach module build
       installed to /Applications and launch-verified — own backend bound
       :8000, health 200, /api/sms/campaigns 401 on the packaged backend.
       Repo-root DMG copy refreshed sha-identical.
+- [x] SMS delivery rate = non-failure, not delivery receipts (2026-08-25,
+      f586f13, web only — no migration): user asked "what is going on with
+      delivery rate". Diagnosed on prod, not guessed: all 8 active campaigns
+      send from ONE BlueBubbles account which delivered 3,272/3,280 that day,
+      but ~93% of its traffic is green-bubble SMS, and a carrier never returns
+      a delivery receipt to BlueBubbles — so a receipt-denominated rate reads
+      ~0% however well it lands, and the old capability gate then suppressed
+      it to "—" entirely (honest, useless). A FAILURE by contrast IS reported
+      on every channel (providers return an error, and sms_verify reads the
+      device back and flips silent failures to `failed`), so delivery_rate is
+      now sent/attempted — "attempted and never reported failed", a checked
+      outcome everywhere. delivery_measurable + the delivery half of the
+      capability table are gone; read_measurable stays (Twilio/Telnyx truly
+      cannot emit a read receipt, so that one must still render "—"). The
+      receipt-confirmed count is unchanged, relabelled "Receipt confirmed"
+      everywhere it renders so it can't be read as the rate. The new number
+      immediately surfaced what the old one hid: BSD auto at 49.7%/7d, almost
+      all iMessage error 22 (recipient not on iMessage) on an account not
+      pinned to force_sms. Tests 760.
+- [x] SMS analytics: 1h/4h/12h/24h ranges (2026-08-25, 9bf38ef, web only —
+      no migration): /analytics gained `hours` alongside `days`, deliberately
+      different semantics — `days` stays whole calendar days back to midnight
+      UTC ("7 days" = seven complete days), `hours` is a ROLLING window ending
+      now, because a day-aligned "last 1 day" is fifteen minutes of data at
+      00:15 UTC. hours wins when both are given; windows ≤48h bucket the
+      series HOURLY (a one-hour range in day buckets is a single bar) and the
+      response carries `granularity` so the chart labels its axis from the
+      server's answer instead of re-deriving the rule. Also fixed a
+      stale-response race the 7-button control makes easy to hit: the fetch
+      effect had no cancellation, so switching quickly let the slower previous
+      request resolve LAST and overwrite the newer data — one window's numbers
+      under another window's label. CAUGHT IN THE BROWSER, not by tests
+      (clicking 12h showed 146 sends, the 30d figure); reproduced
+      deterministically by delaying the 90d response, then re-run against the
+      same forced ordering with the fix in. Tests 763.
+- [x] SMS: a human texting a lead stops their drip (2026-08-25, 440c18b,
+      web + desktop, migration a5e9d2c7f483): a scheduled follow-up landing on
+      top of a live human conversation is the worst thing this module can do,
+      and nothing prevented it. A SUCCESSFUL manual send is now a human
+      takeover — both paths, POST /api/sms/compose and the lead relay's
+      operator reply (services/lead_relay, which imports sms_campaigns inside
+      the function: sms_campaigns imports the send gateway lead_relay also
+      uses, so a module-level import closes the cycle).
+      sms_campaigns.stop_for_human_takeover exits the lead's active
+      enrollments ORG-WIDE, not just the campaign the text went out from —
+      being handled by a person is a property of the LEAD, and the drip that
+      embarrasses you is as likely to be the campaign nobody was watching.
+      Same shape as the unsubscribe sweep, NOT the same force: new
+      sms_campaigns.stop_on_human_reply (default true) lets a deliberately
+      human-assisted sequence opt out. THE LOAD-BEARING PART:
+      contacts.sms_handover_at is a CONTACT-level marker, not just an
+      enrollment exit — a COMPLETED enrollment re-opens on a later branch
+      match (handle_reply), so exiting the active ones alone would still let
+      the automation answer over the human; that path now checks the marker.
+      Explicitly re-enrolling clears it (enroll_contacts), so handing the lead
+      back is one obvious action rather than a marker nobody can find. Fires
+      only on a send that actually reached the lead — blocked/failed took
+      nothing over, and killing the sequence would be pure loss. The compose
+      response returns sequences_stopped and the UI says so ("Sent — paused
+      this lead's automated follow-ups"); the relay texts the operator the
+      same; the Audience tab renders "exited (human took over)" rather than
+      the raw slug. Tests 763 → 769 (5 of the 6 verified to FAIL against a
+      stashed implementation). VERIFIED LIVE with zero mocks on alt3: a
+      scratchpad stand-in BlueBubbles relay (the account's relay_url points
+      anywhere, so the REAL gateway → HTTP path runs) took a real step-1 send
+      from the scheduler, a human replied through the actual Messages tab, and
+      step 2 — forced due — stayed unsent across multiple real 30s scheduler
+      ticks; enrollment exit_reason human_takeover + contact marker confirmed
+      in the DB. Dev-env note: alt3 has NO TOKEN_ENCRYPTION_KEY (unlike alt2),
+      so any Fernet path warns "cannot decrypt" — a temporary launch config
+      supplying one was used and removed afterward.
+      KNOWN GAP, deliberately not built: texting a lead straight from
+      Messages.app on the BlueBubbles Mac/iPhone (bypassing Salescale) does
+      NOT trigger the takeover. BlueBubbles does emit new-message with
+      isFromMe=true, but our OWN campaign sends echo back the same way, and
+      the only precise discriminator (is this guid already in our ledger?)
+      races the send handler's commit — a webhook landing first would read our
+      own send as a human one and stop the campaign. Doing it safely needs the
+      webhook to write a placeholder row that the send path then adopts by
+      guid; worth building, but not worth guessing at.
 
 - [ ] Stripe live activation + entitlement flip (after 12–14, so real
       limits land everywhere in one pass)
