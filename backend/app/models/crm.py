@@ -158,6 +158,17 @@ class Contact(Base):
         DateTime(timezone=True)
     )
     sms_opt_in_source: Mapped[Optional[str]] = mapped_column(String(100))
+    # When a person on the team last texted this lead directly (the SMS
+    # Messages tab, or the lead relay from their own phone), which stops the
+    # automated sequences from talking over them —
+    # services/sms_campaigns.stop_for_human_takeover. Deliberately on the
+    # CONTACT, not the enrollment: being handled by a human is a property of
+    # the LEAD, so it has to outlive the enrollment that happened to be
+    # running (a COMPLETED one can otherwise re-open on a later branch match).
+    # None = automation owns this lead. Cleared by an explicit re-enroll.
+    sms_handover_at: Mapped[Optional[dt.datetime]] = mapped_column(
+        DateTime(timezone=True)
+    )
     # iMessage capability of the contact's SMS number (mobile_phone, else
     # phone), as reported by the org's BlueBubbles relay's Apple IDS lookup.
     # None = never checked. True = blue-bubble reachable; False = plain
@@ -229,6 +240,7 @@ RESERVED_CONTACT_FIELD_KEYS: frozenset[str] = frozenset(
         "sms_opt_in",
         "sms_opt_in_at",
         "sms_opt_in_source",
+        "sms_handover_at",
         "imessage_capable",
         "imessage_checked_at",
         "line_type",

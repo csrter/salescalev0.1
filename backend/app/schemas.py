@@ -834,6 +834,11 @@ class ContactOutTeam(ContactOutPublic):
     sms_opt_in: bool = False
     sms_opt_in_at: Optional[dt.datetime] = None
     sms_opt_in_source: Optional[str] = None
+    # Set when a person on the team last texted this lead directly, which
+    # stops their automated sequences (sms_campaigns.stop_for_human_takeover).
+    # None = automation owns this lead. Team-only: it describes agency
+    # workflow, not anything the client's portal should see.
+    sms_handover_at: Optional[dt.datetime] = None
     # iMessage reachability of the contact's number (None = never checked)
     # — team-only routing signal, decides blue-bubble vs green-bubble SMS.
     imessage_capable: Optional[bool] = None
@@ -1705,6 +1710,7 @@ class SmsCampaignIn(BaseModel):
     exit_on_reply: bool = True
     include_compliance_footer: bool = True
     stop_after_branch: bool = True
+    stop_on_human_reply: bool = True
     auto_enroll_new_leads: bool = False
 
     @field_validator("send_days")
@@ -1730,6 +1736,7 @@ class SmsCampaignPatch(BaseModel):
     exit_on_reply: Optional[bool] = None
     include_compliance_footer: Optional[bool] = None
     stop_after_branch: Optional[bool] = None
+    stop_on_human_reply: Optional[bool] = None
     auto_enroll_new_leads: Optional[bool] = None
 
     @field_validator("send_days")

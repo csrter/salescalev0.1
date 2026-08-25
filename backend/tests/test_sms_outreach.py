@@ -5099,3 +5099,264 @@ def test_completed_enrollment_reopen_uses_ai_branching_not_just_keywords(
     _tick()
     assert len(captured_sends) == 3
     assert "pitch" in captured_sends[-1]["body"]
+
+
+# --- human takeover: a person texting the lead stops the drip -----------------
+
+
+def test_manual_send_stops_the_drip_for_that_lead(
+    sc_org, api, twilio_creds_ok, captured_sends
+):
+    """The headline case: a lead is mid-sequence, someone on the team texts
+    them from the Messages tab, and the scheduled follow-up never lands on top
+    of that conversation."""
+    acct = _mk_account(sc_org, api, from_number="+14805550810")
+    camp = _mk_campaign(sc_org, api, acct["id"], **_ALWAYS)
+    contact = _mk_contact(sc_org, api, mobile_phone="4805558810", first="Rae")
+    _set_steps(
+        sc_org, api, camp["id"],
+        [
+            {"position": 1, "body": "First touch"},
+            {"position": 2, "wait_days": 0, "wait_minutes": 1, "body": "Following up"},
+        ],
+    )
+    _activate(sc_org, api, camp["id"])
+    _enroll(sc_org, api, camp["id"], [contact])
+    _tick()  # step 1 goes out
+    # Step 1 carries the CTIA compliance footer, so match on the body text.
+    assert len(captured_sends) == 1
+    assert "First touch" in captured_sends[0]["body"]
+
+    enr = api.get(
+        f"/api/sms/campaigns/{camp['id']}/enrollments", headers=sc_org["headers"]
+    ).json()
+    _force_due(enr[0]["id"])
+
+    r = api.post(
+        "/api/sms/compose",
+        json={
+            "account_id": acct["id"],
+            "contact_id": contact,
+            "body": "Hi Rae — Carter here, saw you were interested.",
+        },
+        headers=sc_org["headers"],
+    )
+    assert r.status_code == 200, r.text
+    # The response says what it did rather than silently ending a sequence.
+    assert len(r.json()["sequences_stopped"]) == 1
+    assert r.json()["sequences_stopped"][0]["campaign_id"] == camp["id"]
+
+    # The step-2 drip was due and still never sends.
+    _tick()
+    assert len(captured_sends) == 2
+    assert "First touch" in captured_sends[0]["body"]
+    assert captured_sends[1]["body"] == "Hi Rae — Carter here, saw you were interested."
+    enr = api.get(
+        f"/api/sms/campaigns/{camp['id']}/enrollments", headers=sc_org["headers"]
+    ).json()
+    assert enr[0]["status"] == "exited"
+    assert enr[0]["exit_reason"] == "human_takeover"
+
+
+def test_takeover_stops_every_campaign_the_lead_is_in(
+    sc_org, api, twilio_creds_ok, captured_sends
+):
+    """Scope is the LEAD, org-wide — the drip that would embarrass you is just
+    as likely to be the campaign nobody was looking at."""
+    acct = _mk_account(sc_org, api, from_number="+14805550813")
+    contact = _mk_contact(sc_org, api, mobile_phone="4805558813", first="Sam")
+    camps = []
+    for name in ("Drip A", "Drip B"):
+        c = _mk_campaign(sc_org, api, acct["id"], name=name, **_ALWAYS)
+        _set_steps(sc_org, api, c["id"], [{"position": 1, "body": f"{name} touch"}])
+        _activate(sc_org, api, c["id"])
+        _enroll(sc_org, api, c["id"], [contact])
+        camps.append(c)
+
+    r = api.post(
+        "/api/sms/compose",
+        json={"account_id": acct["id"], "contact_id": contact, "body": "Real person here"},
+        headers=sc_org["headers"],
+    )
+    assert r.status_code == 200, r.text
+    assert len(r.json()["sequences_stopped"]) == 2
+
+    for c in camps:
+        enr = api.get(
+            f"/api/sms/campaigns/{c['id']}/enrollments", headers=sc_org["headers"]
+        ).json()
+        assert enr[0]["exit_reason"] == "human_takeover", c["name"]
+    _tick()
+    assert [m["body"] for m in captured_sends] == ["Real person here"]
+    assert not any("touch" in m["body"] for m in captured_sends)
+
+
+def test_takeover_also_blocks_a_completed_enrollment_from_reopening(
+    sc_org, api, twilio_creds_ok, captured_sends
+):
+    """Exiting the ACTIVE enrollments is not enough: a COMPLETED one re-opens
+    on a later branch match, so it would answer over the human. The
+    contact-level marker is what closes that path."""
+    acct = _mk_account(sc_org, api, from_number="+14805550814")
+    camp = _mk_campaign(sc_org, api, acct["id"], **_ALWAYS)
+    contact = _mk_contact(sc_org, api, mobile_phone="4805558814", first="Wes")
+    _set_steps(
+        sc_org, api, camp["id"],
+        [
+            {"position": 1, "body": "First touch"},
+            {
+                "position": 2,
+                "trigger": "reply",
+                "wait_days": 0,
+                "wait_minutes": 0,
+                "body": "Thanks for getting back to me!",
+                "branches": [
+                    {
+                        "label": "no",
+                        "keywords": ["not interested"],
+                        "body": "No problem — have a great day!",
+                    }
+                ],
+            },
+        ],
+    )
+    _activate(sc_org, api, camp["id"])
+    _enroll(sc_org, api, camp["id"], [contact])
+    _tick()
+
+    # Drive the enrollment to COMPLETED with no exit reason (a clean finish).
+    db = SessionLocal()
+    try:
+        e = db.execute(
+            select(SmsEnrollment).where(SmsEnrollment.contact_id == contact)
+        ).scalars().one()
+        e.status = "completed"
+        e.exit_reason = None
+        e.next_run_at = None
+        db.commit()
+    finally:
+        db.close()
+
+    api.post(
+        "/api/sms/compose",
+        json={"account_id": acct["id"], "contact_id": contact, "body": "Wes, it's Carter"},
+        headers=sc_org["headers"],
+    )
+    before = len(captured_sends)
+
+    # A reply that DOES match the parting branch — without the guard this
+    # re-opens the completed enrollment and sends over the human.
+    _inbound_reply(api, acct, "+14805558814", "not interested", sid="SM_takeover_1")
+    _tick()
+    assert len(captured_sends) == before
+
+
+def test_a_blocked_manual_send_does_not_stop_the_drip(
+    sc_org, api, twilio_creds_ok, captured_sends
+):
+    """Nothing reached the lead, so nothing was taken over — killing their
+    sequence would be pure loss."""
+    acct = _mk_account(sc_org, api, from_number="+14805550815")
+    camp = _mk_campaign(sc_org, api, acct["id"], **_ALWAYS)
+    contact = _mk_contact(sc_org, api, mobile_phone="4805558815", first="Nia")
+    _set_steps(sc_org, api, camp["id"], [{"position": 1, "body": "First touch"}])
+    _activate(sc_org, api, camp["id"])
+    _enroll(sc_org, api, camp["id"], [contact])
+
+    # Revoke consent so the compose is refused at the gate.
+    api.patch(
+        f"/api/crm/contacts/{contact}",
+        json={"sms_opt_in": False},
+        headers=sc_org["headers"],
+    )
+    r = api.post(
+        "/api/sms/compose",
+        json={"account_id": acct["id"], "contact_id": contact, "body": "Hi Nia"},
+        headers=sc_org["headers"],
+    )
+    assert r.status_code == 409
+
+    db = SessionLocal()
+    try:
+        e = db.execute(
+            select(SmsEnrollment).where(SmsEnrollment.contact_id == contact)
+        ).scalars().one()
+        assert e.status == "active"
+        assert e.exit_reason is None
+    finally:
+        db.close()
+
+
+def test_campaign_can_opt_out_of_stopping_on_human_reply(
+    sc_org, api, twilio_creds_ok, captured_sends
+):
+    """A deliberately human-assisted sequence keeps running alongside a
+    person — unlike unsubscribe, this is a preference, not an obligation."""
+    acct = _mk_account(sc_org, api, from_number="+14805550816")
+    camp = _mk_campaign(
+        sc_org, api, acct["id"], stop_on_human_reply=False, **_ALWAYS
+    )
+    assert camp["stop_on_human_reply"] is False
+    contact = _mk_contact(sc_org, api, mobile_phone="4805558816", first="Ola")
+    _set_steps(
+        sc_org, api, camp["id"],
+        [
+            {"position": 1, "body": "First touch"},
+            {"position": 2, "wait_days": 0, "wait_minutes": 1, "body": "Following up"},
+        ],
+    )
+    _activate(sc_org, api, camp["id"])
+    _enroll(sc_org, api, camp["id"], [contact])
+    _tick()
+
+    enr = api.get(
+        f"/api/sms/campaigns/{camp['id']}/enrollments", headers=sc_org["headers"]
+    ).json()
+    r = api.post(
+        "/api/sms/compose",
+        json={"account_id": acct["id"], "contact_id": contact, "body": "Quick note"},
+        headers=sc_org["headers"],
+    )
+    assert r.json()["sequences_stopped"] == []
+
+    _force_due(enr[0]["id"])
+    _tick()
+    assert any("Following up" in m["body"] for m in captured_sends)
+
+
+def test_re_enrolling_hands_the_lead_back_to_the_automation(
+    sc_org, api, twilio_creds_ok, captured_sends
+):
+    """Otherwise the new enrollment would send once and then be silently
+    blocked by a marker nobody remembers setting."""
+    acct = _mk_account(sc_org, api, from_number="+14805550817")
+    contact = _mk_contact(sc_org, api, mobile_phone="4805558817", first="Pim")
+    first = _mk_campaign(sc_org, api, acct["id"], name="Old drip", **_ALWAYS)
+    _set_steps(sc_org, api, first["id"], [{"position": 1, "body": "Old touch"}])
+    _activate(sc_org, api, first["id"])
+    _enroll(sc_org, api, first["id"], [contact])
+    api.post(
+        "/api/sms/compose",
+        json={"account_id": acct["id"], "contact_id": contact, "body": "Human here"},
+        headers=sc_org["headers"],
+    )
+
+    db = SessionLocal()
+    try:
+        c = db.get(Contact, contact)
+        assert c.sms_handover_at is not None
+    finally:
+        db.close()
+
+    fresh = _mk_campaign(sc_org, api, acct["id"], name="New drip", **_ALWAYS)
+    _set_steps(sc_org, api, fresh["id"], [{"position": 1, "body": "New touch"}])
+    _activate(sc_org, api, fresh["id"])
+    assert _enroll(sc_org, api, fresh["id"], [contact]).json()["enrolled"] == 1
+
+    db = SessionLocal()
+    try:
+        assert db.get(Contact, contact).sms_handover_at is None
+    finally:
+        db.close()
+    _tick()
+    assert any("New touch" in m["body"] for m in captured_sends)

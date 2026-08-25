@@ -664,6 +664,11 @@ def enroll_contacts(
                 source_detail=(source_detail or None) and source_detail[:120],
             )
         )
+        # Enrolling a lead is an explicit statement that the sequence should
+        # own this conversation, so it hands them back from any earlier human
+        # takeover — otherwise the new enrollment would send once and then be
+        # silently blocked by a marker nobody remembers setting.
+        clear_human_takeover(db, c)
         enrolled += 1
     db.flush()
     return {"enrolled": enrolled, "skipped": skipped}
@@ -1125,6 +1130,12 @@ def handle_reply(
     for e in completed:
         campaign = db.get(SmsCampaign, e.campaign_id)
         if campaign is None:
+            continue
+        # A human owns this lead (they texted them directly). Re-opening here
+        # is the one path that survives stop_for_human_takeover exiting the
+        # ACTIVE enrollments, so it has to check the contact-level marker or
+        # the automation would answer over a live conversation.
+        if campaign.stop_on_human_reply and contact.sms_handover_at is not None:
             continue
         if campaign.stop_after_branch and e.branch_sent_at is not None:
             continue
@@ -1731,3 +1742,58 @@ def seconds_until_next_due(db: Session) -> Optional[float]:
 
 def exit_manual(db: Session, enrollment: SmsEnrollment) -> None:
     _end(enrollment, SMS_ENROLL_EXITED, "manual")
+
+
+# --- human takeover -----------------------------------------------------------
+
+HUMAN_TAKEOVER_REASON = "human_takeover"
+
+
+def stop_for_human_takeover(db: Session, contact: Contact) -> List[SmsEnrollment]:
+    """A person on the team has texted this lead directly — stop the automated
+    sequences so a scheduled drip can't land on top of a live conversation.
+
+    Scope is the CONTACT, org-wide, not the campaign the message went out
+    from. Being handled by a person is a property of the lead: the drip that
+    would embarrass you is just as likely to be the one nobody was looking at,
+    and a lead is normally in exactly one sequence anyway. Same shape as the
+    unsubscribe sweep, though NOT the same force — unsubscribe is a compliance
+    obligation with no opt-out, whereas a campaign that is MEANT to run
+    alongside a human can set stop_on_human_reply=False.
+
+    Contact.sms_handover_at is the durable marker and is set even when no
+    enrollment is currently active, because the enrollment ending is not the
+    end of the story: a COMPLETED one can re-open later on a branch match, and
+    that path reads this flag (see handle_reply). Explicitly re-enrolling the
+    lead clears it — that is the deliberate "automation owns this again".
+
+    Returns the enrollments actually stopped, so the caller can say so.
+    Callers commit; this only stages.
+    """
+    contact.sms_handover_at = utcnow()
+    active = (
+        db.execute(
+            select(SmsEnrollment).where(
+                SmsEnrollment.organization_id == contact.organization_id,
+                SmsEnrollment.contact_id == contact.id,
+                SmsEnrollment.status == SMS_ENROLL_ACTIVE,
+            )
+        )
+        .scalars()
+        .all()
+    )
+    stopped = []
+    for e in active:
+        campaign = db.get(SmsCampaign, e.campaign_id)
+        if campaign is None or not campaign.stop_on_human_reply:
+            continue
+        _end(e, SMS_ENROLL_EXITED, HUMAN_TAKEOVER_REASON)
+        stopped.append(e)
+    return stopped
+
+
+def clear_human_takeover(db: Session, contact: Contact) -> None:
+    """Hand the lead back to the automation. Called when someone deliberately
+    (re-)enrolls them, which is an explicit statement that the sequence should
+    own this conversation again."""
+    contact.sms_handover_at = None

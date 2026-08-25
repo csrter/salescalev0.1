@@ -871,6 +871,7 @@ def _campaign_out(db: Session, c: SmsCampaign, *, full: bool = False) -> dict:
         "exit_on_reply": c.exit_on_reply,
         "include_compliance_footer": c.include_compliance_footer,
         "stop_after_branch": c.stop_after_branch,
+        "stop_on_human_reply": c.stop_on_human_reply,
         "auto_enroll_new_leads": c.auto_enroll_new_leads,
         "is_template": c.is_template,
         "activated_at": c.activated_at.isoformat() if c.activated_at else None,
@@ -969,6 +970,7 @@ def create_campaign(
             exit_on_reply=template.exit_on_reply,
             include_compliance_footer=template.include_compliance_footer,
             stop_after_branch=template.stop_after_branch,
+            stop_on_human_reply=template.stop_on_human_reply,
             auto_enroll_new_leads=template.auto_enroll_new_leads,
         )
         db.add(campaign)
@@ -1013,6 +1015,7 @@ def create_campaign(
         exit_on_reply=body.exit_on_reply,
         include_compliance_footer=body.include_compliance_footer,
         stop_after_branch=body.stop_after_branch,
+        stop_on_human_reply=body.stop_on_human_reply,
         auto_enroll_new_leads=body.auto_enroll_new_leads,
         is_template=body.is_template,
     )
@@ -1059,6 +1062,7 @@ def duplicate_campaign(
         exit_on_reply=source.exit_on_reply,
         include_compliance_footer=source.include_compliance_footer,
         stop_after_branch=source.stop_after_branch,
+        stop_on_human_reply=source.stop_on_human_reply,
         auto_enroll_new_leads=source.auto_enroll_new_leads,
         is_template=source.is_template,
     )
@@ -1626,7 +1630,13 @@ def compose(
     a campaign. Goes through the same consent/suppression/cap guards as every
     other send; skips only the campaign-specific send window (mirrors how a
     human reply behaves in the email module) and never carries the CTIA
-    sender-id/opt-out footer (see sms_send.send)."""
+    sender-id/opt-out footer (see sms_send.send).
+
+    A successful send is a HUMAN TAKEOVER: this lead's automated sequences
+    stop, so a scheduled drip can't land on top of the conversation that just
+    started (sms_campaigns.stop_for_human_takeover). Only on success — a send
+    that was blocked or failed never reached the lead, so nothing has been
+    taken over and killing their sequence would be pure loss."""
     account = _scoped_get(db, scope, SmsAccount, body.account_id)
     contact = scope.get_or_404(db, Contact, body.contact_id)
     if sms_campaigns.segment_count(body.body) > sms_campaigns.MAX_RENDERED_SEGMENTS:
@@ -1644,9 +1654,20 @@ def compose(
         kind=SMS_KIND_MANUAL,
         org_name=org.name if org else "",
     )
+    stopped = []
+    if code == sms_send.SENT:
+        stopped = sms_campaigns.stop_for_human_takeover(db, contact)
     db.commit()
     _raise_for_sms_code(code)
-    return {"status": code, "message_id": msg.id if msg else None}
+    return {
+        "status": code,
+        "message_id": msg.id if msg else None,
+        # Surfaced so the UI can say what it just did on the lead's behalf,
+        # rather than silently ending a sequence someone set up.
+        "sequences_stopped": [
+            {"enrollment_id": e.id, "campaign_id": e.campaign_id} for e in stopped
+        ],
+    }
 
 
 @router.get("/messages")

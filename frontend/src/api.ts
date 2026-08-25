@@ -2469,6 +2469,9 @@ export interface SmsCampaignDetail extends SmsCampaign {
   exit_on_reply: boolean;
   include_compliance_footer: boolean;
   stop_after_branch: boolean;
+  /** A person texting the lead directly (Messages tab, or the lead relay from
+   * their own phone) ends this campaign for them. Default on. */
+  stop_on_human_reply: boolean;
   /** Auto-enroll new leads for client_id into this campaign on arrival. */
   auto_enroll_new_leads: boolean;
   steps: SmsStep[];
@@ -2486,6 +2489,7 @@ export interface SmsCampaignBody {
   exit_on_reply?: boolean;
   include_compliance_footer?: boolean;
   stop_after_branch?: boolean;
+  stop_on_human_reply?: boolean;
   auto_enroll_new_leads?: boolean;
 }
 
@@ -2763,10 +2767,18 @@ export const composeSms = (body: {
   account_id: string;
   contact_id: string;
   body: string;
-}) => api<{ status: string; message_id: string | null }>(`${SO}/compose`, {
-  method: "POST",
-  body: JSON.stringify(body),
-});
+}) =>
+  api<{
+    status: string;
+    message_id: string | null;
+    /** Automated sequences this send just ended for the lead — texting them
+     * by hand is a human takeover, so the drip stops. Empty when they were
+     * in none, or when every campaign has stop_on_human_reply off. */
+    sequences_stopped: { enrollment_id: string; campaign_id: string }[];
+  }>(`${SO}/compose`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
 
 export const markSmsRead = (contactId: string) =>
   api<{ marked: number }>(`${SO}/messages/mark-read`, {

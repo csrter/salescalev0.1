@@ -256,6 +256,16 @@ class SmsCampaign(Base):
     stop_after_branch: Mapped[bool] = mapped_column(
         Boolean, default=True, nullable=False, server_default=text("true")
     )
+    # A person on the team texting this lead directly (the Messages tab, or the
+    # lead relay from their own phone) ends the automated sequence for them —
+    # a scheduled drip landing on top of a live human conversation is the most
+    # embarrassing thing this module can do. See
+    # sms_campaigns.stop_for_human_takeover; the durable marker is
+    # Contact.sms_handover_at, and this flag is the per-campaign opt-out for a
+    # sequence that is MEANT to run alongside a person.
+    stop_on_human_reply: Mapped[bool] = mapped_column(
+        Boolean, default=True, nullable=False, server_default=text("true")
+    )
     include_compliance_footer: Mapped[bool] = mapped_column(
         Boolean, default=True, nullable=False
     )

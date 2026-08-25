@@ -176,6 +176,22 @@ const enrollmentSourceLabel = (e: {
   }
 };
 
+/** Exit reasons are stored as engine-facing slugs; only this one needs
+ * translating, because "human_takeover" reads like a system fault rather than
+ * "a colleague is handling this lead now". */
+const exitReasonLabel = (reason: string): string =>
+  reason === "human_takeover" ? "human took over" : reason;
+
+/** Texting a lead by hand is a human takeover: their automated sequences
+ * stop so a drip can't land on top of the conversation. Say so — a sequence
+ * someone set up should never end invisibly. */
+const takeoverNotice = (stopped: number): string =>
+  stopped === 0
+    ? "Sent"
+    : stopped === 1
+      ? "Sent — paused this lead's automated follow-ups"
+      : `Sent — paused ${stopped} automated sequences for this lead`;
+
 /** Opt-out red line — a rate at or above this reads as danger, mirroring the
  * email module's bounce red line. */
 const OPT_OUT_RED_LINE = 0.05;
@@ -2000,6 +2016,23 @@ function ConfigForm({
 
       <div className="sms-fieldset">
         <Switch
+          checked={detail.stop_on_human_reply}
+          onChange={(v) => onPatch({ stop_on_human_reply: v })}
+          label="Stop when someone on the team texts the lead"
+        />
+        <p className="sms-hint">
+          The moment a person texts a lead directly — from the Messages tab, or
+          by replying to a forwarded lead from their own phone — that lead's
+          automated follow-ups stop, so a scheduled drip can't land on top of a
+          live conversation. It applies to <em>every</em> campaign the lead is
+          in, not just this one, and enrolling them again hands them back to
+          the automation. Turn this off only for a sequence meant to run
+          alongside a person.
+        </p>
+      </div>
+
+      <div className="sms-fieldset">
+        <Switch
           checked={detail.include_compliance_footer}
           onChange={(v) => onPatch({ include_compliance_footer: v })}
           label="Sender ID + opt-out footer on the first message"
@@ -2692,7 +2725,7 @@ function AudienceTab({
           <>
             <Badge tone={e.status}>
               {e.status}
-              {e.exit_reason ? ` (${e.exit_reason})` : ""}
+              {e.exit_reason ? ` (${exitReasonLabel(e.exit_reason)})` : ""}
             </Badge>
             {/* The real answer went out — the sequence won't text them
                 again, so the conversation is a human's from here. */}
@@ -3335,14 +3368,14 @@ function MessagesPanel({
     if (!selected || !draft.trim() || !replyAccountId) return;
     setSending(true);
     try {
-      await composeSms({
+      const res = await composeSms({
         account_id: replyAccountId,
         contact_id: selected.id,
         body: draft.trim(),
       });
       setDraft("");
       refresh();
-      toast("Sent", "ok");
+      toast(takeoverNotice(res.sequences_stopped.length), "ok");
     } catch (e) {
       toast(e instanceof Error ? e.message : "Send failed", "error");
     } finally {
@@ -3542,8 +3575,12 @@ function ComposeSmsDialog({
     }
     setBusy(true);
     try {
-      await composeSms({ account_id: accountId, contact_id: contactId, body: body.trim() });
-      toast("Sent", "ok");
+      const res = await composeSms({
+        account_id: accountId,
+        contact_id: contactId,
+        body: body.trim(),
+      });
+      toast(takeoverNotice(res.sequences_stopped.length), "ok");
       onSent(contactId);
     } catch (e) {
       toast(e instanceof Error ? e.message : "Send failed", "error");

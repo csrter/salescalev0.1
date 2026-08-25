@@ -201,6 +201,24 @@ def handle_operator_reply(
             )
             return
         result, _row = sms_send.send_reply(db, account, lead, message)
+        if result == sms_send.SENT:
+            # The operator just texted this lead from their own phone — the
+            # same human takeover as composing from the Messages tab, so the
+            # automated sequences stop here too. Imported inside the function:
+            # sms_campaigns imports the send gateway this module also uses,
+            # and a module-level import would close that cycle.
+            from . import sms_campaigns
+
+            stopped = sms_campaigns.stop_for_human_takeover(db, lead)
+            if stopped:
+                _tell_operator(
+                    db,
+                    account,
+                    org,
+                    f"Paused {len(stopped)} automated follow-up"
+                    f"{'' if len(stopped) == 1 else 's'} for {_lead_name(lead)} "
+                    "— you're handling this one.",
+                )
         if result == sms_send.SUPPRESSED:
             _tell_operator(
                 db, account, org, f"Lead {code} opted out — can't text them."
