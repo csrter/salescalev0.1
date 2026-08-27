@@ -1528,7 +1528,10 @@ def test_sms_failsafe_business_name_greeting_city_is_plain_field(
         # named greeting is the point), with acronym-aware proper casing.
         # City is blank on this contact and nothing infers it — the tidy
         # pass collapses the emptied {{city}} token and its trailing space.
-        assert body == "Hi Desert Air HVAC LLC — great work in!"
+        # The trailing legal suffix is stripped too: "DESERT AIR HVAC LLC"
+        # greets as "Desert Air HVAC" — HVAC survives as a real acronym, LLC
+        # is a filing detail nobody says out loud.
+        assert body == "Hi Desert Air HVAC — great work in!"
         assert c.city is None
         assert calls["n"] == 0  # no AI call attempted for city, ever
     finally:

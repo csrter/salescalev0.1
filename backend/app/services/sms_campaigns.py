@@ -39,6 +39,7 @@ import datetime as dt
 import json
 import logging
 import re
+import unicodedata
 from typing import List, Optional
 
 from sqlalchemy import and_, func, or_, select
@@ -143,6 +144,97 @@ _CITY_FAILSAFE_SYSTEM = (
     "the city name ALONE — no state, no punctuation, no explanation. If the "
     "facts do not clearly point to one city, reply exactly UNKNOWN."
 )
+
+
+# Legal-entity suffixes stripped off the END of a name before it goes into a
+# text. "Hey is this Shane's Air Conditioning & Heating, Inc.?" reads like a
+# form letter; "Hey is this Shane's Air Conditioning & Heating?" reads like a
+# person typed it. Counted across this org's real leads: inc 33, llc 29,
+# corp 2, co 2, corporation 1.
+#
+# TRAILING only, deliberately. "Master Cooling Mechanical LLC Air Conditioning
+# and Heating" has LLC in the middle, and cutting there would strip words the
+# business actually goes by. Applied repeatedly so "Cooling Co., Inc." reduces
+# fully.
+#
+# "company" is NOT in this set: "The Cooling Company" goes by that name, and
+# removing it leaves "The Cooling".
+_LEGAL_SUFFIXES = frozenset(
+    {
+        "llc", "l.l.c.", "llp", "lp", "pllc", "plc", "pc", "pa",
+        "inc", "incorporated", "corp", "corporation", "co", "ltd", "limited",
+    }
+)
+
+# Punctuation that belongs INSIDE a business name and must survive: "A/C Tech",
+# "A-1 Heat & Air", "Sam's Air and Heat", "Elite Cooling, Heating, & Electrical".
+# Everything else non-alphanumeric (@ : ; # * | ~ ^ = + _ " < > [ ] { } and any
+# emoji/symbol) is junk in a greeting and gets dropped.
+_NAME_KEEP_PUNCT = frozenset(" &-/'.,")
+
+# NFKC does NOT fold curly quotes or en/em dashes to ASCII, and they are not
+# in the keep-set — so without this "Anthony's" would silently become
+# "Anthonys". Map them to the ASCII forms the keep-set recognises.
+_PUNCT_FOLD = str.maketrans(
+    {
+        "\u2018": "'", "\u2019": "'", "\u201a": "'", "\u201b": "'",
+        "\u2013": "-", "\u2014": "-", "\u2012": "-", "\u2015": "-",
+        "\u00a0": " ", "\u2010": "-", "\u2011": "-",
+    }
+)
+
+_PARENTHETICAL_RE = re.compile(r"\s*\([^)]*\)")
+_EMAIL_LIKE_RE = re.compile(r"[^\s@]+@[^\s@]+\.[^\s@]+")
+_URL_LIKE_RE = re.compile(r"(?:https?://|www\.)\S+|\S+\.(?:com|net|org|io|co)\b", re.I)
+
+
+def clean_display_name(value: Optional[str]) -> str:
+    """Make a name safe to drop into a text message, or return "" if it isn't
+    a usable name at all.
+
+    Returning "" is load-bearing rather than a failure: an empty token falls
+    through to the template's own `|fallback`, and a blank first_name hands
+    off to the business-name greeting failsafe in render_body. A lead whose
+    name field holds "069inigueznichols@gmail.com" (a real row here) should
+    greet as their business or as "there" — never by that string.
+
+    Order matters: normalize unicode first so curly quotes and fullwidth
+    characters become their ASCII forms BEFORE the allowed-punctuation filter
+    decides what to drop."""
+    v = unicodedata.normalize("NFKC", (value or "").strip()).translate(_PUNCT_FOLD)
+    if not v:
+        return ""
+    # Junk that is not a name at all — an address, a URL, or nothing but
+    # punctuation/digits.
+    if _EMAIL_LIKE_RE.search(v) or _URL_LIKE_RE.search(v):
+        return ""
+    v = _PARENTHETICAL_RE.sub("", v)
+    # Google Places hands back "Name: category" ("West Palm Beach HVAC
+    # Services: Air conditioning contractor"). The business goes by the part
+    # before the colon; the rest is a directory descriptor.
+    if ":" in v:
+        v = v.split(":", 1)[0]
+    # Drop control/format/emoji characters and any punctuation outside the
+    # keep-set. Cc = control, Cf = zero-width joiners/marks, So = symbols
+    # (emoji), all of which render as garbage or invisible width in SMS.
+    v = "".join(
+        ch
+        for ch in v
+        if ch.isalnum() or ch in _NAME_KEEP_PUNCT
+        if unicodedata.category(ch) not in ("Cc", "Cf", "So")
+    )
+    for _ in range(4):  # "Cooling Co., Inc." needs more than one pass
+        v = re.sub(r"[\s.,&/-]+$", "", v).strip()
+        parts = v.split()
+        if len(parts) > 1 and parts[-1].lower().rstrip(".") in _LEGAL_SUFFIXES:
+            v = " ".join(parts[:-1])
+            continue
+        break
+    v = re.sub(r"\s+", " ", v).strip(" ,&-/.")
+    # A name that survived as digits/punctuation alone is not a name.
+    if not any(ch.isalpha() for ch in v):
+        return ""
+    return v
 
 
 def business_case(value: str) -> str:
@@ -272,9 +364,25 @@ def render_body(
         from_name = _company_from_name(contact)
         if from_name:
             facts = {**facts, "company": from_name}
+
+    # Scrub the name-shaped tokens before they reach the template: strip
+    # trailing legal suffixes ("... , Inc."), drop junk characters, and blank
+    # out values that aren't names at all. Done HERE rather than in
+    # _render_template because `extra` wins in _resolve_token, so these values
+    # cover both plain {{token}} substitution and {{#if token}} conditionals.
+    # SMS-only on purpose — the email engine renders the same tokens and is
+    # left alone (one call site away if it should follow).
     extra = {"ai_snippet": ai_snippet}
-    if not (contact.first_name or "").strip() and (facts.get("company") or "").strip():
-        extra["first_name"] = business_case(facts["company"])
+    company = clean_display_name(facts.get("company"))
+    facts = {**facts, "company": business_case(company) if company else ""}
+    first = clean_display_name(contact.first_name)
+    last = clean_display_name(contact.last_name)
+    extra["first_name"] = first
+    extra["last_name"] = last
+    # Greeting failsafe: no usable first name (blank, or scrubbed away because
+    # it held an email address) falls back to the business name.
+    if not first and facts["company"]:
+        extra["first_name"] = facts["company"]
     template = body_template if body_template is not None else (step.body_template or "")
     return email_personalize._render_template(template, contact, facts, extra)
 

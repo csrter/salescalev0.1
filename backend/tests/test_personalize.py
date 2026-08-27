@@ -342,3 +342,116 @@ def test_company_fallback_ignores_real_people():
     )
     # empty name -> nothing to fall back to
     assert sms_campaigns._company_from_name(_Contact("c3")) is None
+
+
+# --- SMS name scrubbing (legal suffixes + junk characters) --------------------
+#
+# Every input below is a REAL name from the production CRM (or a close variant),
+# not an invented case: across 207 business-style leads the observed suffixes
+# were inc 33, llc 29, corp 2, co 2, corporation 1, and the observed non-
+# alphanumerics were & . , - / ' ( ) @ : and a curly apostrophe.
+
+
+def test_clean_display_name_strips_trailing_legal_suffixes():
+    from app.services.sms_campaigns import clean_display_name as clean
+
+    assert clean("CasaCool LLC") == "CasaCool"
+    assert clean("Kalos Services Inc.") == "Kalos Services"
+    assert clean("Goddards HVAC Service, LLC") == "Goddards HVAC Service"
+    assert clean("Carvajal A/C Mechanical Corp") == "Carvajal A/C Mechanical"
+    assert (
+        clean("Shane's Air Conditioning & Heating, Inc.")
+        == "Shane's Air Conditioning & Heating"
+    )
+    # More than one suffix needs more than one pass.
+    assert clean("Cooling Co., Inc.") == "Cooling"
+
+
+def test_clean_display_name_keeps_punctuation_that_is_part_of_the_name():
+    """The filter must not be greedy: & - / and apostrophes carry meaning in
+    these names, and stripping them would misspell the business."""
+    from app.services.sms_campaigns import clean_display_name as clean
+
+    assert clean("A-1 Heat & Air") == "A-1 Heat & Air"
+    assert clean("A/C Tech Professionals Inc.") == "A/C Tech Professionals"
+    assert clean("Greens Energy HVAC & Fuel") == "Greens Energy HVAC & Fuel"
+    assert (
+        clean("Elite Cooling, Heating, Plumbing, & Electrical")
+        == "Elite Cooling, Heating, Plumbing, & Electrical"
+    )
+    # A curly apostrophe must be FOLDED, not dropped — NFKC alone leaves it
+    # outside the keep-set, which silently produced "Anthonys".
+    assert clean("Anthony’s Cooling-Heating-Electrical") == (
+        "Anthony's Cooling-Heating-Electrical"
+    )
+
+
+def test_clean_display_name_only_strips_a_suffix_at_the_end():
+    """"Master Cooling Mechanical LLC Air Conditioning and Heating" is a real
+    row: cutting at the embedded LLC would discard words the business goes by."""
+    from app.services.sms_campaigns import clean_display_name as clean
+
+    name = "Master Cooling Mechanical LLC Air Conditioning and Heating"
+    assert clean(name) == name
+    # ...and a word that merely LOOKS like a suffix stays when it is the name.
+    assert clean("The Cooling Company") == "The Cooling Company"
+
+
+def test_clean_display_name_drops_junk_and_blanks_non_names():
+    from app.services.sms_campaigns import clean_display_name as clean
+
+    assert clean("Cool ❄️ Zone Inc") == "Cool Zone"
+    # Google Places returns "Name: category"; the lead goes by the part before
+    # the colon, not the directory descriptor after it.
+    assert (
+        clean("West Palm Beach HVAC Services: Air conditioning contractor")
+        == "West Palm Beach HVAC Services"
+    )
+    assert (
+        clean("South Florida Air Conditioning Contractors Association (SFACA)")
+        == "South Florida Air Conditioning Contractors Association"
+    )
+    # Not names at all -> "" so the template's own |fallback takes over.
+    # This address is a real value sitting in a production first_name field.
+    assert clean("069inigueznichols@gmail.com") == ""
+    assert clean("www.coolzone.com") == ""
+    assert clean("12345") == ""
+    assert clean("") == "" and clean(None) == "" and clean("   ") == ""
+    # A name that is ONLY a suffix is left alone rather than blanked — there is
+    # nothing better to greet them by.
+    assert clean("LLC") == "LLC"
+
+
+class _Step:
+    def __init__(self, body):
+        self.id = "s1"
+        self.body_template = body
+        self.ai_instructions = ""
+
+
+def test_sms_render_strips_suffix_end_to_end():
+    """Through render_body — what the engine AND the preview both call — so the
+    scrub is proven where it actually ships, not just in the helper."""
+    c = _Contact("c1", first_name="Kalos Services Inc.")  # business name in the name field
+    step = _Step("Hi {{first_name|there}}, quick question about {{company}}.")
+    body = sms_campaigns.render_body(None, c, step)
+    assert body == "Hi Kalos Services, quick question about Kalos Services."
+    assert "Inc" not in body
+
+
+def test_sms_render_falls_back_when_the_name_is_an_email_address():
+    """A first_name holding an email address (a real production row) must not
+    be texted at the lead — it scrubs to blank, so the template's own
+    |fallback takes over."""
+    c = _Contact("c2", first_name="069inigueznichols@gmail.com")
+    step = _Step("Hi {{first_name|there}}!")
+    assert sms_campaigns.render_body(None, c, step) == "Hi there!"
+
+
+def test_sms_render_keeps_meaningful_punctuation_end_to_end():
+    c = _Contact("c3", first_name="Anthony’s Cooling-Heating-Electrical")
+    step = _Step("Hi {{first_name|there}}!")
+    assert (
+        sms_campaigns.render_body(None, c, step)
+        == "Hi Anthony's Cooling-Heating-Electrical!"
+    )
