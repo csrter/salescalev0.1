@@ -50,6 +50,7 @@ import {
   previewSmsStep,
   saveSmsSteps,
   setLeadNotifications,
+  setOrgBlueBubblesService,
   setOrgSmsOptInDefault,
   smsAnalytics,
   smsUsage,
@@ -538,6 +539,11 @@ function DashboardPanel({
       </div>
 
       {isAdmin && <OrgOptInDefaultCard isOwner={isOwner} />}
+      {isAdmin && (
+        <BlueBubblesServiceCard
+          hasBlueBubbles={accounts.some((a) => a.provider === "bluebubbles")}
+        />
+      )}
       {isAdmin && <LeadNotificationsCard hasAccount={accounts.length > 0} />}
       {isAdmin && (
         <LeadRelayCard
@@ -891,6 +897,73 @@ function OrgOptInDefaultCard({ isOwner }: { isOwner: boolean }) {
           intake funnels collect SMS consent before leads reach Salescale.
           STOP/suppression always wins.
           {!isOwner && " Only the organization owner can change this."}
+        </p>
+      </GlassCard>
+    </div>
+  );
+}
+
+/** Admin-only: which Apple service this org's BlueBubbles accounts send on.
+ *
+ * One flip for the whole org, deliberately — the leg that works is a property
+ * of the HOST MAC, not of the recipient. SMS needs the Mac's paired iPhone
+ * with Text Message Forwarding on; iMessage needs only the Mac's Apple ID but
+ * reaches only iMessage-registered numbers. Per-recipient routing is NOT what
+ * this is: deciding per send from a live availability probe is what took
+ * failure rates from 0.9% to 92% on 2026-08-25. */
+function BlueBubblesServiceCard({ hasBlueBubbles }: { hasBlueBubbles: boolean }) {
+  const toast = useToast();
+  const [value, setValue] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    getMyOrg()
+      .then((o) => setValue(o.bluebubbles_service || "SMS"))
+      .catch(() => {});
+  }, []);
+
+  const choose = async (next: string) => {
+    if (next === value || busy) return;
+    const prev = value;
+    setValue(next);
+    setBusy(true);
+    try {
+      const o = await setOrgBlueBubblesService(next);
+      setValue(o.bluebubbles_service);
+      toast(
+        next === "iMessage"
+          ? "Sending as iMessage (blue bubble)"
+          : "Sending as SMS (green bubble)",
+        "ok",
+      );
+    } catch (e) {
+      setValue(prev);
+      toast(e instanceof Error ? e.message : "Failed to update", "error");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (value == null) return null;
+
+  return (
+    <div className="sms-redline">
+      <GlassCard className="sms-optin-card">
+        <Segmented
+          ariaLabel="BlueBubbles send service"
+          value={value}
+          onChange={choose}
+          options={[
+            { value: "SMS", label: "SMS only" },
+            { value: "iMessage", label: "iMessage only" },
+          ]}
+        />
+        <p className="sms-hint">
+          {value === "iMessage"
+            ? "Every message from your connected Macs sends as iMessage (blue bubble). This needs only the Mac's Apple ID — but it reaches only numbers registered on iMessage, and sends to everyone else will fail."
+            : "Every message from your connected Macs sends as SMS (green bubble). This reaches any mobile number, including iMessage users — but it needs the Mac's paired iPhone online with Text Message Forwarding turned on."}
+          {" Applies to every connected Mac in your organization. Twilio, Telnyx and Sendblue are unaffected."}
+          {!hasBlueBubbles && " You have no Mac connected yet, so this changes nothing today."}
         </p>
       </GlassCard>
     </div>

@@ -37,6 +37,7 @@ from sqlalchemy.orm import Session
 
 from ..config import get_settings
 from ..models.base import utcnow
+from ..models.core import Organization
 from ..models.crm import Contact
 from ..models.sms_outreach import (
     SMS_ACCOUNT_ACTIVE,
@@ -408,6 +409,35 @@ def _bb_chat_missing(resp, payload: dict) -> bool:
 # provider (see api/sms_outreach._can_report_read).
 BLUEBUBBLES_SERVICE = "SMS"
 
+# The two legs a BlueBubbles host can send on. Which one an org uses is now
+# its own setting (Organization.bluebubbles_service) rather than the constant
+# above, because which leg WORKS is a property of the host Mac, not of the
+# product: SMS needs a paired iPhone with Text Message Forwarding enabled;
+# iMessage needs only the Mac's Apple ID but reaches only iMessage-registered
+# numbers. On 2026-08-27 the SMS leg died on the sending Mac (53/53 sends
+# error 4) while iMessage from the same host delivered 6/6 — with the service
+# hardcoded there was no way to move to the working leg without a deploy.
+#
+# This is deliberately still ONE choice per org, resolved once per send from
+# stored config. It is NOT a return to per-recipient routing: the incident
+# above came from a LIVE availability probe deciding per send, which failed
+# OPEN to iMessage when the Private API helper died and put a 95%-green-bubble
+# audience on a service that could not carry it. A stored org-level constant
+# has no probe to fail.
+BLUEBUBBLES_SERVICES = ("SMS", "iMessage")
+
+
+def bluebubbles_service_for(db: Session, account: SmsAccount) -> str:
+    """Which Apple service this account's org sends BlueBubbles messages on.
+    Falls back to the SMS default for any unset/unrecognised value, so a bad
+    row can never route a send onto an unsupported service."""
+    org = db.get(Organization, account.organization_id)
+    value = (getattr(org, "bluebubbles_service", None) or "").strip()
+    for known in BLUEBUBBLES_SERVICES:
+        if value.lower() == known.lower():
+            return known
+    return BLUEBUBBLES_SERVICE
+
 
 # Cache for the server-capability probe below: {relay_base: (expires_at, method)}.
 # Whether a Mac has a working Private API helper is a property of that host's
@@ -462,10 +492,10 @@ def _probe_bluebubbles_method(base: str, pw: str) -> str:
 
 
 def _bluebubbles_send(
-    account: SmsAccount, to_number: str, body: str
+    account: SmsAccount, to_number: str, body: str, service: Optional[str] = None
 ) -> Tuple[str, Optional[str], Optional[str]]:
-    """Send via the org's BlueBubbles relay, always on the green-bubble SMS
-    service (see BLUEBUBBLES_SERVICE for why iMessage routing was removed).
+    """Send via the org's BlueBubbles relay on `service` — the org's configured
+    leg (see bluebubbles_service_for), defaulting to green-bubble SMS.
     For an EXISTING conversation we POST message/text (follow-up steps
     stay threaded); for a first-time recipient that chat doesn't exist yet
     (BlueBubbles 500s 'Chat does not exist!'), we fall back to chat/new which
@@ -476,7 +506,7 @@ def _bluebubbles_send(
     if not base:
         return "", "config", "No relay URL configured"
     pw = decrypt_secret(account.auth_token_encrypted or "")
-    service = BLUEBUBBLES_SERVICE
+    service = service or BLUEBUBBLES_SERVICE
     method = _bluebubbles_method(base, pw)
     data = {
         "chatGuid": f"{service};-;{to_number}",
@@ -507,11 +537,13 @@ def _bluebubbles_send(
             str(payload.get("status") or resp.status_code),
             _bb_error_message(payload) or f"BlueBubbles HTTP {resp.status_code}",
         )
-    # NOTE: there is deliberately no iMessage retry here. A "Failed to find all
-    # handles" on the SMS service means the host Mac has lost its paired
-    # iPhone / Text Message Forwarding link — a host problem to fix, not one to
-    # paper over by rerouting the lead onto a service that reaches even fewer
-    # of them.
+    # NOTE: there is deliberately no cross-service retry here. A "Failed to
+    # find all handles" means the host Mac cannot carry the org's configured
+    # leg at all — on SMS it has lost its paired iPhone / Text Message
+    # Forwarding link; on iMessage the recipient is not registered. Either way
+    # it is a configuration problem to surface (flip the org's service, or fix
+    # the host), not one to paper over per send by silently rerouting: doing
+    # exactly that, from a live probe, is what caused the 2026-08-25 incident.
     #
     # BlueBubbles' AppleScript path can error AFTER Messages.app accepted the
     # text ("[500] Message sent with an error", no guid returned) — the
@@ -711,10 +743,15 @@ def _verify_telnyx(account: SmsAccount) -> Tuple[bool, str]:
 
 
 def _provider_send(
-    account: SmsAccount, to_number: str, body: str
+    account: SmsAccount,
+    to_number: str,
+    body: str,
+    service: Optional[str] = None,
 ) -> Tuple[str, Optional[str], Optional[str]]:
+    """`service` applies to BlueBubbles only (the org's configured leg); every
+    other provider picks its own transport."""
     if account.provider == "bluebubbles":
-        return _bluebubbles_send(account, to_number, body)
+        return _bluebubbles_send(account, to_number, body, service)
     if account.provider == "sendblue":
         return _sendblue_send(account, to_number, body)
     if account.provider == "telnyx":
@@ -802,11 +839,15 @@ def channel_health(db: Session, account: SmsAccount) -> dict:
     downgraded = sum(
         1 for _, service in rows if service and service.upper() == "SMS"
     )
-    # Sendblue only. BlueBubbles now sends every message on the SMS service by
-    # design (BLUEBUBBLES_SERVICE), so a green-bubble "downgrade" is the
-    # intended outcome there, not a signal — counting it would mark every
-    # BlueBubbles account permanently degraded.
-    imessage_capable = account.provider == "sendblue"
+    # A green-bubble send only counts as a "downgrade" against an account that
+    # was ASKED for iMessage. Sendblue always is; a BlueBubbles account is only
+    # when its org is set to the iMessage leg — on the SMS leg every send is
+    # green by design, and counting that would mark the account permanently
+    # degraded.
+    imessage_capable = account.provider == "sendblue" or (
+        account.provider == "bluebubbles"
+        and bluebubbles_service_for(db, account) != BLUEBUBBLES_SERVICE
+    )
 
     if sampled == 0:
         return {
@@ -958,7 +999,9 @@ def send(
         is_interested=is_interested,
     )
     try:
-        sid, error_code, error_detail = _provider_send(account, to_number, final_body)
+        sid, error_code, error_detail = _provider_send(
+            account, to_number, final_body, bluebubbles_service_for(db, account)
+        )
     except SmsProviderError as e:
         row.status = SMS_MSG_FAILED
         row.error_detail = str(e)
@@ -1020,7 +1063,9 @@ def send_notification(
         body=body,
     )
     try:
-        sid, error_code, error_detail = _provider_send(account, to_number, body)
+        sid, error_code, error_detail = _provider_send(
+            account, to_number, body, bluebubbles_service_for(db, account)
+        )
     except SmsProviderError as e:
         row.status = SMS_MSG_FAILED
         row.error_detail = str(e)
@@ -1074,7 +1119,9 @@ def send_reply(
         body=body,
     )
     try:
-        sid, error_code, error_detail = _provider_send(account, to_number, body)
+        sid, error_code, error_detail = _provider_send(
+            account, to_number, body, bluebubbles_service_for(db, account)
+        )
     except SmsProviderError as e:
         row.status = SMS_MSG_FAILED
         row.error_detail = str(e)

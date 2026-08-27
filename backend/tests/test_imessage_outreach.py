@@ -53,8 +53,15 @@ def captured_bb(monkeypatch):
     the Twilio path explode so a mis-dispatch can't pass silently."""
     sent = []
 
-    def _fake(account, to_number, body):
-        sent.append({"account_id": account.id, "to": to_number, "body": body})
+    def _fake(account, to_number, body, service=None):
+        sent.append(
+            {
+                "account_id": account.id,
+                "to": to_number,
+                "body": body,
+                "service": service,
+            }
+        )
         return "BB_test_guid", None, None
 
     def _boom(*a, **k):
@@ -1015,3 +1022,159 @@ def test_bluebubbles_gated_by_operator_allowlist(im_org, api, monkeypatch, bb_cr
         )
         feats2 = login2.json()["features"]
         assert feats2 == {"ig_outreach": False, "bluebubbles": False}
+
+
+# --- org-level service switch (iMessage-only / SMS-only) ---------------------
+
+
+def _set_service(im_org, api, value):
+    return api.put(
+        "/api/orgs/me/bluebubbles-service",
+        json={"bluebubbles_service": value},
+        headers=im_org["headers"],
+    )
+
+
+def test_org_service_defaults_to_sms(im_org, api):
+    """Every existing org keeps green-bubble SMS until someone flips it — the
+    switch must not change behavior for anyone who never touches it."""
+    r = api.get("/api/orgs/me", headers=im_org["headers"])
+    assert r.status_code == 200, r.text
+    assert r.json()["bluebubbles_service"] == "SMS"
+
+    db = SessionLocal()
+    try:
+        acct = SmsAccount(
+            organization_id=im_org["org"],
+            name="bb",
+            provider="bluebubbles",
+            account_sid="bluebubbles",
+            relay_url="https://relay.example.com",
+        )
+        assert gateway.bluebubbles_service_for(db, acct) == "SMS"
+    finally:
+        db.close()
+
+
+def test_flipping_org_to_imessage_routes_the_send_over_imessage(
+    im_org, api, monkeypatch
+):
+    """The whole point of the switch: after the flip, the chat the send targets
+    is the iMessage one, not the SMS one. Asserted on the wire (chatGuid), not
+    on the setting — the setting is only worth anything if it reaches the
+    relay."""
+    assert _set_service(im_org, api, "iMessage").status_code == 200
+
+    seen = {}
+
+    def _fake_post(url, params=None, json=None, timeout=None):
+        seen["guid"] = json["chatGuid"]
+        return _FakeResp(200, {"status": 200, "data": {"guid": "IM_sent"}})
+
+    def _info_get(url, params=None, timeout=None):
+        if "availability" in url:
+            raise AssertionError("routing must not depend on a live probe")
+        return _FakeResp(200, {"status": 200, "data": {"private_api": True}})
+
+    monkeypatch.setattr(gateway.httpx, "get", _info_get)
+    monkeypatch.setattr(gateway.httpx, "post", _fake_post)
+    monkeypatch.setattr(gateway, "decrypt_secret", lambda s: "pw")
+
+    db = SessionLocal()
+    try:
+        acct = SmsAccount(
+            organization_id=im_org["org"],
+            name="bb",
+            provider="bluebubbles",
+            account_sid="bluebubbles",
+            relay_url="https://relay.example.com",
+        )
+        service = gateway.bluebubbles_service_for(db, acct)
+        assert service == "iMessage"
+        guid, code, _ = gateway._provider_send(acct, "+14805559991", "hi", service)
+    finally:
+        db.close()
+
+    assert guid == "IM_sent" and code is None
+    assert seen["guid"] == "iMessage;-;+14805559991"
+
+    # ...and flipping back returns to green bubbles.
+    assert _set_service(im_org, api, "SMS").status_code == 200
+    db = SessionLocal()
+    try:
+        acct = SmsAccount(
+            organization_id=im_org["org"],
+            name="bb",
+            provider="bluebubbles",
+            account_sid="bluebubbles",
+            relay_url="https://relay.example.com",
+        )
+        gateway._provider_send(
+            acct, "+14805559991", "hi", gateway.bluebubbles_service_for(db, acct)
+        )
+    finally:
+        db.close()
+    assert seen["guid"] == "SMS;-;+14805559991"
+
+
+def test_unknown_service_value_is_rejected_and_garbage_falls_back_to_sms(
+    im_org, api
+):
+    """Two guards. The API refuses anything outside the two legs, and if a bad
+    value ever reaches the column anyway, the resolver routes SMS rather than
+    handing the relay a service it cannot send on."""
+    assert _set_service(im_org, api, "carrier-pigeon").status_code == 422
+    assert _set_service(im_org, api, "").status_code == 422
+
+    db = SessionLocal()
+    try:
+        from app.models.core import Organization
+
+        org = db.get(Organization, im_org["org"])
+        org.bluebubbles_service = "nonsense"
+        db.commit()
+        acct = SmsAccount(
+            organization_id=im_org["org"],
+            name="bb",
+            provider="bluebubbles",
+            account_sid="bluebubbles",
+            relay_url="https://relay.example.com",
+        )
+        assert gateway.bluebubbles_service_for(db, acct) == "SMS"
+        org.bluebubbles_service = "SMS"
+        db.commit()
+    finally:
+        db.close()
+
+
+def test_service_value_is_accepted_case_insensitively(im_org, api):
+    """Operators type "imessage"; the column stores the one canonical spelling
+    the relay expects, so the chatGuid is never built from user casing."""
+    r = _set_service(im_org, api, "imessage")
+    assert r.status_code == 200, r.text
+    assert r.json()["bluebubbles_service"] == "iMessage"
+    assert _set_service(im_org, api, "SMS").status_code == 200
+
+
+def test_switch_is_admin_gated(im_org, api):
+    """A member can read the org but must not repoint every send in it."""
+    from sqlalchemy import select
+
+    from app.models.core import ROLE_MEMBER, ROLE_OWNER, User
+
+    def _set_role(role):
+        db = SessionLocal()
+        try:
+            user = db.execute(
+                select(User).where(User.email == "owner@imessageco.com")
+            ).scalar_one()
+            user.role = role
+            db.commit()
+        finally:
+            db.close()
+
+    _set_role(ROLE_MEMBER)
+    try:
+        assert _set_service(im_org, api, "iMessage").status_code == 403
+    finally:
+        _set_role(ROLE_OWNER)

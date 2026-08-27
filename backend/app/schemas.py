@@ -158,6 +158,7 @@ class OrganizationOut(BaseModel):
     require_mfa: bool = False
     allow_remember_device: bool = True
     sms_opt_in_default: bool = False
+    bluebubbles_service: str = "SMS"
     timezone: Optional[str] = None
     created_at: dt.datetime
 
@@ -172,6 +173,26 @@ class OrgRememberDeviceIn(BaseModel):
 
 class OrgSmsOptInDefaultIn(BaseModel):
     sms_opt_in_default: bool
+
+
+class OrgBlueBubblesServiceIn(BaseModel):
+    """Which leg this org's BlueBubbles (self-hosted iMessage) accounts send
+    on. Two values only — see services/sms_send.BLUEBUBBLES_SERVICES."""
+
+    bluebubbles_service: str
+
+    @field_validator("bluebubbles_service")
+    @classmethod
+    def _known_service(cls, v: str) -> str:
+        from .services.sms_send import BLUEBUBBLES_SERVICES
+
+        for known in BLUEBUBBLES_SERVICES:
+            if (v or "").strip().lower() == known.lower():
+                return known
+        raise ValueError(
+            "bluebubbles_service must be one of: "
+            + ", ".join(BLUEBUBBLES_SERVICES)
+        )
 
 
 class OrgTimezoneIn(BaseModel):

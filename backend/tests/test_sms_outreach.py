@@ -1945,8 +1945,15 @@ def test_lead_notification_prefers_bluebubbles_over_other_active_accounts(
 
     bb_sent = []
 
-    def _fake_bb(account, to_number, body):
-        bb_sent.append({"account_id": account.id, "to": to_number, "body": body})
+    def _fake_bb(account, to_number, body, service=None):
+        bb_sent.append(
+            {
+                "account_id": account.id,
+                "to": to_number,
+                "body": body,
+                "service": service,
+            }
+        )
         return "BB_test_guid", None, None
 
     monkeypatch.setattr(gateway, "_bluebubbles_send", _fake_bb)
@@ -2669,8 +2676,15 @@ def captured_provider(monkeypatch):
     of hitting BlueBubbles/Twilio."""
     sent = []
 
-    def _fake(account, to_number, body):
-        sent.append({"to": to_number, "body": body, "provider": account.provider})
+    def _fake(account, to_number, body, service=None):
+        sent.append(
+            {
+                "to": to_number,
+                "body": body,
+                "provider": account.provider,
+                "service": service,
+            }
+        )
         return "SIDrelay", None, None
 
     monkeypatch.setattr(gateway, "_provider_send", _fake)

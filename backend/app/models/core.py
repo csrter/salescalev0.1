@@ -82,6 +82,22 @@ class Organization(Base):
     sms_opt_in_default: Mapped[bool] = mapped_column(
         Boolean, default=False, server_default=text("false"), nullable=False
     )
+    # Org policy: which Apple service this org's BlueBubbles accounts send on
+    # — "SMS" (green bubble, via the host Mac's Text Message Forwarding) or
+    # "iMessage" (blue bubble, host Mac's Apple ID). One deliberate flip per
+    # org, NOT a per-send routing decision: the 2026-08-25 incident that
+    # removed iMessage routing came from deciding per send via a live
+    # availability probe that failed OPEN to iMessage when the Private API
+    # helper died, putting a 95%-green-bubble audience on a service that
+    # could not carry it. A fixed org-level choice cannot fail that way.
+    # Which leg works is a property of the HOST MAC, not of the recipient:
+    # SMS needs a paired iPhone with Text Message Forwarding on; iMessage
+    # needs only the Mac's Apple ID, but reaches only iMessage-registered
+    # numbers. Defaults to SMS — the wider-reaching leg.
+    # See services/sms_send.bluebubbles_service_for().
+    bluebubbles_service: Mapped[str] = mapped_column(
+        String(10), default="SMS", server_default=text("'SMS'"), nullable=False
+    )
     # Org policy: text-the-team alerts on new leads, reusing the SMS Outreach
     # module's connected account (services/lead_notify.py) rather than new
     # send infrastructure. lead_notification_phones is the org's own ops

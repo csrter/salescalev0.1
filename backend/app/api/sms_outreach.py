@@ -518,15 +518,21 @@ def _aware(value: dt.datetime) -> dt.datetime:
 # that; see _campaign_stats.
 
 
-def _can_report_read(account: Optional[SmsAccount]) -> bool:
+def _can_report_read(db: Session, account: Optional[SmsAccount]) -> bool:
     """Whether this sending account's channel can ever report a read receipt."""
     if account is None:
         # Unknown account (deleted row) — don't suppress a real measurement.
         return True
-    # BlueBubbles sends every message on the green-bubble SMS service
-    # (services/sms_send.BLUEBUBBLES_SERVICE), which never produces a read
-    # receipt — so a read rate there is 0 by construction and must render "—".
-    return account.provider == "sendblue"
+    if account.provider == "sendblue":
+        return True
+    # A BlueBubbles account only reports reads on the iMessage leg. The
+    # green-bubble SMS leg never produces a read receipt, so a read rate there
+    # is 0 by construction and must render "—" rather than a confident zero.
+    return (
+        account.provider == "bluebubbles"
+        and sms_send.bluebubbles_service_for(db, account)
+        != sms_send.BLUEBUBBLES_SERVICE
+    )
 
 
 def _campaign_can_report_read(
@@ -548,7 +554,7 @@ def _campaign_can_report_read(
         ids = [campaign.account_id]
     if not ids:
         return True
-    return any(_can_report_read(db.get(SmsAccount, aid)) for aid in ids)
+    return any(_can_report_read(db, db.get(SmsAccount, aid)) for aid in ids)
 
 
 # Windows at or under this length plot hourly instead of daily. 48h keeps the

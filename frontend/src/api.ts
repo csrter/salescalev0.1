@@ -249,6 +249,8 @@ export interface Org {
   require_mfa: boolean;
   allow_remember_device: boolean;
   sms_opt_in_default: boolean;
+  /** Which leg this org's BlueBubbles accounts send on: "SMS" | "iMessage". */
+  bluebubbles_service: string;
   /** Agency default IANA timezone; null = the outreach fallback. New campaigns inherit it. */
   timezone: string | null;
   created_at: string;
@@ -273,6 +275,17 @@ export const setOrgSmsOptInDefault = (sms_opt_in_default: boolean) =>
   api<Org>("/api/orgs/me/sms-opt-in-default", {
     method: "PUT",
     body: JSON.stringify({ sms_opt_in_default }),
+  });
+
+/** Which Apple service this org's BlueBubbles (self-hosted iMessage) accounts
+ * send on. "SMS" is green-bubble via the host Mac's paired iPhone + Text
+ * Message Forwarding; "iMessage" is blue-bubble via the Mac's Apple ID but
+ * only reaches iMessage-registered numbers. Applies to every BlueBubbles
+ * account in the org; other providers are unaffected. */
+export const setOrgBlueBubblesService = (bluebubbles_service: string) =>
+  api<Org>("/api/orgs/me/bluebubbles-service", {
+    method: "PUT",
+    body: JSON.stringify({ bluebubbles_service }),
   });
 
 // --- Lead SMS notifications (text-the-team alerts on new leads) ---

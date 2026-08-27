@@ -81,6 +81,7 @@ from ..schemas import (
     OrgLeadNotificationsIn,
     OrgOutreachContextIn,
     OrgRememberDeviceIn,
+    OrgBlueBubblesServiceIn,
     OrgSmsOptInDefaultIn,
     OrgLeadRelayIn,
     OrgTimezoneIn,
@@ -261,6 +262,30 @@ def set_sms_opt_in_default(
     org = db.get(Organization, user.organization_id)
     org.sms_opt_in_default = body.sms_opt_in_default
     db.commit()
+    return org
+
+
+@router.put("/me/bluebubbles-service", response_model=OrganizationOut)
+def set_bluebubbles_service(
+    body: OrgBlueBubblesServiceIn,
+    user: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Which Apple service this org's BlueBubbles accounts send on — "SMS"
+    (green bubble, needs the host Mac's paired iPhone + Text Message
+    Forwarding) or "iMessage" (blue bubble, needs only the Mac's Apple ID but
+    reaches only iMessage-registered numbers).
+
+    An operational choice about what the HOST MAC can carry, so it is admin-
+    settable and takes effect on the next send. It deliberately applies to
+    every BlueBubbles account in the org and to every recipient: per-recipient
+    routing from a live availability probe is what failed catastrophically on
+    2026-08-25 (see services/sms_send.BLUEBUBBLES_SERVICES). Other providers
+    (Twilio/Telnyx/Sendblue) pick their own transport and are unaffected."""
+    org = db.get(Organization, user.organization_id)
+    org.bluebubbles_service = body.bluebubbles_service
+    db.commit()
+    db.refresh(org)
     return org
 
 
