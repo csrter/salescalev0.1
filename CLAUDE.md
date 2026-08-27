@@ -4371,6 +4371,74 @@ live activation + the entitlement flip, the Outreach module build
       the gap, or simply leave the account connected and unused now that no
       campaign references it.
 
+- [x] SMS: org-level iMessage-only / SMS-only switch (2026-08-27, e0978a2,
+      migration e3b9d7f2a648, web + desktop). Diagnosed first, on prod: the
+      user's campaigns "weren't even being attempted" because ZERO of the 30
+      SMS campaigns were ACTIVE (18 paused / 8 draft / 4 archived), so every
+      enrollment sat parked with next_run_at NULL and
+      seconds_until_next_due() returned None — the scheduler had nothing to
+      pick up. The VPS was NOT at fault and needed no update: deployed code
+      was byte-identical to local HEAD (md5 on sms_send/sms_campaigns/main),
+      container up 41h with 0 restarts, run_schedulers() True, and the Meta
+      poll loop firing every 5 min on the dot. Live proof the whole path
+      works: when "fl cpa" was briefly activated at 14:07 UTC the engine
+      fired 7 real sends 7s apart (exactly the account's 6-15s spacing
+      throttle) — all 7 failed AT THE MAC.
+      ROOT CAUSE of the failures, read off the sending Mac's own Messages DB
+      through the relay (not inferred): of its last 60 outbound messages,
+      53/53 on service SMS failed error 4 (isDelivered false) while 6/6 on
+      service iMessage delivered. The relay itself was healthy the whole time
+      (private_api true, helper_connected true, 69,031 messages) — only the
+      paired-iPhone Text Message Forwarding leg was down. Since 2026-08-25
+      BlueBubbles is hard-pinned to green-bubble SMS, so the one working leg
+      was unreachable without a code change and a deploy. (Also found: the
+      other two relays are entirely down — only tunnel port 12346 is
+      listening on the VPS; 12345 and 8443 have no tunnel, hence their 502s.)
+      THE FIX — Organization.bluebubbles_service, resolved per send by
+      services/sms_send.bluebubbles_service_for() and threaded through
+      _provider_send -> _bluebubbles_send. Additive, server_default "SMS", so
+      no existing org changes behavior (verified post-deploy: all 3 prod orgs
+      and both BlueBubbles accounts resolve to SMS). Deliberately still ONE
+      stored choice per org, NOT per-recipient routing: the 2026-08-25
+      incident came from a LIVE availability probe deciding per send, which
+      failed OPEN to iMessage when the Private API helper died and put a
+      95%-green-bubble audience on a service that could not carry it. Stored
+      config has no probe to fail; unknown/garbage values resolve to SMS
+      rather than handing the relay a service it cannot send on. Two readers
+      that assumed BlueBubbles is always green became org-aware, since the
+      flip genuinely changes both: api/sms_outreach._can_report_read (the
+      iMessage leg DOES produce read receipts, so the read rate must stop
+      rendering "-") and channel_health's `downgraded` signal (a green-bubble
+      send is only a downgrade against an account that was ASKED for
+      iMessage). UI: a two-option Segmented on the SMS Dashboard (admin-only),
+      copy naming each leg's real prerequisite AND its failure mode.
+      Tests 770 -> 775 (default stays SMS; the flip asserted on the WIRE via
+      chatGuid rather than on the setting; unknown value 422 + garbage column
+      falls back to SMS; casing canonicalized; member gets 403). NOTE the
+      change broke 6 existing tests whose monkeypatched fakes took 3
+      positional args — the fakes now accept AND record `service`, so which
+      leg was used is assertable. Verified live on alt2 (card renders, flips
+      both ways, persists across reload, zero console errors; the recurring
+      alt2-fernet.key purge bit again and was regenerated). DEPLOYED to
+      production 2026-08-27: migration applied to the live Supabase DB
+      (alembic current = e3b9d7f2a648 head), api/app 200, route auth-gated,
+      zero boot errors; desktop rebuilt IN LOCKSTEP per the standing rule
+      (PyInstaller backend 59MB hash-matched into the bundle, new revision
+      confirmed inside the frozen archive via CArchiveReader, DMG 148MB, new
+      UI verified inside app.asar), installed to /Applications and
+      launch-verified (own backend bound :8000, health 200, new route 401 not
+      404 on the PACKAGED backend). Repo-root DMG copy refreshed
+      sha-identical.
+      STILL USER-SIDE, and the switch does not remove it: campaigns are all
+      paused, so nothing sends until they are activated (that texts ~3,200
+      real leads across fl paint + fl cpa — deliberately left to the user).
+      Flipping to iMessage makes the working leg usable on that Mac TODAY,
+      but only ~4.9% of checked contacts (328 of 6,658) are iMessage-capable
+      and BOTH Mac audiences are entirely unchecked — so the durable fix is
+      still Text Message Forwarding on that Mac's paired iPhone. The 339
+      errored enrollments across those two campaigns need retry-errors after
+      whichever leg is chosen actually works.
+
 - [ ] Stripe live activation + entitlement flip (after 12–14, so real
       limits land everywhere in one pass)
 - [ ] Outreach module build (dev-mode) — go-live gated on Meta App
