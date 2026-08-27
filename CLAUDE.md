@@ -4439,6 +4439,51 @@ live activation + the entitlement flip, the Outreach module build
       errored enrollments across those two campaigns need retry-errors after
       whichever leg is chosen actually works.
 
+- [x] SMS personalization: name scrubbing (2026-08-27, 39caa32, web only —
+      NO migration). "Hey is this Shane's Air Conditioning & Heating, Inc.?"
+      reads like a form letter. Name-shaped tokens now pass through
+      sms_campaigns.clean_display_name() before reaching the template.
+      Built from the DATA, not a guessed list: surveyed the org's 207
+      business-style leads first — suffixes inc 33, llc 29, corp 2, co 2,
+      corporation 1; non-alphanumerics & . , - / ' ( ) @ : and a curly
+      apostrophe. Three rules carry the edge cases. (1) Suffix stripping is
+      TRAILING ONLY, applied repeatedly ("Cooling Co., Inc." reduces fully):
+      "Master Cooling Mechanical LLC Air Conditioning and Heating" is a real
+      row and cutting at the embedded LLC would discard words the business
+      goes by. "company" is deliberately NOT in _LEGAL_SUFFIXES — "The
+      Cooling Company" goes by that name. (2) Punctuation that carries
+      meaning SURVIVES (_NAME_KEEP_PUNCT = " &-/'.,"): "A/C Tech", "A-1 Heat
+      & Air", "Sam's Air and Heat", "Elite Cooling, Heating, & Electrical".
+      Everything else non-alphanumeric plus Cc/Cf/So (control, zero-width,
+      emoji) is dropped. Curly quotes + en/em dashes are FOLDED FIRST via
+      _PUNCT_FOLD — NFKC does NOT fold them and they sit outside the
+      keep-set, so without that step "Anthony's" silently became "Anthonys"
+      (caught in the dry-run, not by a test). (3) A value that isn't a name
+      returns "" rather than being half-cleaned — an email address (a real
+      prod first_name holds "069inigueznichols@gmail.com"), a URL, or digits
+      alone. Empty is LOAD-BEARING: it falls through to the template's own
+      |fallback, and a blank first_name hands off to the existing
+      business-name greeting failsafe. Also splits Google Places'
+      "Name: category" at the colon. Hooked in render_body rather than
+      _render_template because `extra` wins in _resolve_token, so ONE hook
+      covers both {{token}} substitution and {{#if token}} conditionals.
+      SMS-ONLY on purpose — the email engine renders the same tokens and is
+      one call site away if it should follow. Dry-run over all 207 real
+      names before shipping: 74 cleaned, 1 blanked, 132 untouched, zero
+      regressions (only cosmetic nit: "Rolando's H.V.A.C." loses its final
+      period). Tests 775 -> 782, every input a real production name; ONE
+      existing test updated for the deliberate contract change — the
+      business-name greeting asserted "Desert Air HVAC LLC" and now asserts
+      "Desert Air HVAC". Verified live through the REAL preview endpoint on
+      alt2 (three seeded problem names rendered correctly, seeds removed
+      after). DEPLOYED to production 2026-08-27: backend rebuilt/recreated,
+      /api/health 200, alembic unchanged at e3b9d7f2a648, zero boot errors,
+      and the scrub re-confirmed INSIDE the prod container against the live
+      CRM (207 names, 75 change, 1 blanks to |fallback). No desktop rebuild
+      needed for correctness — sending is server-side and there is no
+      migration, so the packaged app is not stale-revision exposed; it just
+      renders old previews until its next build.
+
 - [ ] Stripe live activation + entitlement flip (after 12–14, so real
       limits land everywhere in one pass)
 - [ ] Outreach module build (dev-mode) — go-live gated on Meta App
