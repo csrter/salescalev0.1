@@ -12,8 +12,8 @@ bars: against a dark background it has almost no contrast, so cobalt does that
 job and navy sits underneath it.
 
 The copy is original — written for this role, not lifted from any reference ad —
-the pay is stated as commission only, and the call to action asks for a plain
-text DM. Rewrite any of it in the data blocks; the layout reflows around
+the seat is described as cold outreach, the pay is stated as commission only,
+and the call to action asks for a plain text DM. Rewrite any of it in the data blocks; the layout reflows around
 whatever you put there.
 
 ## What gets built
@@ -22,7 +22,8 @@ whatever you put there.
 
 - `"solo"` (default) — **one slide, `setter-hiring.png`**, carrying everything:
   eyebrow, headline, the `Commission only · OTE $5K–$7K/mo.` pill, what the
-  role is, a four-item checklist, and the DM panel. Edit it in the `SOLO` block.
+  role is (cold outreach), a four-item checklist, and the DM panel. Edit it in
+  the `SOLO` block.
 - `"series"` — the original four slides, below.
 - `"both"` — the single slide plus the series.
 
@@ -35,8 +36,8 @@ Series slides (`build: "series"` or `"both"`):
 | File | Slide | Content |
 |---|---|---|
 | `01-hook.png` | Hook | "Setter seats are open." + cobalt `Remote · OTE $5K–$7K/month.` pill |
-| `02-role.png` | The role | What the agency does, what the setter actually does day to day |
-| `03-fit.png` | What we need | US-based / has sold before / weekday hours / pay |
+| `02-role.png` | The role | What the agency does, and that this is a cold outreach seat |
+| `03-fit.png` | What we need | US-based / has sold before / cold outreach weekdays / commission only |
 | `04-cta.png` | CTA | "We interview same day." + cobalt DM panel — a plain text DM, no voice note |
 
 ## Run it

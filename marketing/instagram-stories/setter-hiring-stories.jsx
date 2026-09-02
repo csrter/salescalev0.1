@@ -111,20 +111,21 @@ var SLIDES = [
     bodySize: 46,
     blocks: [
       { lines: [
-          { t: CONFIG.brand + " builds demand for" },
-          { t: "home-service contractors" },
+          { t: CONFIG.brand + " sells growth systems" },
+          { t: "to home-service contractors" },
           { t: "across the US." }
       ]},
       { lines: [
-          { t: "You work the leads our ads bring" },
-          { t: "in, sort the real ones from the" },
-          { t: "tire-kickers, and put estimates" },
-          { t: "on the calendar." }
+          { t: "This is a cold outreach seat." },
+          { t: "You work lists we provide \u2014 DMs," },
+          { t: "calls and texts \u2014 start the" },
+          { t: "conversation, and book the" },
+          { t: "qualified ones." }
       ]},
       { lines: [
-          { t: "Leads, scripts and the CRM", hl: true },
+          { t: "Lead lists, scripts and the CRM", hl: true },
           { t: "come with the seat.", hl: true },
-          { t: "You bring the reps." }
+          { t: "You bring the volume." }
       ]}
     ]
   },
@@ -141,7 +142,8 @@ var SLIDES = [
       { icon: "01", lines: [ { t: "Based in the US." } ] },
       { icon: "02", lines: [ { t: "You\u2019ve sold", hl: true },
                              { t: "something before.", hl: true } ] },
-      { icon: "03", lines: [ { t: "Weekdays, 10am\u20135pm." } ] },
+      { icon: "03", lines: [ { t: "Cold outreach, weekdays" },
+                             { t: "10am\u20135pm." } ] },
       { icon: "04", lines: [ { t: "Commission only.", hl: true },
                              { t: "OTE $5K\u2013$7K/mo." } ] }
     ]
@@ -174,7 +176,7 @@ var SOLO = {
   file: "setter-hiring",
   type: "solo",
 
-  eyebrow: "NOW HIRING \u00b7 REMOTE (US)",
+  eyebrow: "NOW HIRING \u00b7 COLD OUTREACH \u00b7 US",
   headline: "Setter seats\rare open.",
   headlineSize: 100,
 
@@ -183,17 +185,17 @@ var SOLO = {
 
   roleSize: 40,
   role: [
-    { t: CONFIG.brand + " runs the ads for home-service" },
-    { t: "contractors. You work the leads they bring" },
-    { t: "in, qualify them, and book the estimate." }
+    { t: CONFIG.brand + " sells growth systems to" },
+    { t: "home-service contractors. You run the" },
+    { t: "cold outreach that books the calls." }
   ],
 
   rowSize: 40,
   rows: [
     { t: "Based in the US." },
-    { t: "You\u2019ve sold something before.", hl: true },
-    { t: "Weekdays, 10am\u20135pm." },
-    { t: "Leads, scripts and CRM provided." }
+    { t: "Prior sales experience.", hl: true },
+    { t: "Cold DMs, calls and texts, daily." },
+    { t: "Lead lists, scripts and CRM provided." }
   ],
 
   ctaSize: 46,
