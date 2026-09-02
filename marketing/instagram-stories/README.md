@@ -11,14 +11,18 @@ chrome and backgrounds. Deep navy is deliberately *not* used for the highlight
 bars: against a dark background it has almost no contrast, so cobalt does that
 job and navy sits underneath it.
 
+The copy is original — written for this role, not lifted from any reference ad —
+and the call to action asks for a plain text DM only. Rewrite any of it in the
+`SLIDES` block; the layout reflows around whatever you put there.
+
 Slides produced:
 
 | File | Slide | Content |
 |---|---|---|
-| `01-hook.png` | Hook | "We're hiring setters." + cobalt `OTE $5K–$7K/month.` pill |
-| `02-offer.png` | The offer | What the agency does, what the setter does, "Leads, script, and CRM are all provided" |
-| `03-requirements.png` | Requirements | US-based / previous sales experience required / hours / pay |
-| `04-cta.png` | CTA | "Spots are limited." + cobalt DM panel with the voice-message ask |
+| `01-hook.png` | Hook | "Setter seats are open." + cobalt `Remote · OTE $5K–$7K/month.` pill |
+| `02-role.png` | The role | What the agency does, what the setter actually does day to day |
+| `03-fit.png` | What we need | US-based / has sold before / weekday hours / pay |
+| `04-cta.png` | CTA | "We interview this week." + cobalt DM panel — a plain text DM, no voice note |
 
 ## Run it
 
@@ -61,7 +65,7 @@ text layer, which is what allows a red bar behind exactly the lines you pick.
 - `{ t: "some text", hl: true }` — draws the cobalt highlight bar behind that line.
 - `\r` inside a headline is a hard line break.
 - On the CTA slide each line is an array of parts, and `chip: true` on a part
-  puts a navy box behind just those words (that's the `voice message` treatment).
+  puts a navy box behind just those words (it's on the `SETTER` keyword).
 - Font sizes auto-shrink to fit the column, so longer copy still lays out
   cleanly — you don't have to hand-tune sizes after an edit.
 

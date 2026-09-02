@@ -10,10 +10,10 @@
      Builds four 1080x1920 story slides, each as its own document with live,
      editable text layers, then exports PNGs into CONFIG.outputFolder.
 
-       01  hook          "We're hiring setters." + cobalt OTE pill
-       02  offer         "The offer" + body copy with cobalt highlight lines
-       03  requirements  numbered rows: US / sales experience / hours / pay
-       04  cta           "Spots are limited." + cobalt DM block
+       01  hook   headline + cobalt "Remote / OTE" pill
+       02  role   what the agency does and what the setter actually does
+       03  fit    numbered rows: US-based / has sold before / hours / pay
+       04  cta    headline + cobalt DM panel (a plain text DM, nothing else)
 
    Edit the CONFIG and SLIDES blocks only. Everything below "ENGINE" is
    generic layout machinery.
@@ -88,58 +88,55 @@ var SLIDES = [
   {
     file: "01-hook",
     type: "hook",
-    headline: "We’re hiring\rsetters.",     // \r = hard line break
+    headline: "Setter seats\rare open.",       // \r = hard line break
     headlineSize: 132,
-    pill: "OTE $5K–$7K/month.",
-    pillSize: 62,
+    pill: "Remote \u00b7 OTE $5K\u2013$7K/month.",
+    pillSize: 58,
     anchor: "middle"                             // top | middle | bottom
   },
 
-  /* ---- 02 THE OFFER ------------------------------------------------------ */
+  /* ---- 02 THE ROLE ------------------------------------------------------- */
   {
-    file: "02-offer",
+    file: "02-role",
     type: "stack",
-    title: "The offer",
+    title: "The role",
     titleSize: 108,
     rule: true,                                  // short cobalt underline
     bodySize: 46,
     blocks: [
       { lines: [
-          { t: CONFIG.brand + " runs AI-powered" },
-          { t: "growth systems for home-service" },
-          { t: "contractors across the US." }
+          { t: CONFIG.brand + " builds demand for" },
+          { t: "home-service contractors" },
+          { t: "across the US." }
       ]},
       { lines: [
-          { t: "We book qualified estimates onto" },
-          { t: "our clients’ calendars using AI ads," },
-          { t: "AI receptionists, and setters like you." }
+          { t: "You work the leads our ads bring" },
+          { t: "in, sort the real ones from the" },
+          { t: "tire-kickers, and put estimates" },
+          { t: "on the calendar." }
       ]},
       { lines: [
-          { t: "Your job: work the leads, qualify" },
-          { t: "them, and book them in." }
-      ]},
-      { lines: [
-          { t: "Leads, script, and CRM", hl: true },
-          { t: "are all provided", hl: true },
-          { t: "— you just execute." }
+          { t: "Leads, scripts and the CRM", hl: true },
+          { t: "come with the seat.", hl: true },
+          { t: "You bring the reps." }
       ]}
     ]
   },
 
-  /* ---- 03 REQUIREMENTS --------------------------------------------------- */
+  /* ---- 03 WHAT WE NEED --------------------------------------------------- */
   {
-    file: "03-requirements",
+    file: "03-fit",
     type: "rows",
-    title: "Requirements",
-    titleSize: 116,
+    title: "What we need",
+    titleSize: 104,
     rule: true,
     rowSize: 52,
     rows: [
-      { icon: "01", lines: [ { t: "Must be based in the US." } ] },
-      { icon: "02", lines: [ { t: "Previous sales",       hl: true },
-                             { t: "experience required.", hl: true } ] },
-      { icon: "03", lines: [ { t: "Hours: 10am–4/5pm." } ] },
-      { icon: "04", lines: [ { t: "Pay: OTE $5K–$7K/month.", hl: true } ] }
+      { icon: "01", lines: [ { t: "Based in the US." } ] },
+      { icon: "02", lines: [ { t: "You\u2019ve sold", hl: true },
+                             { t: "something before.", hl: true } ] },
+      { icon: "03", lines: [ { t: "Weekdays, 10am\u20135pm." } ] },
+      { icon: "04", lines: [ { t: "OTE $5K\u2013$7K/month.", hl: true } ] }
     ]
   },
 
@@ -147,16 +144,16 @@ var SLIDES = [
   {
     file: "04-cta",
     type: "cta",
-    headline: "Spots are\rlimited.",
-    headlineSize: 138,
+    headline: "We interview\rthis week.",
+    headlineSize: 132,
     rule: true,                                  // cobalt underline under headline
     blockSize: 54,
     blockTop: 1120,                              // Y of the cobalt panel's first line
     // Each line is a list of parts. chip:true draws a navy box behind that part.
     block: [
-      [ { t: "DM the word “setter” —" } ],
-      [ { t: "with a " }, { t: "voice message", chip: true }, { t: " —" } ],
-      [ { t: "and I’ll send next steps." } ]
+      [ { t: "DM the word " }, { t: "SETTER", chip: true } ],
+      [ { t: "and where you\u2019ve sold before." } ],
+      [ { t: "That\u2019s the whole application." } ]
     ]
   }
 ];
