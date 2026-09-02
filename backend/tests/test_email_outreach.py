@@ -224,7 +224,7 @@ def test_gateway_sent_has_footer_headers_and_tokens(
     assert mime["List-Unsubscribe"].startswith("<http")
     assert mime["List-Unsubscribe-Post"] == "List-Unsubscribe=One-Click"
 
-    body = mime.get_content()
+    body = mime.get_body(preferencelist=('plain',)).get_content()
     assert "500 Market St, Denver CO 80202" in body  # mailing address in footer
     assert "Cold Email Co" in body  # org name in footer
     assert "Unsubscribe:" in body
@@ -253,7 +253,7 @@ def test_gateway_unsubscribe_token_rendered_in_place(
         body="Hello!\n\nOpt out any time: {{unsubscribe_url}}",
     )
     assert code == gateway.SENT
-    body = captured_sends[-1].get_content()
+    body = captured_sends[-1].get_body(preferencelist=('plain',)).get_content()
     assert "{{unsubscribe_url}}" not in body
     assert "Opt out any time: http" in body
     # Rendered in place → no SECOND unsubscribe link appended...
@@ -908,3 +908,53 @@ def test_mailing_address_not_trapped_behind_white_label_gate(ce_org, api, monkey
         headers=ce_org["headers"],
     )
     assert r.status_code == 403
+
+
+def test_gateway_embeds_open_pixel_in_html_alternative(
+    ce_org, api, probe_ok, captured_sends
+):
+    """Cold sends are multipart/alternative: plain text stays the primary body
+    and the HTML twin carries the open pixel, so opened_at can ever be set."""
+    acct = _create_account(ce_org, api, from_email="htmlpixel@coldemailco.com")
+    contact_id = _make_contact(ce_org, api, email_addr="pixel-lead@example.com")
+
+    code, _ = _send_via_gateway(
+        acct["id"], contact_id, body="Are you taking on new clients?"
+    )
+    assert code == gateway.SENT
+    mime = captured_sends[0]
+    assert mime.is_multipart()
+    assert mime.get_content_type() == "multipart/alternative"
+
+    text = mime.get_body(preferencelist=("plain",)).get_content()
+    html = mime.get_body(preferencelist=("html",)).get_content()
+    assert "Are you taking on new clients?" in text
+    assert "Are you taking on new clients?" in html
+    # the pixel points at the public open route with this message's token
+    assert "/api/email-outreach/o/" in html and ".gif" in html
+    assert 'width="1"' in html
+    # the CAN-SPAM unsubscribe link must stay clickable in the HTML part
+    assert "<a href=" in html and "unsubscribe" in html
+
+
+def test_warmup_send_carries_no_pixel_and_stays_plain_text(
+    ce_org, api, probe_ok, captured_sends
+):
+    """Warmup mail is synthetic and threadless: no contact, no pixel, and it
+    must not become multipart or it stops looking like ordinary mail."""
+    acct = _create_account(ce_org, api, from_email="warm@coldemailco.com")
+    db = SessionLocal()
+    try:
+        account = db.get(EmailAccount, acct["id"])
+        code, _ = gateway.send(
+            db, account, to_email="peer@coldemailco.com",
+            subject="hello", body_text="warmup body", kind="warmup",
+        )
+        db.commit()
+    finally:
+        db.close()
+    assert code == gateway.SENT
+    mime = captured_sends[0]
+    assert not mime.is_multipart()
+    assert mime.get_content_type() == "text/plain"
+    assert "/o/" not in mime.get_content()

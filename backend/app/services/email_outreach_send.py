@@ -29,6 +29,7 @@ import datetime as dt
 import logging
 import re
 from email.message import EmailMessage as MimeEmailMessage
+from html import escape as html_escape
 from email.utils import make_msgid
 from typing import Optional, Tuple
 
@@ -202,6 +203,47 @@ def _footer(org: Organization, unsub_url: str) -> str:
     return f"{_identity_block(org)}\nUnsubscribe: {unsub_url}"
 
 
+_URL_RE = re.compile(r"https?://[^\s<>\"]+")
+
+
+def _linkify(text: str) -> str:
+    """HTML-escape `text`, wrapping bare URLs in anchors.
+
+    An HTML part does NOT auto-link bare URLs the way text/plain does, so
+    without this the CAN-SPAM unsubscribe link in the footer would render as
+    unclickable text for every recipient whose client prefers the HTML part.
+    Escaping is done per-segment so a URL containing "&" is not mangled into
+    "&amp;" inside its own href."""
+    out: list[str] = []
+    pos = 0
+    for m in _URL_RE.finditer(text):
+        out.append(html_escape(text[pos:m.start()]))
+        url = m.group(0).rstrip(".,);:")
+        trail = m.group(0)[len(url):]
+        safe = html_escape(url, quote=True)
+        out.append(f'<a href="{safe}">{safe}</a>{html_escape(trail)}')
+        pos = m.end()
+    out.append(html_escape(text[pos:]))
+    return "".join(out)
+
+
+def _html_alternative(text: str, pixel_url: Optional[str]) -> str:
+    """HTML twin of the plain-text body: same wording, same line breaks, plus
+    the open-tracking pixel. Deliberately minimal markup — the plain-text part
+    stays the primary body and this exists so opens can be counted."""
+    body = _linkify(text).replace("\n", "<br>\n")
+    pixel = (
+        f'<img src="{html_escape(pixel_url, quote=True)}" width="1" height="1"'
+        ' alt="" style="display:block;border:0;height:1px;width:1px">'
+        if pixel_url else ""
+    )
+    return (
+        '<html><body style="font-family:-apple-system,BlinkMacSystemFont,'
+        "'Segoe UI',Helvetica,Arial,sans-serif;font-size:14px;line-height:1.5;"
+        f'color:#111">\n{body}\n{pixel}\n</body></html>'
+    )
+
+
 def _compose_body(
     account: EmailAccount, org: Organization, body_text: str, unsub_url: Optional[str]
 ) -> str:
@@ -290,12 +332,13 @@ def send(
 
     # Compliance plumbing (campaign/manual only, never warmup).
     open_token = unsubscribe_token = None
-    unsub_url = None
+    unsub_url = pixel_url = None
     if not is_warmup:
         open_token = secrets.token_urlsafe(24)
         unsubscribe_token = secrets.token_urlsafe(24)
         base = settings.api_base_url.rstrip("/")
         unsub_url = f"{base}/api/email-outreach/unsubscribe/{unsubscribe_token}"
+        pixel_url = f"{base}/api/email-outreach/o/{open_token}.gif"
 
     rendered_body = _compose_body(account, org, body_text, unsub_url)
 
@@ -321,6 +364,12 @@ def send(
         mime["List-Unsubscribe"] = f"<{unsub_url}>"
         mime["List-Unsubscribe-Post"] = "List-Unsubscribe=One-Click"
     mime.set_content(rendered_body)
+    if pixel_url is not None:
+        # multipart/alternative: plain text stays primary, the HTML twin
+        # carries the open pixel. Warmup mail has no pixel_url and stays
+        # single-part text/plain.
+        mime.add_alternative(_html_alternative(rendered_body, pixel_url),
+                             subtype="html")
 
     # Persist the audit row up-front (status flips after the transport call).
     msg = EmailMessage(
