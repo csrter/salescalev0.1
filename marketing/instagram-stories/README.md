@@ -12,10 +12,25 @@ bars: against a dark background it has almost no contrast, so cobalt does that
 job and navy sits underneath it.
 
 The copy is original — written for this role, not lifted from any reference ad —
-and the call to action asks for a plain text DM only. Rewrite any of it in the
-`SLIDES` block; the layout reflows around whatever you put there.
+the pay is stated as commission only, and the call to action asks for a plain
+text DM. Rewrite any of it in the data blocks; the layout reflows around
+whatever you put there.
 
-Slides produced:
+## What gets built
+
+`CONFIG.build` picks the output:
+
+- `"solo"` (default) — **one slide, `setter-hiring.png`**, carrying everything:
+  eyebrow, headline, the `Commission only · OTE $5K–$7K/mo.` pill, what the
+  role is, a four-item checklist, and the DM panel. Edit it in the `SOLO` block.
+- `"series"` — the original four slides, below.
+- `"both"` — the single slide plus the series.
+
+The single slide measures its own stack and centres it between the safe
+margins, so adding or cutting a line reflows the whole thing instead of letting
+copy drift toward the phone's bottom UI.
+
+Series slides (`build: "series"` or `"both"`):
 
 | File | Slide | Content |
 |---|---|---|
@@ -63,6 +78,8 @@ Copy is one entry per slide. Line breaks are deliberate: each line is its own
 text layer, which is what allows a red bar behind exactly the lines you pick.
 
 - `{ t: "some text", hl: true }` — draws the cobalt highlight bar behind that line.
+- On the single slide, `hl: true` also flips that row's bullet to white so it
+  stays visible against the cobalt bar.
 - `\r` inside a headline is a hard line break.
 - On the CTA slide each line is an array of parts, and `chip: true` on a part
   puts a navy box behind just those words (it's on the `SETTER` keyword).

@@ -31,6 +31,11 @@ var CONFIG = {
 
   brand: "Atlas Reach",              // referenced by the copy below
 
+  // "solo"   = one slide carrying everything (default)
+  // "series" = the four-slide set
+  // "both"   = the single slide plus the series
+  build: "solo",
+
   // Where the PNGs land. "~/..." resolves on both Mac and Windows.
   outputFolder: "~/Desktop/setter-stories",
 
@@ -49,6 +54,7 @@ var CONFIG = {
   // background has no contrast; navy carries the chrome instead.
   color: {
     accent: "2B62E0",                // --brand-blue, the cobalt highlight
+    accentLift: "6D95F2",            // lifted cobalt for small text on dark
     white:  "FFFFFF",
     ink:    "0A1022",                // --navy-950, flat background w/o a photo
     chip:   "0F2147",                // --brand-navy, chip inside the cobalt panel
@@ -90,7 +96,7 @@ var SLIDES = [
     type: "hook",
     headline: "Setter seats\rare open.",       // \r = hard line break
     headlineSize: 132,
-    pill: "Remote \u00b7 OTE $5K\u2013$7K/month.",
+    pill: "Commission only \u00b7 OTE $5K\u2013$7K/mo.",
     pillSize: 58,
     anchor: "middle"                             // top | middle | bottom
   },
@@ -136,7 +142,8 @@ var SLIDES = [
       { icon: "02", lines: [ { t: "You\u2019ve sold", hl: true },
                              { t: "something before.", hl: true } ] },
       { icon: "03", lines: [ { t: "Weekdays, 10am\u20135pm." } ] },
-      { icon: "04", lines: [ { t: "OTE $5K\u2013$7K/month.", hl: true } ] }
+      { icon: "04", lines: [ { t: "Commission only.", hl: true },
+                             { t: "OTE $5K\u2013$7K/mo." } ] }
     ]
   },
 
@@ -158,6 +165,44 @@ var SLIDES = [
   }
 ];
 
+/* ---- SINGLE SLIDE: everything on one canvas ----------------------------
+   Used when CONFIG.build is "solo" (the default) or "both". The layout
+   measures itself and centres the whole stack inside the safe band, so
+   editing any line here reflows the slide rather than breaking it. */
+
+var SOLO = {
+  file: "setter-hiring",
+  type: "solo",
+
+  eyebrow: "NOW HIRING \u00b7 REMOTE (US)",
+  headline: "Setter seats\rare open.",
+  headlineSize: 100,
+
+  pay: "Commission only \u00b7 OTE $5K\u2013$7K/mo.",
+  paySize: 46,
+
+  roleSize: 40,
+  role: [
+    { t: CONFIG.brand + " runs the ads for home-service" },
+    { t: "contractors. You work the leads they bring" },
+    { t: "in, qualify them, and book the estimate." }
+  ],
+
+  rowSize: 40,
+  rows: [
+    { t: "Based in the US." },
+    { t: "You\u2019ve sold something before.", hl: true },
+    { t: "Weekdays, 10am\u20135pm." },
+    { t: "Leads, scripts and CRM provided." }
+  ],
+
+  ctaSize: 46,
+  cta: [
+    [ { t: "DM the word " }, { t: "SETTER", chip: true } ],
+    [ { t: "and where you\u2019ve sold before." } ]
+  ]
+};
+
 /* =============================== ENGINE ===================================
    Layout machinery. Edit above this line for copy and colour changes.
    ========================================================================== */
@@ -173,12 +218,17 @@ var OUT  = new Folder(CONFIG.outputFolder);
 if (!OUT.exists) OUT.create();
 
 var BG_TOP = null;      // topmost background layer of the doc being built
+var BG_COUNT = 0;       // how many layers the background stack occupies
 
 try {
+  var QUEUE = CONFIG.build === "series" ? SLIDES
+            : CONFIG.build === "both"   ? [SOLO].concat(SLIDES)
+            : [SOLO];
+
   var made = [];
-  for (var i = 0; i < SLIDES.length; i++) {
-    var doc = buildSlide(SLIDES[i], i);
-    made.push(exportDoc(doc, SLIDES[i].file));
+  for (var i = 0; i < QUEUE.length; i++) {
+    var doc = buildSlide(QUEUE[i], i);
+    made.push(exportDoc(doc, QUEUE[i].file));
     if (CONFIG.closeAfterExport) doc.close(SaveOptions.DONOTSAVECHANGES);
   }
   alert("Done — " + made.length + " stories exported to:\n" + OUT.fsName +
@@ -195,13 +245,138 @@ try {
 function buildSlide(spec, index) {
   var doc = newDoc(spec.file);
   BG_TOP = paintBackground(doc, index);
+  BG_COUNT = doc.artLayers.length;      // everything added after this is content
 
+  if (spec.type === "solo")  layoutSolo(doc, spec);
   if (spec.type === "hook")  layoutHook(doc, spec);
   if (spec.type === "stack") layoutStack(doc, spec);
   if (spec.type === "rows")  layoutRows(doc, spec);
   if (spec.type === "cta")   layoutCta(doc, spec);
 
   return doc;
+}
+
+/* ONE SLIDE - eyebrow, headline, pay pill, role, checklist rows, CTA panel.
+   Everything is laid out top-down from a cursor, then the whole stack is
+   centred in the safe band so it can never crowd the phone's bottom UI. */
+function layoutSolo(doc, s) {
+  var x = CONFIG.safe.left;
+  var y = CONFIG.safe.top;
+
+  // eyebrow
+  var eb = addText(doc, s.eyebrow, {
+    size: 30, tracking: 180, font: FONT.body,
+    color: CONFIG.color.accentLift, name: "eyebrow"
+  });
+  fitText(eb, COL, 20, 1);
+  moveTo(eb, x, y, "left");
+  y = bottom(eb) + 26;
+
+  // headline
+  var head = addText(doc, s.headline, {
+    size: s.headlineSize, leading: s.headlineSize * 0.92, tracking: -28, name: "headline"
+  });
+  fitText(head, COL, 48, 0.92);
+  moveTo(head, x, y, "left");
+  y = bottom(head) + 30;
+
+  // pay pill
+  var pill = addText(doc, s.pay, { size: s.paySize, tracking: -8, name: "pay" });
+  fitText(pill, COL - 60, 26, 1.05);
+  moveTo(pill, x + 22, y + 16, "left");
+  var pillBar = highlight(doc, pill, CONFIG.color.accent, 22, 14);
+  y = bottom(pillBar) + 44;
+
+  // role
+  var roleLead = s.roleSize * 1.30;
+  for (var r = 0; r < s.role.length; r++) {
+    var RL = addText(doc, s.role[r].t, {
+      size: s.roleSize, leading: roleLead, tracking: -8, font: FONT.body, name: "role"
+    });
+    fitText(RL, COL, 24, 1.30);
+    moveTo(RL, x, y, "left");
+    y += roleLead;
+  }
+  y += 24;
+
+  // checklist rows, small cobalt square instead of the series' numbered circle
+  var rowLead = s.rowSize * 1.40;
+  for (var i = 0; i < s.rows.length; i++) {
+    var row = s.rows[i];
+    var RT = addText(doc, row.t, {
+      size: s.rowSize, leading: rowLead, tracking: -8, name: "row " + (i + 1)
+    });
+    fitText(RT, COL - 46, 24, 1.40);
+    moveTo(RT, x + 46, y, "left");
+    if (row.hl) highlight(doc, RT, CONFIG.color.accent, 14, 9);
+    var b = bounds(RT);
+    drawRect(doc, x, b.t + (b.h - 16) / 2, 16, 16,
+             row.hl ? CONFIG.color.white : CONFIG.color.accent, "bullet");
+    y += rowLead;
+  }
+  y += 34;
+
+  ctaPanel(doc, s.cta, s.ctaSize, y);
+  centreContent(doc);
+}
+
+/* Cobalt panel with centred lines; chip:true boxes a single part in navy.
+   Returns the panel's bottom edge. */
+function ctaPanel(doc, block, size, topY) {
+  var lead = size * 1.28;
+  var mid = CONFIG.width / 2;
+  var maxW = COL - 90;
+  var baseline = topY + size;
+  var box = { l: 1e9, t: 1e9, r: -1e9, b: -1e9 };
+  var chips = [];
+
+  for (var i = 0; i < block.length; i++) {
+    var line = layoutParts(doc, block[i], size, maxW, mid, baseline);
+    for (var j = 0; j < line.layers.length; j++) {
+      var bb = bounds(line.layers[j]);
+      box.l = Math.min(box.l, bb.l); box.t = Math.min(box.t, bb.t);
+      box.r = Math.max(box.r, bb.r); box.b = Math.max(box.b, bb.b);
+      if (block[i][j].chip) chips.push(line.layers[j]);
+    }
+    baseline += lead;
+  }
+
+  for (var c = 0; c < chips.length; c++) {
+    highlight(doc, chips[c], CONFIG.color.chip, 14, 8);
+  }
+
+  var padX = 46, padY = 38;
+  var panel = drawRect(doc, box.l - padX, box.t - padY,
+                       (box.r - box.l) + padX * 2, (box.b - box.t) + padY * 2,
+                       CONFIG.color.accent, "cta panel");
+  if (BG_TOP) panel.move(BG_TOP, ElementPlacement.PLACEBEFORE);
+  return box.b + padY;
+}
+
+/* Every layer sitting above the background stack. Counted rather than compared
+   by identity: ExtendScript hands back a fresh wrapper on each property read,
+   so `layer === BG_TOP` is not dependable. */
+function contentLayers(doc) {
+  var out = [];
+  var n = doc.artLayers.length - BG_COUNT;
+  for (var i = 0; i < n; i++) out.push(doc.artLayers[i]);
+  return out;
+}
+
+/* Shifts the whole composition so it sits centred between the safe margins.
+   This is what keeps the copy off the phone's bottom UI no matter how much
+   you add or remove above. */
+function centreContent(doc) {
+  var ls = contentLayers(doc);
+  if (!ls.length) return;
+  var t = 1e9, b = -1e9;
+  for (var i = 0; i < ls.length; i++) {
+    var bb = bounds(ls[i]);
+    t = Math.min(t, bb.t); b = Math.max(b, bb.b);
+  }
+  var band = CONFIG.safe.bottom - CONFIG.safe.top;
+  var dy = CONFIG.safe.top + (band - (b - t)) / 2 - t;
+  for (var j = 0; j < ls.length; j++) ls[j].translate(0, dy);
 }
 
 /* 01 - giant headline, vertically anchored, cobalt pill underneath */
@@ -299,34 +474,7 @@ function layoutCta(doc, s) {
 
   if (s.rule) drawRule(doc, CONFIG.safe.left + 8, bottom(head) + 14, w(head) * 0.62, 14);
 
-  var lead = s.blockSize * 1.28;
-  var mid  = CONFIG.width / 2;
-  var maxW = COL - 90;                               // leave room for panel padding
-  var baseline = s.blockTop + s.blockSize;           // first line's baseline
-  var box = { l: 1e9, t: 1e9, r: -1e9, b: -1e9 };
-  var chips = [];
-
-  for (var i = 0; i < s.block.length; i++) {
-    var line = layoutParts(doc, s.block[i], s.blockSize, maxW, mid, baseline);
-    for (var j = 0; j < line.layers.length; j++) {
-      var bb = bounds(line.layers[j]);
-      box.l = Math.min(box.l, bb.l); box.t = Math.min(box.t, bb.t);
-      box.r = Math.max(box.r, bb.r); box.b = Math.max(box.b, bb.b);
-      if (s.block[i][j].chip) chips.push(line.layers[j]);
-    }
-    baseline += lead;
-  }
-
-  // navy chips sit above the cobalt panel, below the text
-  for (var c = 0; c < chips.length; c++) {
-    highlight(doc, chips[c], CONFIG.color.chip, 14, 8);
-  }
-
-  var padX = 46, padY = 40;
-  var panel = drawRect(doc, box.l - padX, box.t - padY,
-                       (box.r - box.l) + padX * 2, (box.b - box.t) + padY * 2,
-                       CONFIG.color.accent, "cta panel");
-  if (BG_TOP) panel.move(BG_TOP, ElementPlacement.PLACEBEFORE);   // just above the bg
+  ctaPanel(doc, s.block, s.blockSize, s.blockTop);
 }
 
 /* Lays a row of text parts side by side, centred on midX, sharing one baseline.
