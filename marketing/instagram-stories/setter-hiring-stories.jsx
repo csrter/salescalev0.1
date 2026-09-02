@@ -10,16 +10,16 @@
      Builds four 1080x1920 story slides, each as its own document with live,
      editable text layers, then exports PNGs into CONFIG.outputFolder.
 
-       01  hook          "We're hiring setters." + red OTE pill
-       02  offer         "The offer" + body copy with red highlight lines
+       01  hook          "We're hiring setters." + cobalt OTE pill
+       02  offer         "The offer" + body copy with cobalt highlight lines
        03  requirements  numbered rows: US / sales experience / hours / pay
-       04  cta           "Spots are limited." + red DM block
+       04  cta           "Spots are limited." + cobalt DM block
 
    Edit the CONFIG and SLIDES blocks only. Everything below "ENGINE" is
    generic layout machinery.
 
    Line breaks are manual on purpose: each line is its own text layer, which is
-   what lets a red highlight bar sit behind exactly the lines you choose.
+   what lets a highlight bar sit behind exactly the lines you choose.
    ============================================================================= */
 
 #target photoshop
@@ -45,17 +45,24 @@ var CONFIG = {
   height: 1920,
   resolution: 72,                    // keep 72 so 1pt == 1px for font sizes
 
+  // Atlas Reach palette. Cobalt is the highlight because deep navy on a dark
+  // background has no contrast; navy carries the chrome instead.
   color: {
-    red:   "F0242C",                 // accent / highlight red
-    white: "FFFFFF",
-    ink:   "0B0B0B",                 // flat background when no photo is used
-    chip:  "101010",                 // dark chip inside the red CTA panel
-    dot:   "1C1C1C"                  // numbered circle on the requirements rows
+    accent: "2B62E0",                // --brand-blue, the cobalt highlight
+    white:  "FFFFFF",
+    ink:    "0A1022",                // --navy-950, flat background w/o a photo
+    chip:   "0F2147",                // --brand-navy, chip inside the cobalt panel
+    dot:    "142457"                 // --navy-800, numbered circle on the rows
   },
+
+  // Deeper, more saturated alternative (swap in if you want less pop):
+  //   accent: "1C3178"  (--navy-700)   chip: "0A1022"   dot: "0F2147"
 
   background: {
     blur: 16,                        // gaussian blur radius on the photo, px
-    darken: 60                       // black overlay opacity, 0-100
+    darken: 62,                      // overlay opacity, 0-100
+    tint: "0A1022"                   // overlay colour — navy, not pure black,
+                                     // so photos take on the brand cast
   },
 
   // First font found on this machine wins. Add your own PostScript names.
@@ -94,7 +101,7 @@ var SLIDES = [
     type: "stack",
     title: "The offer",
     titleSize: 108,
-    rule: true,                                  // short red underline
+    rule: true,                                  // short cobalt underline
     bodySize: 46,
     blocks: [
       { lines: [
@@ -142,10 +149,10 @@ var SLIDES = [
     type: "cta",
     headline: "Spots are\rlimited.",
     headlineSize: 138,
-    rule: true,                                  // red underline under headline
+    rule: true,                                  // cobalt underline under headline
     blockSize: 54,
-    blockTop: 1120,                              // Y of the red panel's first line
-    // Each line is a list of parts. chip:true draws a dark box behind that part.
+    blockTop: 1120,                              // Y of the cobalt panel's first line
+    // Each line is a list of parts. chip:true draws a navy box behind that part.
     block: [
       [ { t: "DM the word “setter” —" } ],
       [ { t: "with a " }, { t: "voice message", chip: true }, { t: " —" } ],
@@ -200,7 +207,7 @@ function buildSlide(spec, index) {
   return doc;
 }
 
-/* 01 - giant headline, vertically anchored, red pill underneath */
+/* 01 - giant headline, vertically anchored, cobalt pill underneath */
 function layoutHook(doc, s) {
   var head = addText(doc, s.headline, {
     size: s.headlineSize, leading: s.headlineSize * 0.92, tracking: -30, name: "headline"
@@ -218,10 +225,10 @@ function layoutHook(doc, s) {
 
   moveTo(head, CONFIG.safe.left, top, "left");
   moveTo(pill, CONFIG.safe.left + 26, bottom(head) + gap + 20, "left");
-  highlight(doc, pill, CONFIG.color.red, 26, 18);
+  highlight(doc, pill, CONFIG.color.accent, 26, 18);
 }
 
-/* 02 - title + red rule + stacked body blocks with per-line highlights */
+/* 02 - title + cobalt rule + stacked body blocks with per-line highlights */
 function layoutStack(doc, s) {
   var y = CONFIG.safe.top + 40;
 
@@ -242,14 +249,14 @@ function layoutStack(doc, s) {
       });
       fitText(L, COL, 24, 1.30);
       moveTo(L, CONFIG.safe.left, y, "left");
-      if (lines[i].hl) highlight(doc, L, CONFIG.color.red, 14, 10);
+      if (lines[i].hl) highlight(doc, L, CONFIG.color.accent, 14, 10);
       y += lead;
     }
     y += s.bodySize * 0.75;                          // gap between blocks
   }
 }
 
-/* 03 - title + red rule + numbered rows */
+/* 03 - title + cobalt rule + numbered rows */
 function layoutRows(doc, s) {
   var y = CONFIG.safe.top + 30;
 
@@ -275,7 +282,7 @@ function layoutRows(doc, s) {
       });
       fitText(L, textW, 26, 1.24);
       moveTo(L, textX, lineY, "left");
-      if (row.lines[i].hl) highlight(doc, L, CONFIG.color.red, 16, 12);
+      if (row.lines[i].hl) highlight(doc, L, CONFIG.color.accent, 16, 12);
       lineY += lead;
     }
 
@@ -285,7 +292,7 @@ function layoutRows(doc, s) {
   }
 }
 
-/* 04 - headline + red rule + centred red CTA panel with an inline dark chip */
+/* 04 - headline + cobalt rule + centred cobalt CTA panel with a navy chip */
 function layoutCta(doc, s) {
   var head = addText(doc, s.headline, {
     size: s.headlineSize, leading: s.headlineSize * 0.92, tracking: -30, name: "headline"
@@ -313,7 +320,7 @@ function layoutCta(doc, s) {
     baseline += lead;
   }
 
-  // dark chips sit above the red panel, below the text
+  // navy chips sit above the cobalt panel, below the text
   for (var c = 0; c < chips.length; c++) {
     highlight(doc, chips[c], CONFIG.color.chip, 14, 8);
   }
@@ -321,7 +328,7 @@ function layoutCta(doc, s) {
   var padX = 46, padY = 40;
   var panel = drawRect(doc, box.l - padX, box.t - padY,
                        (box.r - box.l) + padX * 2, (box.b - box.t) + padY * 2,
-                       CONFIG.color.red, "cta panel");
+                       CONFIG.color.accent, "cta panel");
   if (BG_TOP) panel.move(BG_TOP, ElementPlacement.PLACEBEFORE);   // just above the bg
 }
 
@@ -391,7 +398,7 @@ function paintBackground(doc, index) {
   }
 
   if (CONFIG.background.darken > 0) {
-    var shade = drawRect(doc, 0, 0, CONFIG.width, CONFIG.height, "000000", "darken");
+    var shade = drawRect(doc, 0, 0, CONFIG.width, CONFIG.height, CONFIG.background.tint, "darken");
     shade.opacity = CONFIG.background.darken;
     topLayer = shade;
   }
@@ -426,7 +433,7 @@ function fitText(layer, maxW, minSize, leadRatio) {
   return layer;
 }
 
-/* Coloured bar behind a text layer — the red highlight look. */
+/* Coloured bar behind a text layer — the highlight-bar look. */
 function highlight(doc, layer, hex, padX, padY) {
   var b = bounds(layer);
   var rect = drawRect(doc, b.l - padX, b.t - padY,
@@ -435,9 +442,9 @@ function highlight(doc, layer, hex, padX, padY) {
   return rect;
 }
 
-/* Short thick red rule under a title. Returns its bottom Y. */
+/* Short thick accent rule under a title. Returns its bottom Y. */
 function drawRule(doc, x, y, width, thickness) {
-  drawRect(doc, x, y, width, thickness, CONFIG.color.red, "rule");
+  drawRect(doc, x, y, width, thickness, CONFIG.color.accent, "rule");
   return y + thickness;
 }
 
