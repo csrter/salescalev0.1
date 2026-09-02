@@ -144,7 +144,7 @@ var SLIDES = [
   {
     file: "04-cta",
     type: "cta",
-    headline: "We interview\rthis week.",
+    headline: "We interview\rsame day.",
     headlineSize: 132,
     rule: true,                                  // cobalt underline under headline
     blockSize: 54,

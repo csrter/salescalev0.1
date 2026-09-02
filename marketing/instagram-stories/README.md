@@ -22,7 +22,7 @@ Slides produced:
 | `01-hook.png` | Hook | "Setter seats are open." + cobalt `Remote · OTE $5K–$7K/month.` pill |
 | `02-role.png` | The role | What the agency does, what the setter actually does day to day |
 | `03-fit.png` | What we need | US-based / has sold before / weekday hours / pay |
-| `04-cta.png` | CTA | "We interview this week." + cobalt DM panel — a plain text DM, no voice note |
+| `04-cta.png` | CTA | "We interview same day." + cobalt DM panel — a plain text DM, no voice note |
 
 ## Run it
 
