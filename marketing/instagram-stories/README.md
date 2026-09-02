@@ -40,7 +40,21 @@ Series slides (`build: "series"` or `"both"`):
 | `03-fit.png` | What we need | US-based / has sold before / cold outreach weekdays / commission + residuals |
 | `04-cta.png` | CTA | "We interview same day." + cobalt "DM me for more info!" panel |
 
-## Run it
+## Finished PNGs
+
+`out/` holds the rendered 1080×1920 stories, ready to post — no Photoshop
+required. They were produced by `render/build.py`, which lays the same copy,
+palette and safe margins out in HTML and screenshots it with headless
+Chromium, with Inter embedded so output is identical on any machine:
+
+```
+CHROME=/path/to/chrome python3 render/build.py
+```
+
+Use the Photoshop script below instead when you want layered, hand-editable
+documents — or want photo backgrounds behind the type.
+
+## Run the Photoshop script
 
 1. Open Photoshop (CS6 or any CC version).
 2. **File → Scripts → Browse…** and select `setter-hiring-stories.jsx`.
