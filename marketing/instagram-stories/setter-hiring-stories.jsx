@@ -96,7 +96,7 @@ var SLIDES = [
     type: "hook",
     headline: "Setter seats\rare open.",       // \r = hard line break
     headlineSize: 132,
-    pill: "Commission only \u00b7 OTE $5K\u2013$7K/mo.",
+    pill: "Commission + residuals \u00b7 OTE $5K\u2013$7K/mo.",
     pillSize: 58,
     anchor: "middle"                             // top | middle | bottom
   },
@@ -117,13 +117,12 @@ var SLIDES = [
       ]},
       { lines: [
           { t: "This is a cold outreach seat." },
-          { t: "You work lists we provide \u2014 DMs," },
-          { t: "calls and texts \u2014 start the" },
-          { t: "conversation, and book the" },
-          { t: "qualified ones." }
+          { t: "You run the outreach that" },
+          { t: "books the calls \u2014 DMs, calls" },
+          { t: "and texts, off lists we provide." }
       ]},
       { lines: [
-          { t: "Lead lists, scripts and the CRM", hl: true },
+          { t: "Leads, CRM and scripts", hl: true },
           { t: "come with the seat.", hl: true },
           { t: "You bring the volume." }
       ]}
@@ -144,7 +143,7 @@ var SLIDES = [
                              { t: "something before.", hl: true } ] },
       { icon: "03", lines: [ { t: "Cold outreach, weekdays" },
                              { t: "10am\u20135pm." } ] },
-      { icon: "04", lines: [ { t: "Commission only.", hl: true },
+      { icon: "04", lines: [ { t: "Commission + residuals.", hl: true },
                              { t: "OTE $5K\u2013$7K/mo." } ] }
     ]
   },
@@ -156,13 +155,11 @@ var SLIDES = [
     headline: "We interview\rsame day.",
     headlineSize: 132,
     rule: true,                                  // cobalt underline under headline
-    blockSize: 54,
+    blockSize: 64,
     blockTop: 1120,                              // Y of the cobalt panel's first line
     // Each line is a list of parts. chip:true draws a navy box behind that part.
     block: [
-      [ { t: "DM the word " }, { t: "SETTER", chip: true } ],
-      [ { t: "and where you\u2019ve sold before." } ],
-      [ { t: "That\u2019s the whole application." } ]
+      [ { t: "DM me for more info!" } ]
     ]
   }
 ];
@@ -180,28 +177,27 @@ var SOLO = {
   headline: "Setter seats\rare open.",
   headlineSize: 100,
 
-  pay: "Commission only \u00b7 OTE $5K\u2013$7K/mo.",
+  pay: "Commission + residuals \u00b7 OTE $5K\u2013$7K/mo.",
   paySize: 46,
 
   roleSize: 40,
   role: [
     { t: CONFIG.brand + " sells growth systems to" },
     { t: "home-service contractors. You run the" },
-    { t: "cold outreach that books the calls." }
+    { t: "outreach that books the calls." }
   ],
 
   rowSize: 40,
   rows: [
     { t: "Based in the US." },
-    { t: "Prior sales experience.", hl: true },
+    { t: "You\u2019ve sold something before.", hl: true },
     { t: "Cold DMs, calls and texts, daily." },
-    { t: "Lead lists, scripts and CRM provided." }
+    { t: "Leads, CRM and scripts provided." }
   ],
 
-  ctaSize: 46,
+  ctaSize: 58,
   cta: [
-    [ { t: "DM the word " }, { t: "SETTER", chip: true } ],
-    [ { t: "and where you\u2019ve sold before." } ]
+    [ { t: "DM me for more info!" } ]
   ]
 };
 
